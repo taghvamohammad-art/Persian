@@ -1,0 +1,21 @@
+*.iml
+.gradle
+.idea
+.DS_Store
+.externalNativeBuild
+/build
+/captures
+/local.properties
+/playground
+/releases
+
+# --- never commit secrets ---
+*.jks
+*.keystore
+config_key.private.json
+server/umstatus/config.json
+# build outputs / local files
+/app/release/
+/app/build/
+tools/app.apk
+tools/app_config.signed.json

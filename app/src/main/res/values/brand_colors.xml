@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_bg_top">#0A2540</color>
+    <color name="brand_bg_bottom">#0B5563</color>
+    <color name="brand_accent">#2EE6C5</color>
+    <color name="brand_accent_dark">#00A58E</color>
+    <color name="brand_on_accent">#04211C</color>
+    <color name="brand_warn">#FFC857</color>
+    <color name="brand_error">#FF9A9A</color>
+    <color name="brand_text">#FFFFFF</color>
+    <color name="brand_text_dim">#B3FFFFFF</color>
+    <color name="brand_text_faint">#80FFFFFF</color>
+    <color name="brand_glass">#14FFFFFF</color>
+    <color name="brand_glass_strong">#1FFFFFFF</color>
+    <color name="brand_glass_stroke">#2EFFFFFF</color>
+    <color name="brand_track">#26FFFFFF</color>
+    <color name="brand_surface">#13314A</color>
+</resources>

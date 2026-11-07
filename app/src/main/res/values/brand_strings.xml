@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="brand_login_title">ورود به حساب</string>
+    <string name="brand_username">نام کاربری</string>
+    <string name="brand_password">رمز عبور</string>
+    <string name="brand_login">ورود</string>
+    <string name="brand_logout">خروج از حساب</string>
+    <string name="brand_logout_confirm">از حساب خارج می‌شوید و اتصال قطع می‌شود. ادامه می‌دهید؟</string>
+    <string name="brand_yes">بله</string>
+    <string name="brand_no">خیر</string>
+    <string name="brand_ok">باشه</string>
+    <string name="brand_checking">در حال بررسی…</string>
+
+    <string name="brand_connect">اتصال</string>
+    <string name="brand_disconnect">قطع اتصال</string>
+    <string name="brand_cancel">لغو</string>
+    <string name="brand_state_disconnected">قطع</string>
+    <string name="brand_state_connecting">در حال اتصال…</string>
+    <string name="brand_state_connected">متصل</string>
+
+    <string name="brand_account">اشتراک</string>
+    <string name="brand_refresh">به‌روزرسانی</string>
+    <string name="brand_days_left">%1$s روز باقی‌مانده</string>
+    <string name="brand_less_than_day">کمتر از یک روز باقی‌مانده</string>
+    <string name="brand_remaining">%1$s گیگابایت از %2$s گیگابایت باقی‌مانده</string>
+    <string name="brand_remaining_unlimited">حجم نامحدود</string>
+    <string name="brand_used">مصرف شده: %1$s گیگابایت</string>
+    <string name="brand_ends_at">پایان اشتراک: %1$s</string>
+    <string name="brand_next">شارژ بعدی در صف: %1$s</string>
+    <string name="brand_updated_at">آخرین به‌روزرسانی: %1$s</string>
+
+    <string name="brand_st_expired">مدت اشتراک شما تمام شده است. برای تمدید با فروشنده تماس بگیرید.</string>
+    <string name="brand_st_volume">حجم اشتراک شما تمام شده است. برای تمدید با فروشنده تماس بگیرید.</string>
+    <string name="brand_st_waiting">اشتراک شما با اولین اتصال شروع می‌شود.</string>
+    <string name="brand_st_no_profile">برای این حساب اشتراک فعالی وجود ندارد.</string>
+    <string name="brand_st_disabled">این حساب غیرفعال شده است.</string>
+
+    <string name="brand_err_credentials">نام کاربری یا رمز عبور اشتباه است.</string>
+    <string name="brand_err_too_many">تعداد تلاش‌های ناموفق زیاد بود. چند دقیقه بعد دوباره امتحان کنید.</string>
+    <string name="brand_err_server">سرور در حال حاضر پاسخ نمی‌دهد. کمی بعد دوباره امتحان کنید.</string>
+    <string name="brand_err_unreachable">اطلاعات اشتراک در دسترس نیست. اتصال اینترنت را بررسی کنید.</string>
+    <string name="brand_err_status_offline">اطلاعات اشتراک دریافت نشد؛ آخرین اطلاعات ذخیره‌شده نمایش داده می‌شود.</string>
+    <string name="brand_err_fill">نام کاربری و رمز عبور را وارد کنید.</string>
+    <string name="brand_login_offline">اعتبار حساب بررسی نشد (سرور در دسترس نبود)، ولی می‌توانید اتصال را امتحان کنید.</string>
+
+    <string name="brand_vpn_err_auth">اتصال رد شد: رمز اشتباه است، یا اشتراک تمام شده است.</string>
+    <string name="brand_vpn_err_cert">هویت سرور تأیید نشد و اتصال برای امنیت شما برقرار نشد.</string>
+    <string name="brand_vpn_err_timeout">سرور پاسخ نداد. اینترنت خود را بررسی کنید یا کمی بعد دوباره امتحان کنید.</string>
+    <string name="brand_vpn_err_generic">اتصال برقرار نشد (%1$s).</string>
+    <string name="brand_vpn_denied">برای اتصال، اجازه‌ی ساخت VPN لازم است.</string>
+
+    <string name="brand_import_title">وارد کردن تنظیمات سرور</string>
+    <string name="brand_import_help">اگر فایل تنظیمات جدید (app_config.signed.json) برایتان فرستاده شده، آن را از اینجا وارد کنید.</string>
+    <string name="brand_import_file">انتخاب فایل</string>
+    <string name="brand_import_clipboard">از متن کپی‌شده</string>
+    <string name="brand_import_ok">تنظیمات سرور به‌روز شد (نسخه‌ی %1$s).</string>
+    <string name="brand_import_not_newer">این تنظیمات جدیدتر از تنظیمات فعلی نیست (نسخه‌ی فعلی: %1$s).</string>
+    <string name="brand_import_invalid">این فایل معتبر نیست یا توسط سرور شما امضا نشده است.</string>
+    <string name="brand_import_empty">متنی کپی نشده است.</string>
+    <string name="brand_import_reconnect">برای استفاده از سرور جدید، یک بار قطع و دوباره وصل شوید.</string>
+
+    <string name="brand_excluded_title">برنامه‌های خارج از VPN</string>
+    <string name="brand_excluded_button">برنامه‌های خارج از VPN</string>
+    <string name="brand_excluded_button_count">برنامه‌های خارج از VPN (%1$s)</string>
+    <string name="brand_excluded_help">برنامه‌هایی که انتخاب کنید (مثلاً همراه‌بانک) مستقیم و بدون VPN به اینترنت وصل می‌شوند. بقیه‌ی برنامه‌ها از VPN استفاده می‌کنند.</string>
+    <string name="brand_excluded_search">جستجوی برنامه</string>
+    <string name="brand_excluded_apply">تغییرات از اتصال بعدی اعمال می‌شود. برای اعمال فوری، یک بار قطع و دوباره وصل شوید.</string>
+
+    <string name="brand_update_title">نسخه‌ی جدید %1$s آماده است</string>
+    <string name="brand_update_button">به‌روزرسانی</string>
+    <string name="brand_update_install">نصب</string>
+    <string name="brand_update_downloading">در حال دانلود… %1$s٪</string>
+    <string name="brand_update_ready">دانلود کامل شد. «نصب» را بزنید.</string>
+    <string name="brand_update_err_network">دانلود ناموفق بود. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.</string>
+    <string name="brand_update_err_file">فایل دانلودشده معتبر نبود و نصب نشد.</string>
+    <string name="brand_update_permission">برای نصب، اجازه‌ی «نصب برنامه‌های ناشناس» را برای این برنامه روشن کنید و برگردید.</string>
+    <string name="brand_update_size">حجم: %1$s مگابایت</string>
+
+    <string name="brand_login_subtitle">با نام کاربری و رمز اشتراک خود وارد شوید</string>
+    <string name="brand_hint_connect">برای اتصال بزنید</string>
+    <string name="brand_hint_cancel">برای لغو بزنید</string>
+    <string name="brand_hint_disconnect">برای قطع اتصال بزنید</string>
+    <string name="brand_days_label">روز باقی‌مانده</string>
+    <string name="brand_gb_label">گیگابایت باقی‌مانده</string>
+    <string name="brand_used_of">مصرف شده: %1$s از %2$s گیگابایت</string>
+    <string name="brand_account_of">حساب: %1$s</string>
+    <string name="brand_logout_short">خروج</string>
+</resources>

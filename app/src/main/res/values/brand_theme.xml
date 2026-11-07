@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Branded look: navy-to-teal gradient with a faint network pattern.
+         Dark base so text and dialogs are light-on-dark everywhere. -->
+    <style name="Theme.Brand" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/brand_accent_dark</item>
+        <item name="colorPrimaryVariant">@color/brand_bg_bottom</item>
+        <item name="colorOnPrimary">@color/brand_on_accent</item>
+        <item name="colorSecondary">@color/brand_accent</item>
+        <item name="colorSecondaryVariant">@color/brand_accent_dark</item>
+        <item name="colorOnSecondary">@color/brand_on_accent</item>
+        <item name="colorSurface">@color/brand_surface</item>
+        <item name="colorOnSurface">@color/brand_text</item>
+        <item name="colorError">@color/brand_error</item>
+        <item name="colorControlActivated">@color/brand_accent</item>
+        <item name="android:textColorPrimary">@color/brand_text</item>
+        <item name="android:textColorSecondary">@color/brand_text_dim</item>
+        <item name="android:windowBackground">@drawable/brand_window_bg</item>
+        <item name="android:statusBarColor">@color/brand_bg_top</item>
+        <item name="android:navigationBarColor">@color/brand_bg_bottom</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

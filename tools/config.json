@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "servers": [
+    {"name": "main", "host": "91.207.18.201", "port": 443}
+  ],
+  "sstp_pins": [
+    "c85cdd057050200aa5c4553517d6823f3babf7d15193df3cb35072f54864225c",
+    "0912d6a39686ab4b4e4631d2b6885448430e62866cc4763be6729651cc632d49"
+  ],
+  "status_urls": [
+    "https://91.207.18.201:8443/v1/status"
+  ],
+  "status_pins": [
+    "a1fb88f5fcbdecfe53eb2c14c470031d52e0b5b6e9efb5a2b317c115c55c2755"
+  ],
+  "config_urls": [
+    "https://91.207.18.201:8443/v1/config"
+  ],
+  "config_pins": []
+}
