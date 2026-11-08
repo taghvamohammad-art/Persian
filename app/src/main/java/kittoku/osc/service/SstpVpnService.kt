@@ -107,6 +107,8 @@ internal class SstpVpnService : VpnService() {
                 controller?.kill(false, null)
 
                 kittoku.osc.brand.SessionTraffic.reset()
+                cancelNotification(NOTIFICATION_ERROR_ID)
+                cancelNotification(NOTIFICATION_RECONNECT_ID)
                 beForegrounded()
                 resetReconnectionLife(prefs)
                 if (getBooleanPrefValue(OscPrefKey.LOG_DO_SAVE_LOG, prefs)) {
@@ -128,6 +130,11 @@ internal class SstpVpnService : VpnService() {
 
                 controller?.disconnect()
                 controller = null
+
+                // the user chose to disconnect: old error messages are not news
+                cancelNotification(NOTIFICATION_ERROR_ID)
+                cancelNotification(NOTIFICATION_RECONNECT_ID)
+                BrandSession.clearError(prefs)
 
                 close()
 

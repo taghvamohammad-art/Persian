@@ -123,6 +123,10 @@ internal object BrandSession {
     internal fun errorDetail(prefs: SharedPreferences): String? =
         prefs.getString(PREF_ERROR_DETAIL, null)
 
+    internal fun clearError(prefs: SharedPreferences) {
+        prefs.edit().remove(PREF_LAST_ERROR).apply()
+    }
+
     internal fun lastError(prefs: SharedPreferences): String? =
         prefs.getString(PREF_LAST_ERROR, null)
 

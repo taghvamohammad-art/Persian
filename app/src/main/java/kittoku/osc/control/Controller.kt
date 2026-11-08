@@ -62,8 +62,18 @@ internal class Controller(internal val bridge: SharedBridge) {
     private val isReconnectionAvailable: Boolean
         get() = getIntPrefValue(OscPrefKey.RECONNECTION_LIFE, bridge.prefs) > 0
 
+    // set once the connection is being torn down (by the user or after an
+    // error); exceptions from tasks dying during teardown are not errors
+    @Volatile private var isClosing = false
+
     private fun attachHandler() {
         bridge.handler = CoroutineExceptionHandler { _, throwable ->
+            if (isClosing || throwable is kotlinx.coroutines.CancellationException) {
+                bridge.service.logWriter?.let { w ->
+                    bridge.service.scope.launch { w.report("ignored during teardown: $throwable") }
+                }
+                return@CoroutineExceptionHandler
+            }
             kill(isReconnectionEnabled) {
                 val header = "OSC: ERR_UNEXPECTED"
                 bridge.service.logWriter?.report(header + "\n" + throwable.stackTraceToString())
@@ -282,6 +292,7 @@ internal class Controller(internal val bridge: SharedBridge) {
 
     internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?) {
         if (!mutex.tryLock()) return
+        isClosing = true
 
         networkWatcher?.close()
         networkWatcher = null
