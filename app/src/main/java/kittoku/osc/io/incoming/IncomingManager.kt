@@ -44,8 +44,9 @@ import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 
 
-private const val SSTP_ECHO_INTERVAL = 20_000L
-private const val PPP_ECHO_INTERVAL = 20_000L
+// branded build: 10 s (was 20 s) so a dead tunnel is noticed within ~20 s
+private const val SSTP_ECHO_INTERVAL = 10_000L
+private const val PPP_ECHO_INTERVAL = 10_000L
 
 internal class IncomingManager(internal val bridge: SharedBridge) {
     private val bufferSize = bridge.sslTerminal!!.getApplicationBufferSize() + MAX_MRU + 8 // MAX_MRU + 8 for fragment

@@ -1,5 +1,6 @@
 package kittoku.osc.control
 
+import android.net.ConnectivityManager
 import kittoku.osc.ControlMessage
 import kittoku.osc.Result
 import kittoku.osc.SharedBridge
@@ -39,6 +40,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 internal class Controller(internal val bridge: SharedBridge) {
     private var observer: NetworkObserver? = null
+    private var networkWatcher: UnderlyingNetworkWatcher? = null
 
     private var sstpClient: SstpClient? = null
     private var pppClient: PPPClient? = null
@@ -209,6 +211,14 @@ internal class Controller(internal val bridge: SharedBridge) {
                 resetReconnectionLife(bridge.prefs)
             }
 
+            // reconnect right away when the phone switches networks
+            networkWatcher = UnderlyingNetworkWatcher(
+                bridge.service.getSystemService(ConnectivityManager::class.java)
+            ) {
+                bridge.service.logWriter?.report("Underlying network changed, reconnecting")
+                kill(isReconnectionEnabled, null)
+            }.also { it.start() }
+
 
             expectProceeded(Where.SSTP_CONTROL, null) // wait ERR_ message until disconnection
         }
@@ -269,6 +279,9 @@ internal class Controller(internal val bridge: SharedBridge) {
 
     internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?) {
         if (!mutex.tryLock()) return
+
+        networkWatcher?.close()
+        networkWatcher = null
 
         bridge.service.scope.launch {
             observer?.close()
