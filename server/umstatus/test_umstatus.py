@@ -1,3 +1,4 @@
+import base64
 import json
 import ssl
 import threading
@@ -295,6 +296,113 @@ class SilentClients(unittest.TestCase):
         self.assertLess(time.time() - t0, 3)
         for c in idle + [junk]:
             c.close()
+        httpd.shutdown()
+
+
+class Publish(unittest.TestCase):
+    """POST /v1/publish: only owner-signed, newer configs with a matching APK."""
+
+    def setUp(self):
+        import importlib.util, os, tempfile
+        tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools")
+        spec = importlib.util.spec_from_file_location("sign_config", os.path.join(tools, "sign_config.py"))
+        self.sc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.sc)
+        self.d = tempfile.mkdtemp()
+        self.key = 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+        self.pubfile = os.path.join(self.d, "pub.txt")
+        with open(self.pubfile, "w") as f:
+            f.write(base64.b64encode(self.sc.public_der(self.key)).decode())
+        self.cfg = dict(CFG, app_config_file=os.path.join(self.d, "app.json"),
+                        app_apk_file=os.path.join(self.d, "app.apk"),
+                        config_pubkey_file=self.pubfile)
+        self.pub = u.Publisher(self.cfg)
+        self.apk = b"PK" + os.urandom(200000)
+
+    def envelope(self, version, apk=None, key=None, tamper=False):
+        import hashlib
+        cfg = {"version": version, "servers": [{"host": "h", "port": 443}]}
+        if apk is not None:
+            cfg["app_update"] = {"version_code": version, "urls": ["https://h/v1/app.apk"],
+                                 "sha256": hashlib.sha256(apk).hexdigest(), "size": len(apk)}
+        payload = json.dumps(cfg).encode()
+        sig = self.sc.sign(key or self.key, payload)
+        if tamper:
+            payload = payload.replace(b'"h"', b'"x"')
+        env = json.dumps({"payload": base64.b64encode(payload).decode(),
+                          "sig": base64.b64encode(sig).decode()})
+        return base64.b64encode(env.encode()).decode(), env
+
+    def send(self, env_b64, body):
+        import io
+        return self.pub.publish(env_b64, len(body), io.BytesIO(body).read)
+
+    def test_not_configured(self):
+        import os
+        os.remove(self.pubfile)
+        self.assertEqual(self.send(self.envelope(1)[0], b"")[0], 503)
+
+    def test_publish_then_replay_rejected(self):
+        b64, env = self.envelope(2, self.apk)
+        self.assertEqual(self.send(b64, self.apk), (200, {"ok": True, "version": 2}))
+        with open(self.cfg["app_apk_file"], "rb") as f:
+            self.assertEqual(f.read(), self.apk)
+        with open(self.cfg["app_config_file"]) as f:
+            self.assertEqual(f.read(), env)
+        code, body = self.send(b64, self.apk)
+        self.assertEqual((code, body["error"]), (409, "not_newer"))
+
+    def test_tampered_or_foreign_key_rejected(self):
+        self.assertEqual(self.send(self.envelope(2, self.apk, tamper=True)[0], self.apk)[0], 403)
+        other = 0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678
+        self.assertEqual(self.send(self.envelope(2, self.apk, key=other)[0], self.apk)[0], 403)
+
+    def test_wrong_apk_keeps_old_files(self):
+        import os
+        b64, _ = self.envelope(2, self.apk)
+        self.assertEqual(self.send(b64, self.apk)[0], 200)
+        newer = b"PK" + os.urandom(200000)
+        b64, _ = self.envelope(3, newer)
+        bad = bytearray(newer); bad[100] ^= 1
+        code, body = self.send(b64, bytes(bad))
+        self.assertEqual((code, body["error"]), (400, "apk_mismatch"))
+        with open(self.cfg["app_apk_file"], "rb") as f:
+            self.assertEqual(f.read(), self.apk)           # untouched
+        self.assertEqual(self.pub._current()["version"], 2)
+        self.assertFalse(os.path.exists(self.cfg["app_apk_file"] + ".part"))
+
+    def test_size_mismatch_and_config_only(self):
+        b64, _ = self.envelope(2, self.apk)
+        self.assertEqual(self.send(b64, self.apk[:-1])[1]["error"], "apk_size_mismatch")
+        self.assertEqual(self.send(b64, self.apk)[0], 200)
+        # same APK, newer config (e.g. server address changed): no upload needed
+        b64, _ = self.envelope(3, self.apk)
+        self.assertEqual(self.send(b64, b"")[0], 200)
+        # config-only with an APK the router does not have
+        b64, _ = self.envelope(4, b"PK-other")
+        self.assertEqual(self.send(b64, b"")[1]["error"], "apk_required")
+
+    def test_https_end_to_end(self):
+        import os, subprocess
+        crt, key = os.path.join(self.d, "c.crt"), os.path.join(self.d, "k.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", key, "-out", crt, "-days", "1", "-subj", "/CN=t"],
+                       check=True, capture_output=True)
+        cfg = dict(self.cfg, cert_file=crt, key_file=key, key_passphrase="",
+                   listen_host="127.0.0.1", listen_port=0)
+        httpd = u.make_server(u.Service(FakeRouter(), cfg), cfg)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        cctx = ssl.create_default_context(cafile=crt)
+        cctx.check_hostname = False
+        b64, env = self.envelope(5, self.apk)
+        req = urllib.request.Request("https://127.0.0.1:%d/v1/publish" % port, data=self.apk,
+                                     headers={"X-Config": b64,
+                                              "Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, context=cctx, timeout=10) as r:
+            self.assertEqual(json.loads(r.read())["version"], 5)
+        with urllib.request.urlopen("https://127.0.0.1:%d/v1/config" % port, context=cctx) as r:
+            self.assertEqual(r.read().decode(), env)
         httpd.shutdown()
 
 

@@ -1,0 +1,52 @@
+name: Release tool (Windows)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/release_tool/**"
+      - "tools/sign_config.py"
+      - "tools/icon/**"
+      - ".github/workflows/release-tool.yml"
+  workflow_dispatch:
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install --disable-pip-version-check pyside6 pyinstaller
+
+      - name: GUI smoke test (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/release_tool/release_gui.py --smoke
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name PersianVPN-Release
+          --icon tools/icon/app.ico
+          --add-data "tools/icon/icon-512.png;."
+          --paths tools --paths tools/release_tool
+          tools/release_tool/release_gui.py
+
+      - name: Smoke test the built exe
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/PersianVPN-Release.exe -ArgumentList "--smoke" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PersianVPN-Release
+          path: dist/PersianVPN-Release.exe
+          if-no-files-found: error

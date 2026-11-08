@@ -17,6 +17,10 @@ jobs:
         working-directory: server/umstatus
         run: python -m unittest -v test_umstatus
 
+      - name: release tool tests
+        working-directory: tools/release_tool
+        run: python -m unittest -v test_publisher
+
   apk:
     runs-on: ubuntu-latest
     steps:

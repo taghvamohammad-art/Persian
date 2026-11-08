@@ -1,0 +1,349 @@
+"""Core of the release tool (no GUI): sign a new app version, upload it to
+the router's umstatus service, update the repository on GitHub.
+
+Kept free of GUI code so it can be tested on its own (test_publisher.py).
+"""
+
+import base64
+import hashlib
+import http.client
+import json
+import os
+import re
+import shutil
+import socket
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, ".."))          # tools/ (sign_config.py)
+import sign_config as sc                                # noqa: E402
+
+ASSET_PATH = "app/src/main/assets/app_config.signed.json"
+BUILD_RE = re.compile(r"persian-vpn-(\d+)", re.IGNORECASE)
+
+
+class ReleaseError(Exception):
+    """A problem the user can fix; the message is shown as-is (Persian)."""
+
+
+# ------------------------------------------------------------------ workspace
+
+class Workspace:
+    """The folder with config.json and config_key.private.json (tools/)."""
+
+    def __init__(self, folder):
+        self.folder = folder
+
+    def path(self, name):
+        return os.path.join(self.folder, name)
+
+    def check(self):
+        missing = [n for n in ("config.json", sc.PRIVATE_FILE) if not os.path.isfile(self.path(n))]
+        if missing:
+            raise ReleaseError("این فایل‌ها در پوشه‌ی کاری پیدا نشدند: " + "، ".join(missing))
+
+    def load_config(self):
+        with open(self.path("config.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def private_key(self):
+        with open(self.path(sc.PRIVATE_FILE), encoding="utf-8") as f:
+            return int(json.load(f)["d"], 16)
+
+    def published_version_code(self):
+        return int(self.load_config().get("app_update", {}).get("version_code", 0))
+
+
+# ------------------------------------------------------------------ build file
+
+class Build:
+    def __init__(self, apk, version_code, source):
+        self.apk = apk
+        self.version_code = version_code
+        self.source = source
+
+    @property
+    def sha256(self):
+        return hashlib.sha256(self.apk).hexdigest()
+
+
+def read_build(path):
+    """An artifact zip from GitHub (persian-vpn-16.zip) or a bare .apk."""
+    name = os.path.basename(path)
+    m = BUILD_RE.search(name)
+    code = int(m.group(1)) if m else None
+    if zipfile.is_zipfile(path) and not path.lower().endswith(".apk"):
+        with zipfile.ZipFile(path) as z:
+            apks = [n for n in z.namelist() if n.lower().endswith(".apk")]
+            if not apks:
+                raise ReleaseError("داخل این فایل zip هیچ APK‌ای نیست.")
+            pick = next((n for n in apks if "release" in n.lower()), apks[0])
+            if "debug" in pick.lower():
+                raise ReleaseError("این بیلد نسخه‌ی debug است و روی نسخه‌ی کاربران نصب نمی‌شود.")
+            apk = z.read(pick)
+    else:
+        with open(path, "rb") as f:
+            apk = f.read()
+    if apk[:2] != b"PK":
+        raise ReleaseError("این فایل APK معتبر نیست.")
+    return Build(apk, code, name)
+
+
+# ------------------------------------------------------------------ signing
+
+def prepare_release(ws, build, version_code, version_name, notes):
+    """Returns (new_config_dict, envelope_text). Nothing is written yet."""
+    cfg = ws.load_config()
+    old = int(cfg.get("app_update", {}).get("version_code", 0))
+    if version_code <= old:
+        raise ReleaseError("شماره‌ی نسخه (%d) باید از آخرین نسخه‌ی منتشرشده (%d) بزرگ‌تر باشد."
+                           % (version_code, old))
+    urls = [u.replace("/v1/config", "/v1/app.apk") for u in cfg.get("config_urls", [])
+            if u.endswith("/v1/config")]
+    if not urls:
+        raise ReleaseError("در config.json هیچ آدرس config_urls با /v1/config نیست.")
+    cfg["app_update"] = {
+        "version_code": version_code,
+        "version_name": version_name or "1.0.%d" % version_code,
+        "urls": urls,
+        "sha256": build.sha256,
+        "size": len(build.apk),
+        "notes": notes.strip(),
+    }
+    cfg["version"] = int(cfg.get("version", 0)) + 1
+    cfg = sc.normalise(cfg)
+    errors = sc.check_config(cfg)
+    if errors:
+        raise ReleaseError("config.json مشکل دارد:\n" + "\n".join(errors))
+
+    payload = json.dumps(cfg, ensure_ascii=False, separators=(",", ":")).encode()
+    d = ws.private_key()
+    sig = sc.sign(d, payload)
+    if not sc.verify(sc.public_der(d), payload, sig):
+        raise ReleaseError("امضا ساخته شد ولی بررسی آن ناموفق بود.")
+    envelope = json.dumps({"payload": base64.b64encode(payload).decode(),
+                           "sig": base64.b64encode(sig).decode()})
+    return cfg, envelope
+
+
+def save_local(ws, cfg, envelope, build):
+    """Called only after the router accepted the release."""
+    tmp = ws.path("config.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, ws.path("config.json"))
+    with open(ws.path(sc.SIGNED_FILE), "w", encoding="utf-8") as f:
+        f.write(envelope)
+    with open(ws.path("app.apk"), "wb") as f:
+        f.write(build.apk)
+
+
+# ------------------------------------------------------------------ router
+
+ROUTER_ERRORS = {
+    "bad_signature": "روتر امضا را نپذیرفت. کلید عمومی روی روتر با کلید خصوصی شما یکی نیست.",
+    "not_newer": "روتر نسخه‌ی جدیدتری از این تنظیمات دارد.",
+    "publish_not_configured": "انتشار روی روتر فعال نیست: فایل config_key.public.txt در پوشه‌ی umstatus نیست.",
+    "apk_mismatch": "فایل APK در مسیر خراب شد. دوباره امتحان کنید.",
+    "apk_size_mismatch": "حجم APK با تنظیمات امضاشده یکی نیست.",
+    "busy": "یک انتشار دیگر در حال انجام است.",
+    "too_many_attempts": "تعداد تلاش‌های ناموفق زیاد بود؛ چند دقیقه بعد امتحان کنید.",
+}
+
+
+class RouterClient:
+    """Talks to umstatus over HTTPS, trusting only the pinned certificate."""
+
+    def __init__(self, config, timeout=30):
+        urls = config.get("config_urls") or config.get("status_urls") or []
+        if not urls:
+            raise ReleaseError("آدرس سرویس روتر در config.json نیست.")
+        u = urllib.parse.urlsplit(urls[0])
+        self.host, self.port = u.hostname, u.port or 443
+        self.pins = {p.replace(":", "").lower() for p in config.get("status_pins", [])}
+        self.timeout = timeout
+
+    def _connect(self):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE      # the pin below is the check
+        conn = http.client.HTTPSConnection(self.host, self.port, context=ctx, timeout=self.timeout)
+        try:
+            conn.connect()
+        except (OSError, socket.timeout) as e:
+            raise ReleaseError("اتصال به روتر (%s:%s) برقرار نشد: %s" % (self.host, self.port, e))
+        der = conn.sock.getpeercert(binary_form=True)
+        if self.pins and hashlib.sha256(der).hexdigest() not in self.pins:
+            conn.close()
+            raise ReleaseError("گواهی روتر با اثر انگشت ثبت‌شده یکی نیست؛ برای امنیت ارسال انجام نشد.")
+        return conn
+
+    def health(self):
+        conn = self._connect()
+        try:
+            conn.request("GET", "/health")
+            return conn.getresponse().status == 200
+        finally:
+            conn.close()
+
+    def _call(self, envelope, body, dry_run, progress=None):
+        conn = self._connect()
+        try:
+            conn.putrequest("POST", "/v1/publish")
+            conn.putheader("X-Config", base64.b64encode(envelope.encode()).decode())
+            conn.putheader("Content-Type", "application/octet-stream")
+            conn.putheader("Content-Length", str(len(body)))
+            if dry_run:
+                conn.putheader("X-Dry-Run", "1")
+            conn.endheaders()
+            sent, step = 0, 64 * 1024
+            while sent < len(body):
+                conn.send(body[sent:sent + step])
+                sent = min(len(body), sent + step)
+                if progress:
+                    progress(sent, len(body))
+            resp = conn.getresponse()
+            data = json.loads(resp.read() or b"{}")
+        except (OSError, socket.timeout, ValueError) as e:
+            raise ReleaseError("ارسال به روتر قطع شد: %s" % e)
+        finally:
+            conn.close()
+        if resp.status != 200:
+            err = data.get("error", "HTTP %d" % resp.status)
+            raise ReleaseError(ROUTER_ERRORS.get(err, "روتر خطا داد: %s" % err))
+        return data
+
+    def publish(self, envelope, apk, progress=None):
+        # ask first (signature, version, router set up) so a rejection is
+        # reported clearly instead of cutting a half-sent upload
+        self._call(envelope, b"", dry_run=True)
+        return self._call(envelope, apk, dry_run=False, progress=progress)
+
+
+# ------------------------------------------------------------------ GitHub
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class GitHubClient:
+    API = "https://api.github.com"
+
+    def __init__(self, token, repo, api=None, opener=None):
+        self.token = token.strip()
+        self.repo = repo.strip().strip("/")
+        self.api = (api or self.API).rstrip("/")
+        self.opener = opener or urllib.request.build_opener()
+        self.noredirect = urllib.request.build_opener(_NoRedirect)
+
+    def _req(self, method, path, body=None, opener=None):
+        req = urllib.request.Request(self.api + path, method=method,
+                                     data=json.dumps(body).encode() if body is not None else None)
+        req.add_header("Authorization", "Bearer " + self.token)
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        req.add_header("User-Agent", "PersianVPN-Release")
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            return (opener or self.opener).open(req, timeout=60)
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308):
+                return e
+            if e.code == 401:
+                raise ReleaseError("توکن GitHub معتبر نیست یا منقضی شده است.")
+            if e.code in (403, 404):
+                raise ReleaseError("توکن GitHub به مخزن %s دسترسی کافی ندارد (%d)." % (self.repo, e.code))
+            raise ReleaseError("GitHub خطا داد: HTTP %d" % e.code)
+        except (urllib.error.URLError, OSError) as e:
+            raise ReleaseError("اتصال به GitHub برقرار نشد: %s" % e)
+
+    def check(self):
+        with self._req("GET", "/repos/%s" % self.repo) as r:
+            return json.loads(r.read())["full_name"]
+
+    def put_file(self, path, content, message):
+        sha = None
+        try:
+            with self._req("GET", "/repos/%s/contents/%s" % (self.repo, path)) as r:
+                sha = json.loads(r.read()).get("sha")
+        except ReleaseError:
+            pass   # file does not exist yet
+        body = {"message": message, "content": base64.b64encode(content).decode()}
+        if sha:
+            body["sha"] = sha
+        with self._req("PUT", "/repos/%s/contents/%s" % (self.repo, path), body) as r:
+            return json.loads(r.read())["commit"]["sha"]
+
+    def latest_build(self):
+        """Newest unexpired persian-vpn-N artifact: (number, artifact dict) or None."""
+        with self._req("GET", "/repos/%s/actions/artifacts?per_page=50" % self.repo) as r:
+            arts = json.loads(r.read()).get("artifacts", [])
+        best = None
+        for a in arts:
+            m = BUILD_RE.fullmatch(a.get("name", ""))
+            if m and not a.get("expired"):
+                n = int(m.group(1))
+                if best is None or n > best[0]:
+                    best = (n, a)
+        return best
+
+    def download_artifact(self, artifact, dest_dir, progress=None):
+        # GitHub answers with a redirect to signed storage; follow it WITHOUT
+        # our token (the storage host rejects foreign Authorization headers).
+        resp = self._req("GET", "/repos/%s/actions/artifacts/%d/zip" % (self.repo, artifact["id"]),
+                         opener=self.noredirect)
+        location = resp.headers.get("Location")
+        if not location:
+            raise ReleaseError("GitHub آدرس دانلود فایل بیلد را نداد.")
+        path = os.path.join(dest_dir, "%s.zip" % artifact["name"])
+        try:
+            with urllib.request.urlopen(location, timeout=120) as r, open(path, "wb") as f:
+                total = int(r.headers.get("Content-Length") or 0)
+                done = 0
+                for chunk in iter(lambda: r.read(64 * 1024), b""):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, total)
+        except (urllib.error.URLError, OSError) as e:
+            raise ReleaseError("دانلود فایل بیلد ناموفق بود: %s" % e)
+        return path
+
+
+# ------------------------------------------------------------------ whole flow
+
+def release(ws, build, version_code, version_name, notes,
+            send_router=True, github=None, log=print, progress=None):
+    """Sign, publish to the router, save locally, update GitHub.
+
+    The local config.json changes only after the router accepted the
+    release, so a failed attempt can simply be repeated.
+    """
+    ws.check()
+    log("امضای تنظیمات نسخه‌ی %d…" % version_code)
+    cfg, envelope = prepare_release(ws, build, version_code, version_name, notes)
+    log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
+
+    if send_router:
+        log("ارسال به روتر…")
+        body = RouterClient(cfg).publish(envelope, build.apk, progress)
+        log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
+
+    save_local(ws, cfg, envelope, build)
+    log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
+
+    if github is not None:
+        log("ارسال تنظیمات به GitHub…")
+        github.put_file(ASSET_PATH, envelope.encode(),
+                        "Release app %s (config v%d) [skip ci]"
+                        % (cfg["app_update"]["version_name"], cfg["version"]))
+        log("✓ GitHub به‌روز شد")
+    return cfg

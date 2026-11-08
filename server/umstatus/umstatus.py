@@ -44,6 +44,9 @@ DEFAULTS = {
     "cache_seconds": 60,
     "app_config_file": "/app/app_config.signed.json",
     "app_apk_file": "/app/app.apk",
+    # public half of the owner's config-signing key; enables /v1/publish
+    "config_pubkey_file": "/app/config_key.public.txt",
+    "max_apk_bytes": 100 * 1024 * 1024,
     # brute-force protection
     "max_fail_per_ip": 10,          # per window
     "max_fail_per_user": 20,        # per window
@@ -365,6 +368,180 @@ def build_status(router, username, user_id, now=None):
     return result
 
 
+# ---------------------------------------------------------------- publish
+
+# ECDSA P-256 / SHA-256 verification, same scheme as tools/sign_config.py.
+_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
+_A = _P - 3
+_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
+_N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551
+_G = (0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296,
+      0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5)
+_SPKI = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
+
+
+def _ec_add(p1, p2):
+    if p1 is None:
+        return p2
+    if p2 is None:
+        return p1
+    (x1, y1), (x2, y2) = p1, p2
+    if x1 == x2 and (y1 + y2) % _P == 0:
+        return None
+    if p1 == p2:
+        lam = (3 * x1 * x1 + _A) * pow(2 * y1, -1, _P) % _P
+    else:
+        lam = (y2 - y1) * pow(x2 - x1, -1, _P) % _P
+    x3 = (lam * lam - x1 - x2) % _P
+    return x3, (lam * (x1 - x3) - y1) % _P
+
+
+def _ec_mul(k, point):
+    result, addend = None, point
+    while k:
+        if k & 1:
+            result = _ec_add(result, addend)
+        addend = _ec_add(addend, addend)
+        k >>= 1
+    return result
+
+
+def ecdsa_verify(pub_der, data, sig):
+    try:
+        if not pub_der.startswith(_SPKI) or len(pub_der) != len(_SPKI) + 65:
+            return False
+        raw = pub_der[len(_SPKI) + 1:]
+        q = (int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big"))
+        if (q[1] * q[1] - (q[0] ** 3 + _A * q[0] + _B)) % _P != 0:
+            return False
+        if sig[0] != 0x30 or sig[1] != len(sig) - 2:
+            return False
+        i, rs = 2, []
+        for _ in range(2):
+            if sig[i] != 0x02:
+                return False
+            ln = sig[i + 1]
+            rs.append(int.from_bytes(sig[i + 2:i + 2 + ln], "big"))
+            i += 2 + ln
+        r, s_ = rs
+        if not (0 < r < _N and 0 < s_ < _N):
+            return False
+        z = int.from_bytes(__import__("hashlib").sha256(data).digest(), "big")
+        w = pow(s_, -1, _N)
+        pt = _ec_add(_ec_mul(z * w % _N, _G), _ec_mul(r * w % _N, q))
+        return pt is not None and pt[0] % _N == r
+    except (IndexError, ValueError):
+        return False
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(64 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class Publisher:
+    """Accepts a new app config (and APK) from the release tool.
+
+    No password: the request is accepted only if the config is signed with
+    the owner's offline key, is newer than the one being served, and the
+    APK matches the SHA-256 and size inside that signed config. A stolen or
+    replayed request cannot install anything the owner did not sign.
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.lock = threading.Lock()
+
+    def _current(self):
+        try:
+            with open(self.cfg["app_config_file"], encoding="utf-8") as f:
+                env = json.load(f)
+            return json.loads(base64.b64decode(env["payload"]))
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def publish(self, envelope_b64, length, read, dry_run=False):
+        """Returns (http_status, body). `read(n)` reads n body bytes.
+        dry_run: check signature and version only (the release tool asks
+        first, so a rejection never arrives in the middle of an upload)."""
+        try:
+            with open(self.cfg["config_pubkey_file"], encoding="utf-8") as f:
+                pub = base64.b64decode(f.read().strip())
+        except OSError:
+            return 503, {"ok": False, "error": "publish_not_configured"}
+
+        try:
+            envelope_text = base64.b64decode(envelope_b64).decode("utf-8")
+            env = json.loads(envelope_text)
+            payload = base64.b64decode(env["payload"])
+            sig = base64.b64decode(env["sig"])
+        except Exception:
+            return 400, {"ok": False, "error": "bad_request"}
+        if not ecdsa_verify(pub, payload, sig):
+            return 403, {"ok": False, "error": "bad_signature"}
+        try:
+            new = json.loads(payload)
+            version = int(new["version"])
+        except Exception:
+            return 400, {"ok": False, "error": "bad_config"}
+
+        if not self.lock.acquire(blocking=False):
+            return 409, {"ok": False, "error": "busy"}
+        try:
+            cur = self._current()
+            if cur is not None and version <= int(cur.get("version", 0)):
+                return 409, {"ok": False, "error": "not_newer",
+                             "current_version": int(cur.get("version", 0))}
+            if dry_run:
+                return 200, {"ok": True, "dry_run": True, "version": version}
+
+            upd = new.get("app_update")
+            apk_path = self.cfg["app_apk_file"]
+            part = apk_path + ".part"
+            if upd:
+                size, want = int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()
+                if length == 0:
+                    # config-only release: the APK on the router must already match
+                    if not (os.path.exists(apk_path) and os.path.getsize(apk_path) == size
+                            and _sha256_file(apk_path) == want):
+                        return 400, {"ok": False, "error": "apk_required"}
+                else:
+                    if length != size or size > self.cfg["max_apk_bytes"]:
+                        return 400, {"ok": False, "error": "apk_size_mismatch"}
+                    import hashlib
+                    h, left = hashlib.sha256(), length
+                    with open(part, "wb") as f:
+                        while left > 0:
+                            chunk = read(min(64 * 1024, left))
+                            if not chunk:
+                                break
+                            h.update(chunk)
+                            f.write(chunk)
+                            left -= len(chunk)
+                    if left != 0 or h.hexdigest() != want:
+                        os.remove(part)
+                        return 400, {"ok": False, "error": "apk_mismatch"}
+            elif length != 0:
+                return 400, {"ok": False, "error": "unexpected_apk"}
+
+            # both files are swapped in only after everything checked out
+            if upd and length:
+                os.replace(part, apk_path)
+            tmp = self.cfg["app_config_file"] + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(envelope_text)
+            os.replace(tmp, self.cfg["app_config_file"])
+            log("published config version %d%s" % (
+                version, " with app %s" % upd.get("version_code") if upd else ""))
+            return 200, {"ok": True, "version": version}
+        finally:
+            self.lock.release()
+
+
 # ---------------------------------------------------------------- guards
 
 class FailLimiter:
@@ -409,6 +586,7 @@ class Service:
                                    cfg["fail_window_seconds"])
         self.cache = {}
         self.cache_lock = threading.Lock()
+        self.publisher = Publisher(cfg)
 
     def handle(self, ip, username, password):
         """Returns (http_status, body_dict)."""
@@ -515,6 +693,8 @@ def make_handler(service):
             self._send(404, {"ok": False, "error": "not_found"})
 
         def do_POST(self):
+            if self.path == "/v1/publish":
+                return self._publish()
             if self.path != "/v1/status":
                 return self._send(404, {"ok": False, "error": "not_found"})
             try:
@@ -532,6 +712,28 @@ def make_handler(service):
             if code != 200:
                 log("%s %s -> %s" % (self.client_address[0],
                                      user if isinstance(user, str) else "?", code))
+            self._send(code, body)
+
+        def _publish(self):
+            ip = self.client_address[0]
+            if service.limiter.blocked(ip, "_publish"):
+                return self._send(429, {"ok": False, "error": "too_many_attempts"})
+            env = self.headers.get("X-Config", "")
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                n = -1
+            if not env or len(env) > 32 * 1024 or n < 0:
+                return self._send(400, {"ok": False, "error": "bad_request"})
+            dry = self.headers.get("X-Dry-Run") == "1"
+            if dry and n != 0:
+                return self._send(400, {"ok": False, "error": "bad_request"})
+            code, body = service.publisher.publish(env, n, self.rfile.read, dry_run=dry)
+            if code == 403:
+                service.limiter.fail(ip, "_publish")
+            log("%s publish -> %s %s" % (ip, code, body.get("error", "")))
+            if code != 200:
+                self.close_connection = True   # body may be unread
             self._send(code, body)
 
         def log_message(self, fmt, *args):  # quiet default access log
