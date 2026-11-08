@@ -85,4 +85,9 @@
     <string name="brand_used_of">مصرف شده: %1$s از %2$s گیگابایت</string>
     <string name="brand_account_of">حساب: %1$s</string>
     <string name="brand_logout_short">خروج</string>
+
+    <string name="brand_battery_title">اتصال پایدار در حالت خاموشی صفحه</string>
+    <string name="brand_battery_message">برای اینکه وقتی صفحه‌ی گوشی خاموش است اتصال قطع نشود، اجازه دهید این برنامه از «بهینه‌سازی باتری» مستثنا شود. مصرف باتری تغییر محسوسی نمی‌کند.</string>
+    <string name="brand_battery_allow">اجازه می‌دهم</string>
+    <string name="brand_battery_later">بعداً</string>
 </resources>

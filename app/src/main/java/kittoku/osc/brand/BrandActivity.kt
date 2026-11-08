@@ -37,6 +37,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 
+private const val PREF_ASKED_BATTERY = "BRAND_ASKED_BATTERY"
+
 class BrandActivity : AppCompatActivity() {
     private lateinit var binding: ActivityBrandBinding
     private lateinit var prefs: SharedPreferences
@@ -278,14 +280,18 @@ class BrandActivity : AppCompatActivity() {
         styleConnectButton(state)
 
         val err = BrandSession.lastError(prefs)
-        if (state != Conn.CONNECTED && err != null) {
+        // while reconnecting, an old error would only confuse
+        if (state == Conn.DISCONNECTED && err != null) {
             showConnError(describeEngineError(err))
         } else {
             binding.connError.visibility = View.GONE
         }
 
         // Usage changes while connected; refresh once the tunnel is up.
-        if (state == Conn.CONNECTED && !wasConnected) refreshStatus(force = true)
+        if (state == Conn.CONNECTED && !wasConnected) {
+            refreshStatus(force = true)
+            askBatteryExemptionOnce()
+        }
         wasConnected = state == Conn.CONNECTED
     }
 
@@ -343,6 +349,33 @@ class BrandActivity : AppCompatActivity() {
             haloAnim = null
             binding.connectHalo.visibility = View.INVISIBLE
         }
+    }
+
+    /**
+     * Battery optimization lets Android cut the VPN while the screen is off.
+     * Ask once (after the first successful connection) to be exempted.
+     */
+    private fun askBatteryExemptionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        if (prefs.getBoolean(PREF_ASKED_BATTERY, false)) return
+        prefs.edit().putBoolean(PREF_ASKED_BATTERY, true).apply()
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.brand_battery_title)
+            .setMessage(R.string.brand_battery_message)
+            .setPositiveButton(R.string.brand_battery_allow) { _, _ ->
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+            }
+            .setNegativeButton(R.string.brand_battery_later, null)
+            .show()
     }
 
     private fun stopButtonAnimations() {

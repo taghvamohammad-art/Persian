@@ -19,8 +19,10 @@ internal object BrandSession {
     // A stale session stays on the router until SSTP keepalive (60 s) ends it,
     // and the user may hold only one session (shared-users=1). Reconnecting
     // too fast makes the router drop one of the two, so wait a bit.
+    // 40 tries x 15 s: keeps trying for about 10 minutes, long enough for a
+    // phone that wakes up, changes network, or waits for a stale session.
     private const val RECONNECT_INTERVAL_SECONDS = 15
-    private const val RECONNECT_COUNT = 8
+    private const val RECONNECT_COUNT = 40
 
     internal fun isLoggedIn(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(PREF_LOGGED_IN, false)

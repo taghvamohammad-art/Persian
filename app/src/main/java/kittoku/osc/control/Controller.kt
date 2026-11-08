@@ -234,9 +234,15 @@ internal class Controller(internal val bridge: SharedBridge) {
             SSTP_MESSAGE_TYPE_CALL_ABORT
         }
 
-        // Retrying a rejected login (wrong password, expired or used-up
-        // account) cannot succeed and only adds failed logins on the router.
-        val doRetry = isReconnectionEnabled && received.result != Result.ERR_AUTHENTICATION_FAILED
+        // A rejected login on the user's own connect attempt means a wrong
+        // password or an expired / used-up account: retrying cannot help.
+        // A rejection while reconnecting after a drop is usually the previous
+        // session still open on the router (one session per user), which
+        // clears within a minute or two, so keep retrying then.
+        val isFirstAttempt = getIntPrefValue(OscPrefKey.RECONNECTION_LIFE, bridge.prefs) >=
+                getIntPrefValue(OscPrefKey.RECONNECTION_COUNT, bridge.prefs)
+        val doRetry = isReconnectionEnabled &&
+                (received.result != Result.ERR_AUTHENTICATION_FAILED || !isFirstAttempt)
 
         kill(doRetry) {
             sstpClient?.sendLastPacket(lastPacketType)
