@@ -174,6 +174,34 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     return cfg, envelope
 
 
+def prepare_config_only(ws, public_repo=None):
+    """New signed config with the same app version: for a server change."""
+    cfg = ws.load_config()
+    if public_repo:
+        urls = cfg.setdefault("config_urls", [])
+        for u in mirror_urls(public_repo):
+            if u not in urls:
+                urls.append(u)
+    upd = cfg.get("app_update")
+    if upd:
+        # the APK is served by the router in config_urls[0]; keep it pointing there
+        upd["urls"] = [u.replace("/v1/config", "/v1/app.apk") for u in cfg.get("config_urls", [])
+                       if u.endswith("/v1/config")]
+    cfg["version"] = int(cfg.get("version", 0)) + 1
+    cfg = sc.normalise(cfg)
+    errors = sc.check_config(cfg)
+    if errors:
+        raise ReleaseError("config.json مشکل دارد:\n" + "\n".join(errors))
+    payload = json.dumps(cfg, ensure_ascii=False, separators=(",", ":")).encode()
+    d = ws.private_key()
+    sig = sc.sign(d, payload)
+    if not sc.verify(sc.public_der(d), payload, sig):
+        raise ReleaseError("امضا ساخته شد ولی بررسی آن ناموفق بود.")
+    envelope = json.dumps({"payload": base64.b64encode(payload).decode(),
+                           "sig": base64.b64encode(sig).decode()})
+    return cfg, envelope
+
+
 def save_local(ws, cfg, envelope, build):
     """Called only after the router accepted the release."""
     tmp = ws.path("config.json.tmp")
@@ -183,8 +211,9 @@ def save_local(ws, cfg, envelope, build):
     os.replace(tmp, ws.path("config.json"))
     with open(ws.path(sc.SIGNED_FILE), "w", encoding="utf-8") as f:
         f.write(envelope)
-    with open(ws.path("app.apk"), "wb") as f:
-        f.write(build.apk)
+    if build is not None:
+        with open(ws.path("app.apk"), "wb") as f:
+            f.write(build.apk)
 
 
 # ------------------------------------------------------------------ router
@@ -393,6 +422,52 @@ def release(ws, build, version_code, version_name, notes,
 
     if public_github is not None:
         # the release is already live; a failure here is reported, not fatal
+        log("ارسال تنظیمات به مخزن عمومی (پشتیبان)…")
+        try:
+            public_github.put_file(PUBLIC_FILE, encode_public(envelope).encode(),
+                                   "config v%d" % cfg["version"])
+            log("✓ مخزن عمومی به‌روز شد")
+        except ReleaseError as e:
+            log("⚠ مخزن عمومی به‌روز نشد: %s" % e)
+            cfg["_public_failed"] = str(e)
+    return cfg
+
+
+def release_config_only(ws, send_router=True, github=None, public_github=None,
+                        log=print, progress=None):
+    """Publish changed server settings (config.json) without a new app version.
+
+    Sent to the router named in the NEW config (the new server), together
+    with the current APK from the workspace, so a freshly set-up router can
+    serve updates too.
+    """
+    ws.check()
+    log("امضای تنظیمات سرور…")
+    cfg, envelope = prepare_config_only(ws, public_github.repo if public_github else None)
+    log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
+
+    if send_router:
+        apk = b""
+        upd = cfg.get("app_update")
+        if upd and os.path.isfile(ws.path("app.apk")):
+            with open(ws.path("app.apk"), "rb") as f:
+                apk = f.read()
+            if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
+                apk = b""      # stale local copy: let the router use its own
+        log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
+        body = RouterClient(cfg).publish(envelope, apk, progress)
+        log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
+
+    save_local(ws, cfg, envelope, None)
+    log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
+
+    if github is not None:
+        log("ارسال تنظیمات به GitHub…")
+        github.put_file(ASSET_PATH, envelope.encode(),
+                        "Server settings (config v%d) [skip ci]" % cfg["version"])
+        log("✓ GitHub به‌روز شد")
+
+    if public_github is not None:
         log("ارسال تنظیمات به مخزن عمومی (پشتیبان)…")
         try:
             public_github.put_file(PUBLIC_FILE, encode_public(envelope).encode(),

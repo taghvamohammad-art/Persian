@@ -249,6 +249,47 @@ class ReleaseFlow(unittest.TestCase):
         self.assertTrue(any("⚠" in l for l in logs))
         self.assertEqual(self.ws.published_version_code(), 16)   # release itself done
 
+    def test_config_only_to_new_server(self):
+        # first a normal release on the current router
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=lambda *_: None)
+        # a NEW router (fresh: no config, no APK yet) on another port, same cert
+        srv2 = tempfile.mkdtemp()
+        cfg2 = dict(self.srv_cfg, app_config_file=os.path.join(srv2, "app.json"),
+                    app_apk_file=os.path.join(srv2, "app.apk"), listen_port=0)
+        httpd2 = um.make_server(um.Service(tum.FakeRouter(), cfg2), cfg2)
+        threading.Thread(target=httpd2.serve_forever, daemon=True).start()
+        new_base = "https://127.0.0.1:%d" % httpd2.server_address[1]
+        try:
+            conf = self.ws.load_config()
+            conf["servers"] = [{"name": "new", "host": "10.9.8.7", "port": 443}]
+            conf["status_urls"] = [new_base + "/v1/status"]
+            conf["config_urls"] = [new_base + "/v1/config"] + conf["config_urls"][1:]
+            with open(self.ws.path("config.json"), "w") as f:
+                json.dump(conf, f)
+            before = self.ws.load_config()["version"]
+            cfg = pb.release_config_only(self.ws, github=self.gh.client(),
+                                         public_github=self.gh.client(repo="o/pub"),
+                                         log=lambda *_: None)
+            self.assertEqual(cfg["version"], before + 1)
+            self.assertEqual(cfg["app_update"]["version_code"], 16)        # app unchanged
+            self.assertTrue(cfg["app_update"]["urls"][0].startswith(new_base))
+            with open(cfg2["app_apk_file"], "rb") as f:                  # new router got the APK
+                self.assertEqual(f.read(), self.apk)
+            with open(cfg2["app_config_file"]) as f:
+                served = f.read()
+            payload = json.loads(base64.b64decode(json.loads(served)["payload"]))
+            self.assertEqual(payload["servers"][0]["host"], "10.9.8.7")
+            self.assertEqual(pb.decode_public(self.gh.files["o/pub:" + pb.PUBLIC_FILE].decode()), served)
+            self.assertEqual(self.gh.files["o/r:" + pb.ASSET_PATH].decode(), served)
+            # router-unreachable case: GitHub only
+            conf = self.ws.load_config()
+            cfg = pb.release_config_only(self.ws, send_router=False, github=self.gh.client(),
+                                         public_github=self.gh.client(repo="o/pub"),
+                                         log=lambda *_: None)
+            self.assertEqual(cfg["version"], conf["version"] + 1)
+        finally:
+            httpd2.shutdown()
+
     def test_bad_token(self):
         with self.assertRaises(pb.ReleaseError) as ctx:
             self.gh.client("wrong").check()

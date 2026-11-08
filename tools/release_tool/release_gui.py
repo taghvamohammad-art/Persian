@@ -401,6 +401,11 @@ class MainWindow(QMainWindow):
         self.btn_go.setCursor(Qt.PointingHandCursor)
         self.btn_go.clicked.connect(self.publish)
         l3.addWidget(self.btn_go)
+        self.btn_cfg = QPushButton("⇄  انتشار فقط تنظیمات سرور (بدون نسخه‌ی جدید)")
+        self.btn_cfg.setCursor(Qt.PointingHandCursor)
+        self.btn_cfg.setToolTip("بعد از تغییر سرورها در config.json پوشه‌ی کاری")
+        self.btn_cfg.clicked.connect(self.publish_config_only)
+        l3.addWidget(self.btn_cfg)
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setMaximumHeight(8)
@@ -437,6 +442,7 @@ class MainWindow(QMainWindow):
             self.chk_github.setChecked(False)
             self.chk_github.setToolTip("ابتدا توکن GitHub را در تنظیمات وارد کنید")
         self.btn_go.setEnabled(self.build is not None and not self.busy)
+        self.btn_cfg.setEnabled(not self.busy)
 
     def say(self, line):
         self.log.appendPlainText(line)
@@ -533,6 +539,54 @@ class MainWindow(QMainWindow):
             self.drop.sub.setText("فایل zip دانلودشده از GitHub یا فایل APK")
             self.drop._restyle(loaded="false")
             self.notes.clear()
+            self.refresh_state()
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
+
+    def publish_config_only(self):
+        ws = self.workspace()
+        try:
+            ws.check()
+            cfg = ws.load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return self.fail(str(e))
+        servers = "\n".join("  • %s  (%s:%s)" % (s.get("name", ""), s.get("host", ""), s.get("port", 443))
+                             for s in cfg.get("servers", []))
+        router = (cfg.get("config_urls") or ["—"])[0].split("/v1/")[0]
+        send_router = self.chk_router.isChecked()
+        github = public = None
+        if self.chk_github.isChecked():
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+        if not send_router and github is None:
+            return self.fail("حداقل یکی از «ارسال به روتر» یا «به‌روزرسانی GitHub» را انتخاب کنید.")
+        where = []
+        if send_router:
+            where.append("روتر: " + router)
+        if github is not None:
+            where.append("GitHub" + (" + مخزن عمومی" if public else ""))
+        ok = QMessageBox.question(
+            self, "تأیید",
+            "این سرورها از config.json برای همه‌ی کاربران منتشر می‌شوند:\n\n%s\n\nمقصد: %s\n\nادامه می‌دهید؟"
+            % (servers or "  (خالی!)", "، ".join(where)))
+        if ok != QMessageBox.Yes:
+            return
+
+        def job(log, progress):
+            return pb.release_config_only(ws, send_router=send_router, github=github,
+                                          public_github=public, log=log, progress=progress)
+
+        def done(cfg):
+            self.set_busy(False)
+            self.say("✓ تنظیمات سرور (نسخه‌ی %s) منتشر شد." % fa(cfg["version"]))
+            if cfg.get("_public_failed"):
+                QMessageBox.warning(self, "هشدار",
+                    "تنظیمات منتشر شد، ولی مخزن عمومی پشتیبان به‌روز نشد:\n%s" % cfg["_public_failed"])
+            QMessageBox.information(self, "انجام شد",
+                "تنظیمات جدید منتشر شد.\nگوشی‌ها با باز کردن برنامه آن را دریافت می‌کنند.")
             self.refresh_state()
 
         self.log.clear()
