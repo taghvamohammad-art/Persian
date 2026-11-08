@@ -215,8 +215,9 @@ internal class Controller(internal val bridge: SharedBridge) {
             networkWatcher = UnderlyingNetworkWatcher(
                 bridge.service.getSystemService(ConnectivityManager::class.java)
             ) {
-                bridge.service.logWriter?.report("Underlying network changed, reconnecting")
-                kill(isReconnectionEnabled, null)
+                kill(isReconnectionEnabled) {
+                    bridge.service.logWriter?.report("Underlying network changed, reconnecting")
+                }
             }.also { it.start() }
 
 
