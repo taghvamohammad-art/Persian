@@ -96,7 +96,7 @@ python sign_config.py sign config.json
 **۱. روتر:** فایل `config_key.public.txt` (از پوشه‌ی `tools`) و `umstatus.py` جدید را در پوشه‌ی `umstatus` روتر بگذارید و کانتینر را ری‌استارت کنید. روتر فقط فایلی را قبول می‌کند که با کلید خصوصی شما امضا شده باشد؛ رمز جداگانه‌ای لازم نیست.
 
 **۲. توکن GitHub:** در `github.com/settings/personal-access-tokens/new`:
-- **Repository access:** Only select repositories › `Persian`
+- **Repository access:** Only select repositories › `Persian` و `pv-config`
 - **Permissions › Contents:** Read and write
 - **Permissions › Actions:** Read-only
 - مدت اعتبار: مثلاً یک سال
@@ -104,6 +104,12 @@ python sign_config.py sign config.json
 **۳. دریافت برنامه:** از تب Actions، اجرای «Release tool (Windows)» › فایل `PersianVPN-Release`. ویندوز ممکن است هشدار SmartScreen بدهد (برنامه امضای تجاری ندارد): More info › Run anyway.
 
 **۴. تنظیمات برنامه (⚙):** پوشه‌ی کاری `C:\vpnapp\open-sstp-client\tools`، مخزن `taghvamohammad-art/Persian`، توکن. دکمه‌های «بررسی اتصال روتر» و «بررسی GitHub» را بزنید.
+
+### پشتیبان GitHub برای وقتی که روتر در دسترس نیست
+
+هر انتشار، تنظیمات امضاشده را به‌صورت رمزنگاری‌شده در مخزن عمومی `pv-config` (فایل `config.txt`) هم می‌گذارد و آدرس‌های آن را به `config_urls` اضافه می‌کند. اپ اول از روتر می‌خواند و اگر جواب نداد، از GitHub و بعد jsDelivr. چون محتوا امضا شده، فایل جعلی یا قدیمی‌تر پذیرفته نمی‌شود.
+
+برای اینکه اپ‌های نصب‌شده این آدرس‌ها را یاد بگیرند، باید **حداقل یک بار، وقتی روتر هنوز کار می‌کند،** یک نسخه منتشر شود.
 
 ### هر انتشار
 1. «دریافت آخرین بیلد از GitHub» (یا کشیدن فایل zip روی کادر)

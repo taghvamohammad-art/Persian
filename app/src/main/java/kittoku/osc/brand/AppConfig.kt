@@ -128,12 +128,18 @@ internal object ConfigManager {
      * roll users back to a dead server.
      */
     internal fun install(context: Context, envelopeText: String): Pair<InstallResult, AppConfig?> {
-        val cfg = verify(envelopeText.trim(), publicKeyBytes(context))
+        // the public mirror (and a file shared from it) is encoded; the router serves it plain
+        val plain = try {
+            ConfigCodec.decodeIfNeeded(envelopeText)
+        } catch (e: Exception) {
+            return InstallResult.INVALID to null
+        }
+        val cfg = verify(plain, publicKeyBytes(context))
             ?: return InstallResult.INVALID to null
         synchronized(this) {
             val cur = current(context)
             if (cfg.version <= cur.version) return InstallResult.NOT_NEWER to cur
-            prefs(context).edit().putString(PREF_CACHED, envelopeText.trim()).commit()
+            prefs(context).edit().putString(PREF_CACHED, plain).commit()
             cached = cfg
         }
         Log.i(BRAND_TAG, "config updated to version ${cfg.version}")

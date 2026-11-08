@@ -231,6 +231,12 @@ class SettingsDialog(QDialog):
         self.repo.setLayoutDirection(Qt.LeftToRight)
         lay.addWidget(self.repo)
 
+        lay.addWidget(QLabel("مخزن عمومی پشتیبان (وقتی روتر در دسترس نیست، اپ تنظیمات را از اینجا می‌خواند):"))
+        self.public_repo = QLineEdit(settings.public_repo)
+        self.public_repo.setLayoutDirection(Qt.LeftToRight)
+        self.public_repo.setPlaceholderText("خالی = بدون پشتیبان")
+        lay.addWidget(self.public_repo)
+
         lay.addWidget(QLabel("توکن GitHub (رمزنگاری‌شده روی همین ویندوز ذخیره می‌شود):"))
         self.token = QLineEdit(settings.token)
         self.token.setEchoMode(QLineEdit.Password)
@@ -283,7 +289,10 @@ class SettingsDialog(QDialog):
 
     def test_github(self):
         def job(log, progress):
-            return pb.GitHubClient(self.token.text(), self.repo.text()).check()
+            names = [pb.GitHubClient(self.token.text(), self.repo.text()).check()]
+            if self.public_repo.text().strip():
+                names.append(pb.GitHubClient(self.token.text(), self.public_repo.text()).check())
+            return " و ".join(names)
         self.result.setText("در حال بررسی GitHub…")
         run_in_thread(self, job, lambda r: self._say("دسترسی به مخزن %s برقرار است." % r, True),
                       lambda e: self._say(e, False))
@@ -291,6 +300,7 @@ class SettingsDialog(QDialog):
     def save(self):
         self.settings.workspace = self.ws.text().strip()
         self.settings.repo = self.repo.text().strip()
+        self.settings.public_repo = self.public_repo.text().strip()
         self.settings.token = self.token.text().strip()
         self.settings.save()
         self.accept()
@@ -495,18 +505,25 @@ class MainWindow(QMainWindow):
                 % (fa(code), fa(self.build.version_code)))
             if ok != QMessageBox.Yes:
                 return
-        github = (pb.GitHubClient(self.settings.token, self.settings.repo)
-                  if self.chk_github.isChecked() else None)
+        github = public = None
+        if self.chk_github.isChecked():
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
         ws, build, notes = self.workspace(), self.build, self.notes.toPlainText()
         send_router = self.chk_router.isChecked()
 
         def job(log, progress):
             return pb.release(ws, build, code, name, notes, send_router=send_router,
-                              github=github, log=log, progress=progress)
+                              github=github, public_github=public, log=log, progress=progress)
 
         def done(cfg):
             self.set_busy(False)
             self.say("✓ انتشار نسخه‌ی %s کامل شد." % fa(cfg["app_update"]["version_name"]))
+            if cfg.get("_public_failed"):
+                QMessageBox.warning(self, "هشدار",
+                    "نسخه منتشر شد، ولی مخزن عمومی پشتیبان به‌روز نشد:\n%s\n\n"
+                    "معمولاً یعنی توکن به مخزن عمومی دسترسی ندارد." % cfg["_public_failed"])
             QMessageBox.information(
                 self, "انجام شد",
                 "نسخه‌ی %s منتشر شد.\nکاربرها با باز کردن برنامه، پیام به‌روزرسانی را می‌بینند."

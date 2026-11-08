@@ -24,6 +24,43 @@ sys.path.insert(0, os.path.join(HERE, ".."))          # tools/ (sign_config.py)
 import sign_config as sc                                # noqa: E402
 
 ASSET_PATH = "app/src/main/assets/app_config.signed.json"
+PUBLIC_REPO = "taghvamohammad-art/pv-config"   # public mirror of the signed config
+PUBLIC_FILE = "config.txt"
+
+
+def mirror_urls(public_repo):
+    """URLs the app tries when the router is unreachable (raw GitHub, then jsDelivr)."""
+    return ["https://raw.githubusercontent.com/%s/main/%s" % (public_repo, PUBLIC_FILE),
+            "https://cdn.jsdelivr.net/gh/%s@main/%s" % (public_repo, PUBLIC_FILE)]
+
+
+# Encoding for the public mirror; same scheme as the app (brand/ConfigCodec.kt).
+# Hides server addresses from casual readers and scrapers only: the key is in
+# the APK. Authenticity comes from the signature inside.
+_CODEC_KEY = bytes.fromhex("76eb86bc2d0bea3f596d86ce523e008f442ef27675478a7f61719792ef083d02")
+_CODEC_PREFIX = "PVC1:"
+
+
+def _keystream_xor(nonce, data):
+    out = bytearray(len(data))
+    for block in range((len(data) + 31) // 32):
+        ks = hashlib.sha256(_CODEC_KEY + nonce + block.to_bytes(4, "big")).digest()
+        for j in range(32):
+            i = block * 32 + j
+            if i >= len(data):
+                break
+            out[i] = data[i] ^ ks[j]
+    return bytes(out)
+
+
+def encode_public(envelope):
+    nonce = os.urandom(16)
+    return _CODEC_PREFIX + base64.b64encode(nonce + _keystream_xor(nonce, envelope.encode())).decode()
+
+
+def decode_public(text):
+    raw = base64.b64decode(text.strip()[len(_CODEC_PREFIX):])
+    return _keystream_xor(raw[:16], raw[16:]).decode()
 BUILD_RE = re.compile(r"persian-vpn-(\d+)", re.IGNORECASE)
 
 
@@ -96,9 +133,15 @@ def read_build(path):
 
 # ------------------------------------------------------------------ signing
 
-def prepare_release(ws, build, version_code, version_name, notes):
+def prepare_release(ws, build, version_code, version_name, notes, public_repo=None):
     """Returns (new_config_dict, envelope_text). Nothing is written yet."""
     cfg = ws.load_config()
+    if public_repo:
+        # make sure installed apps learn the mirror while the router still works
+        urls = cfg.setdefault("config_urls", [])
+        for u in mirror_urls(public_repo):
+            if u not in urls:
+                urls.append(u)
     old = int(cfg.get("app_update", {}).get("version_code", 0))
     if version_code <= old:
         raise ReleaseError("شماره‌ی نسخه (%d) باید از آخرین نسخه‌ی منتشرشده (%d) بزرگ‌تر باشد."
@@ -321,7 +364,7 @@ class GitHubClient:
 # ------------------------------------------------------------------ whole flow
 
 def release(ws, build, version_code, version_name, notes,
-            send_router=True, github=None, log=print, progress=None):
+            send_router=True, github=None, public_github=None, log=print, progress=None):
     """Sign, publish to the router, save locally, update GitHub.
 
     The local config.json changes only after the router accepted the
@@ -329,7 +372,8 @@ def release(ws, build, version_code, version_name, notes,
     """
     ws.check()
     log("امضای تنظیمات نسخه‌ی %d…" % version_code)
-    cfg, envelope = prepare_release(ws, build, version_code, version_name, notes)
+    cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
+                                    public_github.repo if public_github else None)
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
 
     if send_router:
@@ -346,4 +390,15 @@ def release(ws, build, version_code, version_name, notes,
                         "Release app %s (config v%d) [skip ci]"
                         % (cfg["app_update"]["version_name"], cfg["version"]))
         log("✓ GitHub به‌روز شد")
+
+    if public_github is not None:
+        # the release is already live; a failure here is reported, not fatal
+        log("ارسال تنظیمات به مخزن عمومی (پشتیبان)…")
+        try:
+            public_github.put_file(PUBLIC_FILE, encode_public(envelope).encode(),
+                                   "config v%d" % cfg["version"])
+            log("✓ مخزن عمومی به‌روز شد")
+        except ReleaseError as e:
+            log("⚠ مخزن عمومی به‌روز نشد: %s" % e)
+            cfg["_public_failed"] = str(e)
     return cfg

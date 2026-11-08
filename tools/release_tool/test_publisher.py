@@ -27,6 +27,7 @@ import test_umstatus as tum     # noqa: E402
 class FakeGitHub:
     def __init__(self):
         self.files = {}
+        self.public_denied = False
         self.blob_auth = []
         self.artifacts = [
             {"id": 7, "name": "persian-vpn-15", "expired": False},
@@ -56,8 +57,8 @@ class FakeGitHub:
                     return
                 if self.headers.get("Authorization") != "Bearer tok":
                     return self._json(401, {})
-                if self.path == "/repos/o/r":
-                    return self._json(200, {"full_name": "o/r"})
+                if self.path in ("/repos/o/r", "/repos/o/pub"):
+                    return self._json(200, {"full_name": self.path[7:]})
                 if self.path.startswith("/repos/o/r/actions/artifacts?"):
                     return self._json(200, {"artifacts": gh.artifacts})
                 if self.path == "/repos/o/r/actions/artifacts/8/zip":
@@ -65,14 +66,16 @@ class FakeGitHub:
                     self.send_header("Location", "http://127.0.0.1:%d/blob/8" % gh.port)
                     self.end_headers()
                     return
-                p = self.path[len("/repos/o/r/contents/"):]
+                p = self.path[len("/repos/"):].replace("/contents/", ":", 1)
                 if p in gh.files:
                     return self._json(200, {"sha": hashlib.sha1(gh.files[p]).hexdigest()})
                 return self._json(404, {})
 
             def do_PUT(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                p = self.path[len("/repos/o/r/contents/"):]
+                if gh.public_denied and self.path.startswith("/repos/o/pub/"):
+                    return self._json(403, {})
+                p = self.path[len("/repos/"):].replace("/contents/", ":", 1)
                 if p in gh.files and body.get("sha") != hashlib.sha1(gh.files[p]).hexdigest():
                     return self._json(409, {})
                 gh.files[p] = base64.b64decode(body["content"])
@@ -86,8 +89,8 @@ class FakeGitHub:
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
-    def client(self, token="tok"):
-        return pb.GitHubClient(token, "o/r", api="http://127.0.0.1:%d" % self.port)
+    def client(self, token="tok", repo="o/r"):
+        return pb.GitHubClient(token, repo, api="http://127.0.0.1:%d" % self.port)
 
 
 class ReleaseFlow(unittest.TestCase):
@@ -178,7 +181,7 @@ class ReleaseFlow(unittest.TestCase):
         with open(self.ws.path("app.apk"), "rb") as f:
             self.assertEqual(f.read(), self.apk)
         # GitHub got the same envelope, without triggering a build
-        self.assertEqual(self.gh.files[pb.ASSET_PATH].decode(), served)
+        self.assertEqual(self.gh.files["o/r:" + pb.ASSET_PATH].decode(), served)
         self.assertIn("[skip ci]", self.gh.last_message)
         self.assertEqual(prog[-1], len(self.apk))
         # releasing the same versionCode again is refused before anything is sent
@@ -218,6 +221,33 @@ class ReleaseFlow(unittest.TestCase):
         path = gh.download_artifact(art, tempfile.mkdtemp())
         self.assertEqual(pb.read_build(path).apk, self.apk)
         self.assertEqual(self.gh.blob_auth, [None])    # token not leaked to storage
+
+    def test_public_mirror(self):
+        build = pb.read_build(self.zip_path)
+        cfg = pb.release(self.ws, build, 16, "", "", github=self.gh.client(),
+                         public_github=self.gh.client(repo="o/pub"), log=lambda *_: None)
+        mirror = self.gh.files["o/pub:" + pb.PUBLIC_FILE].decode()
+        self.assertTrue(mirror.startswith("PVC1:"))
+        self.assertNotIn("127.0.0.1", mirror)                 # addresses not readable
+        with open(self.srv_cfg["app_config_file"]) as f:
+            self.assertEqual(pb.decode_public(mirror), f.read())  # same signed envelope
+        # installed apps learn the mirror URLs through this release
+        for u in pb.mirror_urls("o/pub"):
+            self.assertIn(u, cfg["config_urls"])
+        self.assertEqual(cfg["config_urls"][0].split("/v1/")[0],
+                         self.ws.load_config()["config_urls"][0].split("/v1/")[0])  # router stays first
+        # app_update URLs still point only at the router
+        self.assertTrue(all("/v1/app.apk" in u for u in cfg["app_update"]["urls"]))
+
+    def test_public_mirror_failure_is_not_fatal(self):
+        self.gh.public_denied = True
+        logs = []
+        cfg = pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "",
+                         github=self.gh.client(), public_github=self.gh.client(repo="o/pub"),
+                         log=logs.append)
+        self.assertIn("_public_failed", cfg)
+        self.assertTrue(any("⚠" in l for l in logs))
+        self.assertEqual(self.ws.published_version_code(), 16)   # release itself done
 
     def test_bad_token(self):
         with self.assertRaises(pb.ReleaseError) as ctx:

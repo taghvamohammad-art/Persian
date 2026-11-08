@@ -12,6 +12,7 @@ import sys
 APP_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PersianVPNRelease")
 FILE = os.path.join(APP_DIR, "settings.json")
 DEFAULT_REPO = "taghvamohammad-art/Persian"
+DEFAULT_PUBLIC_REPO = "taghvamohammad-art/pv-config"
 DEFAULT_WORKSPACES = [r"C:\vpnapp\open-sstp-client\tools"]
 
 
@@ -54,10 +55,11 @@ def _decrypt(value):
 
 
 class Settings:
-    def __init__(self, workspace="", repo=DEFAULT_REPO, token=""):
+    def __init__(self, workspace="", repo=DEFAULT_REPO, token="", public_repo=DEFAULT_PUBLIC_REPO):
         self.workspace = workspace
         self.repo = repo
         self.token = token
+        self.public_repo = public_repo
 
     @classmethod
     def load(cls):
@@ -67,6 +69,7 @@ class Settings:
                 d = json.load(f)
             s.workspace = d.get("workspace", "")
             s.repo = d.get("repo", DEFAULT_REPO)
+            s.public_repo = d.get("public_repo", DEFAULT_PUBLIC_REPO)
             s.token = _decrypt(d.get("token", ""))
         except (OSError, ValueError):
             pass
@@ -79,5 +82,6 @@ class Settings:
         tmp = FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"workspace": self.workspace, "repo": self.repo,
+                       "public_repo": self.public_repo,
                        "token": _encrypt(self.token)}, f, ensure_ascii=False, indent=2)
         os.replace(tmp, FILE)
