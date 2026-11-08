@@ -561,7 +561,24 @@ def smoke():
     w.close()
     if sys.stdout:            # a windowed .exe has no console
         print("smoke OK")
-    return 0
+        sys.stdout.flush()
+    return _quit(app, 0)
+
+
+def _quit(app, code):
+    """Exit without Python's late teardown of Qt objects.
+
+    Interpreter shutdown destroys PySide objects in arbitrary order; with
+    PySide6 6.12 on Windows this ends the process with code 1 even after a
+    clean run (CI, 2026-11-08). Settings are written when saved, so there is
+    nothing left to flush here.
+    """
+    for w in app.topLevelWidgets():
+        w.close()
+    app.processEvents()
+    if sys.stderr:
+        sys.stderr.flush()
+    os._exit(code)
 
 
 def main():
@@ -572,7 +589,7 @@ def main():
     w.show()
     if not os.path.isdir(w.settings.workspace or ""):
         w.open_settings()
-    return app.exec()
+    return _quit(app, app.exec())
 
 
 if __name__ == "__main__":
