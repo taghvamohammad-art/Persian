@@ -87,6 +87,33 @@ python sign_config.py sign config.json
 
 ---
 
+## ابزار انتشار گرافیکی (PersianVPN-Release.exe)
+
+همه‌ی مراحل دستی انتشار (امضا، گذاشتن روی روتر، به‌روز کردن GitHub) با یک دکمه.
+
+### راه‌اندازی (فقط یک بار)
+
+**۱. روتر:** فایل `config_key.public.txt` (از پوشه‌ی `tools`) و `umstatus.py` جدید را در پوشه‌ی `umstatus` روتر بگذارید و کانتینر را ری‌استارت کنید. روتر فقط فایلی را قبول می‌کند که با کلید خصوصی شما امضا شده باشد؛ رمز جداگانه‌ای لازم نیست.
+
+**۲. توکن GitHub:** در `github.com/settings/personal-access-tokens/new`:
+- **Repository access:** Only select repositories › `Persian`
+- **Permissions › Contents:** Read and write
+- **Permissions › Actions:** Read-only
+- مدت اعتبار: مثلاً یک سال
+
+**۳. دریافت برنامه:** از تب Actions، اجرای «Release tool (Windows)» › فایل `PersianVPN-Release`. ویندوز ممکن است هشدار SmartScreen بدهد (برنامه امضای تجاری ندارد): More info › Run anyway.
+
+**۴. تنظیمات برنامه (⚙):** پوشه‌ی کاری `C:\vpnapp\open-sstp-client\tools`، مخزن `taghvamohammad-art/Persian`، توکن. دکمه‌های «بررسی اتصال روتر» و «بررسی GitHub» را بزنید.
+
+### هر انتشار
+1. «دریافت آخرین بیلد از GitHub» (یا کشیدن فایل zip روی کادر)
+2. نوشتن توضیحات نسخه (فارسی مشکلی ندارد)
+3. «امضا و انتشار»
+
+اگر ارسال به روتر ناموفق باشد، هیچ فایلی در پوشه‌ی کاری تغییر نمی‌کند و می‌شود دوباره امتحان کرد.
+
+---
+
 ## انتشار نسخه‌ی جدید اپ (آپدیت از داخل اپ)
 
 هر بیلدی که GitHub می‌گیره خودکار یه شماره‌ی نسخه‌ی جدید داره (`versionCode` = شماره‌ی بیلد). این شماره تو اسم فایل دانلودی هست، مثلاً `persian-vpn-12` یعنی نسخه‌ی ۱۲ (نام نسخه `1.0.12`).
