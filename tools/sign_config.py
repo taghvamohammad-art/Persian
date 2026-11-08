@@ -14,11 +14,13 @@ Pure Python standard library, so it runs on any PC with Python 3.8+.
   python sign_config.py verify app_config.signed.json
       -> checks the signature with config_key.public.txt
 
-  python sign_config.py app <path-to-apk> <versionCode> [versionName] [notes]
+  python sign_config.py app <path-to-apk> <versionCode> [versionName] [notes | @notes.txt]
       -> publishes a new app version: copies the APK to app.apk, writes its
          SHA-256 and size into config.json, raises "version" by 1 and signs.
          Upload app.apk and app_config.signed.json to the router.
-         <versionCode> must equal versionCode in app/build.gradle.
+         <versionCode> is the number in the GitHub build name (persian-vpn-12 -> 12).
+         Persian notes: write them in a UTF-8 text file and pass @notes.txt
+         (the Windows console garbles Persian typed on the command line).
 
 The app only accepts a config whose signature matches the public key
 built into it, and only if its "version" is higher than the one it has.
@@ -233,6 +235,12 @@ def cmd_verify(path):
 
 def cmd_app(apk_path, version_code, version_name=None, notes="", config_path="config.json"):
     import shutil
+    if notes.startswith("@"):
+        with open(notes[1:], encoding="utf-8-sig") as f:
+            notes = f.read().strip()
+    if "?" * 3 in notes:
+        print("the notes look garbled ('???'); put them in a UTF-8 file and pass @file")
+        return 1
     with open(config_path, encoding="utf-8") as f:
         cfg = json.load(f)
     with open(apk_path, "rb") as f:
