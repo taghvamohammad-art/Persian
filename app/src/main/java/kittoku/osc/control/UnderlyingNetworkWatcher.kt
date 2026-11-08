@@ -2,51 +2,61 @@ package kittoku.osc.control
 
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 
 
 /**
- * Branded build: reconnects as soon as the phone's real network changes
- * (Wi-Fi <-> mobile data, Wi-Fi off when the screen sleeps, ...).
+ * Branded build: reconnects when the physical network the tunnel rides on
+ * goes away (Wi-Fi off when the screen sleeps, leaving Wi-Fi for mobile
+ * data, ...), instead of sitting "connected" until the echo timeout.
  *
- * The SSTP socket stays tied to the network it was opened on; after a switch
- * it carries nothing, and without this the engine only noticed through its
- * echo timeout. This app is excluded from its own tunnel, so for this process
- * the "default network" is the physical one, never the VPN.
+ * Only a LOST network triggers a reconnect. A first version also reacted to
+ * any "new default network" and, on some phones, saw the VPN itself as a
+ * change right after connecting, which caused an endless reconnect loop
+ * (2026-11-08). VPN networks are ignored entirely here.
  */
 internal class UnderlyingNetworkWatcher(
     private val manager: ConnectivityManager,
-    private val onChanged: () -> Unit,
+    private val onLost: () -> Unit,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var current: Network? = null
     private var closed = false
 
+    private val fire = Runnable {
+        if (!closed) onLost()
+    }
+
+    private fun isVpn(network: Network): Boolean = try {
+        manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ?: false
+    } catch (_: Exception) {
+        false
+    }
+
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            handler.post { handle(network) }
+            handler.post {
+                // remember the physical network we are on; never the VPN
+                if (!closed && current == null && !isVpn(network)) current = network
+            }
         }
-    }
 
-    private val fire = Runnable {
-        if (!closed) onChanged()
-    }
-
-    private fun handle(network: Network) {
-        if (closed) return
-        val previous = current
-        current = network
-        if (previous == null || previous == network) return
-        // short debounce: networks often flap while switching
-        handler.removeCallbacks(fire)
-        handler.postDelayed(fire, 1_500)
+        override fun onLost(network: Network) {
+            handler.post {
+                if (closed || network != current) return@post
+                current = null
+                // short delay: let the replacement network come up first
+                handler.removeCallbacks(fire)
+                handler.postDelayed(fire, 1_500)
+            }
+        }
     }
 
     internal fun start() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
-        current = manager.activeNetwork
         try {
             manager.registerDefaultNetworkCallback(callback)
         } catch (_: Exception) { }

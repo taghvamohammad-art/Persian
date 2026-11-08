@@ -211,12 +211,14 @@ internal class Controller(internal val bridge: SharedBridge) {
                 resetReconnectionLife(bridge.prefs)
             }
 
-            // reconnect right away when the phone switches networks
+            // reconnect right away when the network under the tunnel goes away
             networkWatcher = UnderlyingNetworkWatcher(
                 bridge.service.getSystemService(ConnectivityManager::class.java)
             ) {
                 kill(isReconnectionEnabled) {
-                    bridge.service.logWriter?.report("Underlying network changed, reconnecting")
+                    bridge.service.logWriter?.report("Underlying network lost, reconnecting")
+                    kittoku.osc.brand.BrandSession.recordErrorDetail(bridge.prefs,
+                        "NETWORK: lost, reconnecting", "")
                 }
             }.also { it.start() }
 
