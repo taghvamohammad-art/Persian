@@ -11,6 +11,50 @@ on:
   workflow_dispatch:
 
 jobs:
+  routeros:
+    # the backup code against a real RouterOS (CHR) in QEMU
+    runs-on: ubuntu-latest
+    env:
+      ROS_VERSION: "7.23.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --disable-pip-version-check paramiko cryptography
+          sudo apt-get update -q && sudo apt-get install -y -q qemu-system-x86 unzip
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+
+      - name: Unit tests
+        working-directory: tools/release_tool
+        run: python -m unittest test_backup -v
+
+      - name: Download RouterOS ${{ env.ROS_VERSION }}
+        run: |
+          cd /tmp
+          curl -fsSL -o chr.zip https://download.mikrotik.com/routeros/$ROS_VERSION/chr-$ROS_VERSION.img.zip
+          curl -fsSL -o pkgs.zip https://download.mikrotik.com/routeros/$ROS_VERSION/all_packages-x86-$ROS_VERSION.zip
+          unzip -q chr.zip && mkdir pkgs && unzip -q pkgs.zip -d pkgs && ls pkgs
+
+      - name: Boot CHR
+        run: |
+          qemu-system-x86_64 -enable-kvm -m 1024 -smp 1 -display none -daemonize \
+            -drive file=/tmp/chr-$ROS_VERSION.img,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device e1000,netdev=n0 \
+            -serial unix:/tmp/chr.sock,server,nowait
+          timeout 300 python tools/release_tool/it/chr.py boot
+
+      - name: Prepare router
+        run: timeout 600 python tools/release_tool/it/chr.py setup
+
+      - name: Backup
+        run: timeout 600 python tools/release_tool/it/chr.py backup
+
   exe:
     runs-on: windows-latest
     steps:
@@ -21,7 +65,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install
-        run: python -m pip install --disable-pip-version-check pyside6 pyinstaller
+        run: python -m pip install --disable-pip-version-check pyside6 pyinstaller paramiko cryptography
 
       - name: GUI smoke test (offscreen)
         env:

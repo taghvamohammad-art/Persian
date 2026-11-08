@@ -13,6 +13,9 @@ APP_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Pe
 FILE = os.path.join(APP_DIR, "settings.json")
 DEFAULT_REPO = "taghvamohammad-art/Persian"
 DEFAULT_PUBLIC_REPO = "taghvamohammad-art/pv-config"
+DEFAULT_BACKUP_REPO = "taghvamohammad-art/pv-backups"
+STATUS_FILE = os.path.join(APP_DIR, "backup_status.json")
+LOG_FILE = os.path.join(APP_DIR, "backup.log")
 DEFAULT_WORKSPACES = [r"C:\vpnapp\open-sstp-client\tools"]
 
 
@@ -54,12 +57,21 @@ def _decrypt(value):
     return raw.decode()
 
 
+ROUTER_FIELDS = ("id", "name", "role", "host", "port", "user", "password", "hostkey")
+
+
 class Settings:
     def __init__(self, workspace="", repo=DEFAULT_REPO, token="", public_repo=DEFAULT_PUBLIC_REPO):
         self.workspace = workspace
         self.repo = repo
         self.token = token
         self.public_repo = public_repo
+        self.backup_repo = DEFAULT_BACKUP_REPO
+        self.backup_password = ""
+        self.auto_backup = False
+        self.backup_hours = 6
+        # [{"id", "name", "role": "main"|"secondary", "host", "port", "user", "password", "hostkey"}]
+        self.routers = []
 
     @classmethod
     def load(cls):
@@ -71,17 +83,59 @@ class Settings:
             s.repo = d.get("repo", DEFAULT_REPO)
             s.public_repo = d.get("public_repo", DEFAULT_PUBLIC_REPO)
             s.token = _decrypt(d.get("token", ""))
+            s.backup_repo = d.get("backup_repo", DEFAULT_BACKUP_REPO)
+            s.backup_password = _decrypt(d.get("backup_password", ""))
+            s.auto_backup = bool(d.get("auto_backup", False))
+            s.backup_hours = int(d.get("backup_hours", 6))
+            for r in d.get("routers", []):
+                r = {k: r.get(k, "") for k in ROUTER_FIELDS}
+                r["password"] = _decrypt(r["password"])
+                r["port"] = int(r["port"] or 22)
+                r["role"] = r["role"] or "main"
+                s.routers.append(r)
         except (OSError, ValueError):
             pass
         if not s.workspace:
             s.workspace = next((p for p in DEFAULT_WORKSPACES if os.path.isdir(p)), "")
         return s
 
+    def router(self, rid):
+        return next((r for r in self.routers if r["id"] == rid), None)
+
+    def new_router_id(self):
+        n = 1
+        while self.router("r%d" % n):
+            n += 1
+        return "r%d" % n
+
+    def backup_dir(self):
+        return os.path.join(self.workspace or APP_DIR, "backups")
+
     def save(self):
         os.makedirs(APP_DIR, exist_ok=True)
         tmp = FILE + ".tmp"
+        routers = [dict(r, password=_encrypt(r.get("password", ""))) for r in self.routers]
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"workspace": self.workspace, "repo": self.repo,
                        "public_repo": self.public_repo,
-                       "token": _encrypt(self.token)}, f, ensure_ascii=False, indent=2)
+                       "token": _encrypt(self.token),
+                       "backup_repo": self.backup_repo,
+                       "backup_password": _encrypt(self.backup_password),
+                       "auto_backup": self.auto_backup, "backup_hours": self.backup_hours,
+                       "routers": routers}, f, ensure_ascii=False, indent=2)
         os.replace(tmp, FILE)
+
+
+def load_status():
+    try:
+        with open(STATUS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_status(status):
+    os.makedirs(APP_DIR, exist_ok=True)
+    with open(STATUS_FILE + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(status, f, ensure_ascii=False, indent=1)
+    os.replace(STATUS_FILE + ".tmp", STATUS_FILE)
