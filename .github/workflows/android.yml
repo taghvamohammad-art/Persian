@@ -70,7 +70,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: persian-vpn-apk
+          # the number in the name is the versionCode to pass to sign_config.py
+          name: persian-vpn-${{ github.run_number }}
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/debug/*.apk

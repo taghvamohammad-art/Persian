@@ -13,8 +13,12 @@ android {
         applicationId "ir.persianvpn.client"   // final before first release: changing it later makes a different app
         minSdk 23
         targetSdk 36
-        versionCode 1
-        versionName "1.0.0"
+        // GitHub builds number themselves (versionCode = build number, so
+        // every build is newer than the last and in-app updates see it);
+        // local Android Studio builds stay at 1.
+        def ciBuild = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode ciBuild ? ciBuild.toInteger() : 1
+        versionName ciBuild ? "1.0.${ciBuild}" : "1.0.0"
 
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
