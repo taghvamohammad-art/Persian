@@ -6,6 +6,7 @@ Android VPN client (Persian UI) for a MikroTik User Manager service.
 - `server/umstatus/` – account-status service that runs in a RouterOS container
 - `tools/` – config signing / release tool, icon sources
 - Build and release guide (Persian): `BUILD_FA.md`
+- Project overview, features and roadmap (Persian): `docs/PROJECT_FA.md`
 - Automatic build: GitHub Actions (`.github/workflows/android.yml`)
 
 Never commit: the release keystore, `config_key.private.json`, `server/umstatus/config.json`.
