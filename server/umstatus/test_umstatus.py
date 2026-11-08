@@ -228,12 +228,12 @@ class HttpsEndToEnd(unittest.TestCase):
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                         "-keyout", key, "-out", crt, "-days", "1", "-subj", "/CN=t"],
                        check=True, capture_output=True)
-        svc = u.Service(FakeRouter(), dict(CFG, app_config_file=os.path.join(d, "app.json"),
-                                               app_apk_file=os.path.join(d, "app.apk")))
-        httpd = u.ThreadingHTTPServer(("127.0.0.1", 0), u.make_handler(svc))
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(crt, key)
-        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+        cfg = dict(CFG, app_config_file=os.path.join(d, "app.json"),
+                   app_apk_file=os.path.join(d, "app.apk"),
+                   cert_file=crt, key_file=key, key_passphrase="",
+                   listen_host="127.0.0.1", listen_port=0)
+        svc = u.Service(FakeRouter(), cfg)
+        httpd = u.make_server(svc, cfg)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         cctx = ssl.create_default_context(cafile=crt)
@@ -264,6 +264,37 @@ class HttpsEndToEnd(unittest.TestCase):
         with urllib.request.urlopen(apkurl, context=cctx) as r:
             self.assertEqual(r.headers["Content-Length"], str(len(blob)))
             self.assertEqual(r.read(), blob)
+        httpd.shutdown()
+
+
+class SilentClients(unittest.TestCase):
+    """Regression: silent TLS clients froze the whole service (2026-11-08)."""
+
+    def test_service_answers_despite_silent_and_garbage_clients(self):
+        import os, socket, subprocess, tempfile, time
+        d = tempfile.mkdtemp()
+        crt, key = os.path.join(d, "c.crt"), os.path.join(d, "k.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", key, "-out", crt, "-days", "1", "-subj", "/CN=t"],
+                       check=True, capture_output=True)
+        cfg = dict(CFG, cert_file=crt, key_file=key, key_passphrase="",
+                   listen_host="127.0.0.1", listen_port=0)
+        httpd = u.make_server(u.Service(FakeRouter(), cfg), cfg)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        # more silent clients than the old accept backlog (5)
+        idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(40)]
+        junk = socket.create_connection(("127.0.0.1", port))
+        junk.sendall(b"GET / HTTP/1.0\r\n\r\n")          # plain HTTP to a TLS port
+        cctx = ssl.create_default_context(cafile=crt)
+        cctx.check_hostname = False
+        t0 = time.time()
+        with urllib.request.urlopen("https://127.0.0.1:%d/health" % port,
+                                    context=cctx, timeout=5) as r:
+            self.assertEqual(json.loads(r.read()), {"ok": True})
+        self.assertLess(time.time() - t0, 3)
+        for c in idle + [junk]:
+            c.close()
         httpd.shutdown()
 
 

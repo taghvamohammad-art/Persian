@@ -554,15 +554,52 @@ def router_from(cfg):
                   cfg["router_timeout"], cfg["session_timeout"])
 
 
-def serve(cfg):
-    service = Service(router_from(cfg), cfg)
-    httpd = ThreadingHTTPServer((cfg["listen_host"], int(cfg["listen_port"])),
-                                make_handler(service))
+class TLSThreadingServer(ThreadingHTTPServer):
+    """HTTPS server whose TLS handshake runs in the per-connection thread.
+
+    Wrapping the listening socket instead would run every handshake in the
+    single accept thread: one client that connects and stays silent (a
+    scanner, a phone that lost its network) then blocks all others, the
+    backlog fills up and new clients get "timeout connecting".
+    """
+    daemon_threads = True
+    request_queue_size = 128
+
+    def __init__(self, addr, handler, ssl_ctx, handshake_timeout=10):
+        self.ssl_ctx = ssl_ctx
+        self.handshake_timeout = handshake_timeout
+        super().__init__(addr, handler)
+
+    def finish_request(self, request, client_address):
+        # runs in the worker thread (ThreadingMixIn.process_request_thread)
+        try:
+            request.settimeout(self.handshake_timeout)
+            tls = self.ssl_ctx.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return  # bad or silent client; shutdown_request closes the socket
+        try:
+            self.RequestHandlerClass(tls, client_address, self)
+        finally:
+            try:
+                tls.close()
+            except OSError:
+                pass
+
+    def handle_error(self, request, client_address):
+        pass  # clients dropping mid-request are normal; avoid traceback spam
+
+
+def make_server(service, cfg):
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cfg["cert_file"], cfg["key_file"],
                         password=cfg["key_passphrase"] or None)
-    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    return TLSThreadingServer((cfg["listen_host"], int(cfg["listen_port"])),
+                              make_handler(service), ctx)
+
+
+def serve(cfg):
+    httpd = make_server(Service(router_from(cfg), cfg), cfg)
     log("umstatus listening on %s:%s" % (cfg["listen_host"], cfg["listen_port"]))
     httpd.serve_forever()
 
