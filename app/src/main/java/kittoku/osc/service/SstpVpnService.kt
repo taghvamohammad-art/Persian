@@ -26,6 +26,7 @@ import kittoku.osc.preference.OscPrefKey
 import kittoku.osc.preference.accessor.getBooleanPrefValue
 import kittoku.osc.preference.accessor.getIntPrefValue
 import kittoku.osc.preference.accessor.getURIPrefValue
+import kittoku.osc.preference.accessor.getStringPrefValue
 import kittoku.osc.preference.accessor.resetReconnectionLife
 import kittoku.osc.preference.accessor.setBooleanPrefValue
 import kittoku.osc.preference.accessor.setIntPrefValue
@@ -105,6 +106,7 @@ internal class SstpVpnService : VpnService() {
             ACTION_VPN_CONNECT -> {
                 controller?.kill(false, null)
 
+                kittoku.osc.brand.SessionTraffic.reset()
                 beForegrounded()
                 resetReconnectionLife(prefs)
                 if (getBooleanPrefValue(OscPrefKey.LOG_DO_SAVE_LOG, prefs)) {
@@ -214,15 +216,16 @@ internal class SstpVpnService : VpnService() {
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val builder = NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
-            it.priority = NotificationCompat.PRIORITY_DEFAULT
-            it.setOngoing(true)
-            it.setAutoCancel(true)
-            it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
-            it.addAction(R.drawable.ic_baseline_close_24, "DISCONNECT", pendingIntent)
-        }
+        startForeground(NOTIFICATION_DISCONNECT_ID, statusNotification(pendingIntent))
 
-        startForeground(NOTIFICATION_DISCONNECT_ID, builder.build())
+        // keep duration and traffic in the notification up to date
+        jobStatusNotification?.cancel()
+        jobStatusNotification = scope.launch {
+            while (true) {
+                delay(2_000)
+                tryNotify(statusNotification(pendingIntent), NOTIFICATION_DISCONNECT_ID)
+            }
+        }
     }
 
     internal fun notifyMessage(message: String, id: Int, channel: String) {
@@ -244,6 +247,44 @@ internal class SstpVpnService : VpnService() {
         notifyMessage(BrandSession.describeError(this, message), NOTIFICATION_ERROR_ID, NOTIFICATION_ERROR_CHANNEL)
     }
 
+    private var jobStatusNotification: Job? = null
+
+    /** Ongoing notification: state, connected time (system chronometer) and traffic. */
+    private fun statusNotification(disconnect: PendingIntent): Notification {
+        val traffic = kittoku.osc.brand.SessionTraffic
+        val connected = getStringPrefValue(OscPrefKey.HOME_STATUS, prefs).isNotEmpty()
+        if (connected && traffic.connectedSince == 0L) traffic.connectedSince = System.currentTimeMillis()
+
+        val open = PendingIntent.getActivity(this, 1,
+            Intent(this, kittoku.osc.brand.BrandActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        val fa = kittoku.osc.brand.Fa
+        val usage = getString(R.string.brand_notif_usage,
+            fa.size(traffic.downloaded.get()), fa.size(traffic.uploaded.get()))
+
+        return NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL).also {
+            it.priority = NotificationCompat.PRIORITY_LOW
+            it.setOngoing(true)
+            it.setOnlyAlertOnce(true)
+            it.setSilent(true)
+            it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
+            it.setContentIntent(open)
+            it.setContentTitle(getString(
+                if (connected) R.string.brand_notif_connected else R.string.brand_state_connecting))
+            if (connected) {
+                it.setContentText(usage)
+                it.setUsesChronometer(true)
+                it.setShowWhen(true)
+                it.setWhen(traffic.connectedSince)
+            } else {
+                it.setShowWhen(false)
+            }
+            it.addAction(R.drawable.ic_baseline_close_24, getString(R.string.brand_disconnect), disconnect)
+        }.build()
+    }
+
     internal fun tryNotify(notification: Notification, id: Int) {
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -259,6 +300,9 @@ internal class SstpVpnService : VpnService() {
     }
 
     internal fun close() {
+        // stop updating first, or a late update would bring the notification back
+        jobStatusNotification?.cancel()
+        jobStatusNotification = null
         stopForeground(true)
         stopSelf()
     }
@@ -268,6 +312,7 @@ internal class SstpVpnService : VpnService() {
         logWriter?.close()
         logWriter = null
 
+        jobStatusNotification?.cancel()
         controller?.kill(false, null)
         controller = null
 

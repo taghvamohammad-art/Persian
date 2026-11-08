@@ -29,6 +29,18 @@ internal object Fa {
         return digits(text)
     }
 
+    /** "850 KB" / "12.3 MB" / "1.2 GB" in Persian. */
+    internal fun size(bytes: Long): String {
+        val kb = bytes / 1024.0
+        val mb = kb / 1024.0
+        val gb = mb / 1024.0
+        return when {
+            gb >= 1 -> digits(String.format(Locale.US, "%.2f", gb)) + " گیگابایت"
+            mb >= 1 -> digits(String.format(Locale.US, if (mb >= 100) "%.0f" else "%.1f", mb)) + " مگابایت"
+            else -> digits(String.format(Locale.US, "%.0f", kb)) + " کیلوبایت"
+        }
+    }
+
     private val jalaliMonths = arrayOf(
         "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
         "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",

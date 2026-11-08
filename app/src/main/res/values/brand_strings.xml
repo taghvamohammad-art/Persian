@@ -96,4 +96,7 @@
     <string name="brand_last_error_none">خطایی ثبت نشده است.</string>
     <string name="brand_copy">کپی</string>
     <string name="brand_copied">کپی شد</string>
+
+    <string name="brand_notif_connected">متصل</string>
+    <string name="brand_notif_usage">دانلود %1$s  •  آپلود %2$s</string>
 </resources>

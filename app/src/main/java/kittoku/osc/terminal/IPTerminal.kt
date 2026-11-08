@@ -164,12 +164,14 @@ internal class IPTerminal(private val bridge: SharedBridge) {
         // nothing will be written until initialized
         // the position won't be changed
         outputStream?.write(buffer.array(), start, size)
+        kittoku.osc.brand.SessionTraffic.downloaded.addAndGet(size.toLong())
     }
 
     internal fun readPacket(buffer: ByteBuffer) {
         buffer.clear()
         buffer.position(inputStream?.read(buffer.array(), 0, bridge.PPP_MTU) ?: buffer.position())
         buffer.flip()
+        kittoku.osc.brand.SessionTraffic.uploaded.addAndGet(buffer.remaining().toLong())
     }
 
     internal fun close() {
