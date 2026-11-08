@@ -65,6 +65,7 @@ internal class Controller(internal val bridge: SharedBridge) {
             kill(isReconnectionEnabled) {
                 val header = "OSC: ERR_UNEXPECTED"
                 bridge.service.logWriter?.report(header + "\n" + throwable.stackTraceToString())
+                kittoku.osc.brand.BrandSession.recordErrorDetail(bridge.prefs, header, throwable.stackTraceToString())
                 bridge.service.notifyError(header)
             }
         }

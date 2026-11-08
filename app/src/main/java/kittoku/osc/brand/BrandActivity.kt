@@ -146,6 +146,10 @@ class BrandActivity : AppCompatActivity() {
             showImportDialog()
             return true
         }
+        if (item.itemId == R.id.brand_last_error) {
+            showLastErrorReport()
+            return true
+        }
         return super.onOptionsItemSelected(item)
     }
 
@@ -385,14 +389,8 @@ class BrandActivity : AppCompatActivity() {
         haloAnim = null
     }
 
-    private fun describeEngineError(header: String): String {
-        return when {
-            header.contains("ERR_AUTHENTICATION_FAILED") -> getString(R.string.brand_vpn_err_auth)
-            header.startsWith("CERT") -> getString(R.string.brand_vpn_err_cert)
-            header.contains("ERR_TIMEOUT") -> getString(R.string.brand_vpn_err_timeout)
-            else -> getString(R.string.brand_vpn_err_generic, header)
-        }
-    }
+    private fun describeEngineError(header: String): String =
+        BrandSession.describeError(this, header)
 
     private fun showConnError(text: String) {
         binding.connError.text = text
@@ -527,6 +525,23 @@ class BrandActivity : AppCompatActivity() {
         }
         // do not import the same file again on rotation
         setIntent(Intent(this, BrandActivity::class.java))
+    }
+
+    private fun showLastErrorReport() {
+        val text = BrandSession.errorDetail(prefs)
+        val b = AlertDialog.Builder(this).setTitle(R.string.brand_last_error_title)
+        if (text == null) {
+            b.setMessage(R.string.brand_last_error_none).setPositiveButton(R.string.brand_ok, null).show()
+            return
+        }
+        b.setMessage(text)
+            .setPositiveButton(R.string.brand_copy) { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("error report", text))
+                Toast.makeText(this, R.string.brand_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.brand_ok, null)
+            .show()
     }
 
     private fun showImportDialog() {

@@ -1,6 +1,8 @@
 package kittoku.osc.brand
 
+import android.content.Context
 import android.content.SharedPreferences
+import kittoku.osc.R
 import kittoku.osc.preference.AUTH_PROTOCOL_MSCHAPv2
 import kittoku.osc.preference.LIST_TYPE_DISALLOWED
 import kittoku.osc.preference.OscPrefKey
@@ -97,6 +99,29 @@ internal object BrandSession {
     internal fun recordError(prefs: SharedPreferences, header: String) {
         prefs.edit().putString(PREF_LAST_ERROR, header).apply()
     }
+
+    /** Persian text for an engine error header such as "OSC: ERR_UNEXPECTED". */
+    internal fun describeError(context: Context, header: String): String = when {
+        header.contains("ERR_AUTHENTICATION_FAILED") -> context.getString(R.string.brand_vpn_err_auth)
+        header.startsWith("CERT") -> context.getString(R.string.brand_vpn_err_cert)
+        header.contains("ERR_TIMEOUT") -> context.getString(R.string.brand_vpn_err_timeout)
+        else -> context.getString(R.string.brand_vpn_err_generic, header)
+    }
+
+    private const val PREF_ERROR_DETAIL = "BRAND_ERROR_DETAIL"
+
+    /** Keeps the last error with its stack trace for the "last error report" screen. */
+    internal fun recordErrorDetail(prefs: SharedPreferences, header: String, detail: String) {
+        val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date())
+        prefs.edit().putString(PREF_ERROR_DETAIL,
+            "$time  $header\nversion ${kittoku.osc.BuildConfig.VERSION_NAME} " +
+            "(${kittoku.osc.BuildConfig.VERSION_CODE}), Android ${android.os.Build.VERSION.RELEASE}\n\n" +
+            detail.take(4000)).apply()
+    }
+
+    internal fun errorDetail(prefs: SharedPreferences): String? =
+        prefs.getString(PREF_ERROR_DETAIL, null)
 
     internal fun lastError(prefs: SharedPreferences): String? =
         prefs.getString(PREF_LAST_ERROR, null)

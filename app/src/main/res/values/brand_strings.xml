@@ -46,7 +46,7 @@
     <string name="brand_vpn_err_auth">اتصال رد شد: رمز اشتباه است، یا اشتراک تمام شده است.</string>
     <string name="brand_vpn_err_cert">هویت سرور تأیید نشد و اتصال برای امنیت شما برقرار نشد.</string>
     <string name="brand_vpn_err_timeout">سرور پاسخ نداد. اینترنت خود را بررسی کنید یا کمی بعد دوباره امتحان کنید.</string>
-    <string name="brand_vpn_err_generic">اتصال برقرار نشد (%1$s).</string>
+    <string name="brand_vpn_err_generic">اتصال قطع شد (%1$s).</string>
     <string name="brand_vpn_denied">برای اتصال، اجازه‌ی ساخت VPN لازم است.</string>
 
     <string name="brand_import_title">وارد کردن تنظیمات سرور</string>
@@ -90,4 +90,10 @@
     <string name="brand_battery_message">برای اینکه وقتی صفحه‌ی گوشی خاموش است اتصال قطع نشود، اجازه دهید این برنامه از «بهینه‌سازی باتری» مستثنا شود. مصرف باتری تغییر محسوسی نمی‌کند.</string>
     <string name="brand_battery_allow">اجازه می‌دهم</string>
     <string name="brand_battery_later">بعداً</string>
+
+    <string name="brand_reconnecting">اتصال قطع شد؛ در حال اتصال دوباره…</string>
+    <string name="brand_last_error_title">گزارش آخرین خطا</string>
+    <string name="brand_last_error_none">خطایی ثبت نشده است.</string>
+    <string name="brand_copy">کپی</string>
+    <string name="brand_copied">کپی شد</string>
 </resources>

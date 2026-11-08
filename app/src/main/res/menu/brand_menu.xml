@@ -5,4 +5,8 @@
         android:id="@+id/brand_import_config"
         android:title="@string/brand_import_title"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/brand_last_error"
+        android:title="@string/brand_last_error_title"
+        app:showAsAction="never" />
 </menu>

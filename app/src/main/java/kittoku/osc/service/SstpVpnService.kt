@@ -179,7 +179,7 @@ internal class SstpVpnService : VpnService() {
                     setIntPrefValue(life, OscPrefKey.RECONNECTION_LIFE, prefs)
 
                     val message = "Reconnection will be tried (LIFE = $life)"
-                    notifyMessage(message, NOTIFICATION_RECONNECT_ID, NOTIFICATION_RECONNECT_CHANNEL)
+                    notifyMessage(getString(R.string.brand_reconnecting), NOTIFICATION_RECONNECT_ID, NOTIFICATION_RECONNECT_CHANNEL)
                     logWriter?.report(message)
                 }
 
@@ -238,7 +238,10 @@ internal class SstpVpnService : VpnService() {
 
     internal fun notifyError(message: String) {
         BrandSession.recordError(prefs, message)
-        notifyMessage(message, NOTIFICATION_ERROR_ID, NOTIFICATION_ERROR_CHANNEL)
+        if (BrandSession.errorDetail(prefs)?.contains(message) != true) {
+            BrandSession.recordErrorDetail(prefs, message, "")
+        }
+        notifyMessage(BrandSession.describeError(this, message), NOTIFICATION_ERROR_ID, NOTIFICATION_ERROR_CHANNEL)
     }
 
     internal fun tryNotify(notification: Notification, id: Int) {
