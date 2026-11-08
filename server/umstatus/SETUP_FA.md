@@ -2,7 +2,7 @@
 
 این سرویس داخل کانتینر روی خود روتر اجرا می‌شه. اپ اندروید یوزر و پسورد رو بهش می‌فرسته و حجم و روز باقی‌مونده رو می‌گیره.
 
-- آدرس عمومی: `https://91.207.18.201:8443/v1/status`
+- آدرس عمومی: `https://ROUTER_IP:8443/v1/status`
 - آی‌پی کانتینر: `172.17.0.2`، گیت‌وی (خود روتر): `172.17.0.1`
 - دو پسورد جدید لازم دارید. دو تا رشته‌ی تصادفی و طولانی بسازید:
   - **API_PASS**: پسورد اکانت فقط‌خواندنی که سرویس با اون به روتر وصل می‌شه
@@ -30,7 +30,7 @@
 ## ۳. گواهی TLS (روی خود روتر ساخته می‌شه)
 
 ```
-/certificate add name=umstatus common-name=91.207.18.201 subject-alt-name=IP:91.207.18.201 key-size=2048 days-valid=3650
+/certificate add name=umstatus common-name=ROUTER_IP subject-alt-name=IP:ROUTER_IP key-size=2048 days-valid=3650
 /certificate sign umstatus
 /certificate export-certificate umstatus type=pem export-passphrase="CERT_PASS" file-name=umstatus/umstatus
 /file print where name~"umstatus"
@@ -55,7 +55,7 @@
 ## ۶. فایروال و NAT
 
 ```
-/ip firewall nat add chain=dstnat dst-address=91.207.18.201 protocol=tcp dst-port=8443 action=dst-nat to-addresses=172.17.0.2 to-ports=8443 comment=umstatus
+/ip firewall nat add chain=dstnat dst-address=ROUTER_IP protocol=tcp dst-port=8443 action=dst-nat to-addresses=172.17.0.2 to-ports=8443 comment=umstatus
 /ip firewall filter add chain=input src-address=172.17.0.2 protocol=tcp dst-port=64 action=accept comment=umstatus place-before=0
 /ip firewall filter add chain=forward dst-address=172.17.0.2 protocol=tcp dst-port=8443 action=accept comment=umstatus place-before=0
 ```
@@ -103,7 +103,7 @@ exit
 ## ۹. تست از بیرون (cmd ویندوز)
 
 ```
-curl -k -X POST https://91.207.18.201:8443/v1/status -H "Content-Type: application/json" -d "{\"username\":\"25g8282\",\"password\":\"PASSWORD\"}"
+curl -k -X POST https://ROUTER_IP:8443/v1/status -H "Content-Type: application/json" -d "{\"username\":\"25g8282\",\"password\":\"PASSWORD\"}"
 ```
 
 ## ۱۰. امنیت (پیشنهادی)
