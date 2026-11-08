@@ -126,7 +126,7 @@ class ReleaseFlow(unittest.TestCase):
         port = self.httpd.server_address[1]
         base = "https://127.0.0.1:%d" % port
 
-        with open(os.path.join(REPO, "tools", "config.json"), encoding="utf-8") as f:
+        with open(os.path.join(REPO, "tools", "config.example.json"), encoding="utf-8") as f:
             conf = json.load(f)
         conf["status_urls"] = [base + "/v1/status"]
         conf["config_urls"] = [base + "/v1/config"]
