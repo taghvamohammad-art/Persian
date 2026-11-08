@@ -5,7 +5,9 @@ release notes, press one button: the tool signs the new config, uploads
 config + APK to the router and updates the repository on GitHub.
 """
 
+import datetime as _dt
 import os
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -13,14 +15,17 @@ import traceback
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+    QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import backup as bk          # noqa: E402
 import publisher as pb       # noqa: E402
+import settings as st        # noqa: E402
+from routeros import SSHRouter  # noqa: E402
 from settings import Settings  # noqa: E402
 
 FA_DIGITS = str.maketrans("0123456789.", "۰۱۲۳۴۵۶۷۸۹٫")
@@ -91,6 +96,26 @@ QProgressBar {
 QProgressBar::chunk { background: #2EE6C5; border-radius: 4px; }
 #Log { background: rgba(0,0,0,0.18); border-radius: 12px; font-size: 10pt; }
 QDialog { background: #12324A; }
+QTabWidget::pane { border: none; }
+QTabBar::tab {
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.75);
+    border: 1px solid rgba(255,255,255,0.16); border-radius: 14px;
+    padding: 7px 20px; margin: 0 4px 10px 4px;
+}
+QTabBar::tab:selected { background: #2EE6C5; color: #04211C; font-weight: bold; border: none; }
+QListWidget {
+    background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 12px; padding: 4px;
+}
+QListWidget::item { padding: 8px; border-radius: 8px; }
+QListWidget::item:selected { background: rgba(46,230,197,0.25); color: #FFFFFF; }
+QComboBox {
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 10px; padding: 6px 10px;
+}
+QComboBox QAbstractItemView { background: #12324A; selection-background-color: #00A58E; }
+#Warn { background: rgba(255,170,60,0.18); border: 1px solid rgba(255,170,60,0.6);
+        border-radius: 12px; padding: 8px 12px; }
 QMessageBox { background: #12324A; }
 """
 
@@ -244,6 +269,37 @@ class SettingsDialog(QDialog):
         self.token.setPlaceholderText("github_pat_…")
         lay.addWidget(self.token)
 
+        lay.addWidget(QLabel("مخزن خصوصی بکاپ روترها:"))
+        self.backup_repo = QLineEdit(settings.backup_repo)
+        self.backup_repo.setLayoutDirection(Qt.LeftToRight)
+        lay.addWidget(self.backup_repo)
+
+        lay.addWidget(QLabel("رمز بکاپ (بدون این رمز، بکاپ‌ها باز نمی‌شوند؛ جای امنی بیرون از این کامپیوتر یادداشتش کنید):"))
+        prow = QHBoxLayout()
+        self.bpass = QLineEdit(settings.backup_password)
+        self.bpass.setEchoMode(QLineEdit.Password)
+        self.bpass.setLayoutDirection(Qt.LeftToRight)
+        self.bpass.setPlaceholderText("رمز بکاپ")
+        self.bpass2 = QLineEdit(settings.backup_password)
+        self.bpass2.setEchoMode(QLineEdit.Password)
+        self.bpass2.setLayoutDirection(Qt.LeftToRight)
+        self.bpass2.setPlaceholderText("تکرار رمز")
+        prow.addWidget(self.bpass)
+        prow.addWidget(self.bpass2)
+        lay.addLayout(prow)
+
+        arow = QHBoxLayout()
+        self.auto = QCheckBox("بکاپ خودکار هر")
+        self.auto.setChecked(settings.auto_backup)
+        self.hours = QSpinBox()
+        self.hours.setRange(1, 24)
+        self.hours.setValue(settings.backup_hours)
+        arow.addWidget(self.auto)
+        arow.addWidget(self.hours)
+        arow.addWidget(QLabel("ساعت (وقتی این کامپیوتر روشن است)"))
+        arow.addStretch()
+        lay.addLayout(arow)
+
         tests = QHBoxLayout()
         self.btn_router = QPushButton("بررسی اتصال روتر")
         self.btn_router.clicked.connect(self.test_router)
@@ -292,18 +348,409 @@ class SettingsDialog(QDialog):
             names = [pb.GitHubClient(self.token.text(), self.repo.text()).check()]
             if self.public_repo.text().strip():
                 names.append(pb.GitHubClient(self.token.text(), self.public_repo.text()).check())
+            if self.backup_repo.text().strip():
+                names.append(pb.GitHubClient(self.token.text(), self.backup_repo.text()).check())
             return " و ".join(names)
         self.result.setText("در حال بررسی GitHub…")
         run_in_thread(self, job, lambda r: self._say("دسترسی به مخزن %s برقرار است." % r, True),
                       lambda e: self._say(e, False))
 
     def save(self):
+        if self.bpass.text() != self.bpass2.text():
+            return QMessageBox.warning(self, "خطا", "رمز بکاپ و تکرارش یکی نیستند.")
+        if self.bpass.text() and len(self.bpass.text()) < 10:
+            return QMessageBox.warning(self, "خطا", "رمز بکاپ حداقل ۱۰ حرف باشد.")
+        if self.settings.backup_password and self.bpass.text() != self.settings.backup_password:
+            ok = QMessageBox.question(self, "تأیید",
+                "رمز بکاپ عوض می‌شود. بکاپ‌های قبلی فقط با رمز قبلی باز می‌شوند. ادامه می‌دهید؟")
+            if ok != QMessageBox.Yes:
+                return
+        auto, hours = self.auto.isChecked(), self.hours.value()
+        if auto and not self.bpass.text():
+            return QMessageBox.warning(self, "خطا", "برای بکاپ خودکار اول رمز بکاپ را بگذارید.")
+        if sys.platform == "win32" and (auto != self.settings.auto_backup or hours != self.settings.backup_hours):
+            try:
+                bk.set_schedule(auto, hours)
+            except pb.ReleaseError as e:
+                return QMessageBox.warning(self, "خطا", str(e))
+        self.settings.auto_backup, self.settings.backup_hours = auto, hours
+        self.settings.backup_repo = self.backup_repo.text().strip()
+        self.settings.backup_password = self.bpass.text()
         self.settings.workspace = self.ws.text().strip()
         self.settings.repo = self.repo.text().strip()
         self.settings.public_repo = self.public_repo.text().strip()
         self.settings.token = self.token.text().strip()
         self.settings.save()
         self.accept()
+
+
+# ------------------------------------------------------------------ routers
+
+ROLES = [("main", "اصلی (یوزر منیجر)"), ("secondary", "فرعی")]
+
+
+class RouterDialog(QDialog):
+    def __init__(self, parent, router):
+        super().__init__(parent)
+        self.router = dict(router)
+        self.setWindowTitle("مشخصات روتر")
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.setMinimumWidth(480)
+        lay = QVBoxLayout(self)
+
+        def field(label, widget):
+            lay.addWidget(QLabel(label))
+            lay.addWidget(widget)
+            return widget
+
+        self.name = field("نام (برای خودتان):", QLineEdit(router.get("name", "")))
+        self.role = QComboBox()
+        for key, label in ROLES:
+            self.role.addItem(label, key)
+        self.role.setCurrentIndex(max(0, [k for k, _ in ROLES].index(router.get("role") or "main")))
+        field("نقش:", self.role)
+        row = QHBoxLayout()
+        self.host = QLineEdit(router.get("host", ""))
+        self.host.setLayoutDirection(Qt.LeftToRight)
+        self.host.setPlaceholderText("IP یا دامنه")
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(int(router.get("port") or 22))
+        row.addWidget(self.host, 1)
+        row.addWidget(QLabel("پورت SSH:"))
+        row.addWidget(self.port)
+        lay.addWidget(QLabel("آدرس:"))
+        lay.addLayout(row)
+        self.user = field("نام کاربری روتر:", QLineEdit(router.get("user") or "pvtool"))
+        self.user.setLayoutDirection(Qt.LeftToRight)
+        self.password = field("رمز (رمزنگاری‌شده روی همین ویندوز ذخیره می‌شود):", QLineEdit(router.get("password", "")))
+        self.password.setEchoMode(QLineEdit.Password)
+        self.password.setLayoutDirection(Qt.LeftToRight)
+
+        krow = QHBoxLayout()
+        self.key = QLabel(router.get("hostkey") or "کلید SSH: بعد از اولین اتصال ثبت می‌شود")
+        self.key.setObjectName("Hint")
+        self.key.setWordWrap(True)
+        forget = QPushButton("فراموش کردن کلید")
+        forget.setToolTip("فقط وقتی روتر را از نو نصب کرده‌اید")
+        forget.clicked.connect(self.forget_key)
+        krow.addWidget(self.key, 1)
+        krow.addWidget(forget)
+        lay.addLayout(krow)
+
+        hint = QLabel("کاربر را روی روتر بسازید:\n/user add name=pvtool group=full password=…")
+        hint.setObjectName("Hint")
+        hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        save = QPushButton("ذخیره")
+        save.setObjectName("Primary")
+        save.clicked.connect(self.save)
+        cancel = QPushButton("انصراف")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(save, 1)
+        buttons.addWidget(cancel)
+        lay.addLayout(buttons)
+
+    def forget_key(self):
+        self.router["hostkey"] = ""
+        self.key.setText("کلید SSH: در اتصال بعدی دوباره ثبت می‌شود")
+
+    def save(self):
+        if not self.host.text().strip() or not self.password.text():
+            return QMessageBox.warning(self, "خطا", "آدرس و رمز لازم است.")
+        old_host = self.router.get("host")
+        self.router.update(name=self.name.text().strip(), role=self.role.currentData(),
+                           host=self.host.text().strip(), port=self.port.value(),
+                           user=self.user.text().strip(), password=self.password.text())
+        if old_host and old_host != self.router["host"]:
+            self.router["hostkey"] = ""      # another machine, another key
+        self.accept()
+
+
+def ago(iso):
+    try:
+        t = _dt.datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return "هرگز"
+    mins = int((_dt.datetime.now().astimezone() - t).total_seconds() // 60)
+    if mins < 1:
+        return "همین الان"
+    if mins < 60:
+        return "%s دقیقه پیش" % fa(mins)
+    if mins < 48 * 60:
+        return "%s ساعت پیش" % fa(mins // 60)
+    return "%s روز پیش" % fa(mins // 1440)
+
+
+class ServersPage(QWidget):
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        self.busy = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(14)
+
+        c1, l1 = card("روترها")
+        self.list = QListWidget()
+        self.list.setMinimumHeight(140)
+        self.list.currentRowChanged.connect(lambda _: self.show_backups())
+        self.list.itemDoubleClicked.connect(lambda _: self.edit())
+        l1.addWidget(self.list)
+        row = QHBoxLayout()
+        self.btn_add = QPushButton("＋ افزودن")
+        self.btn_add.clicked.connect(self.add)
+        self.btn_edit = QPushButton("ویرایش")
+        self.btn_edit.clicked.connect(self.edit)
+        self.btn_del = QPushButton("حذف")
+        self.btn_del.clicked.connect(self.delete)
+        self.btn_test = QPushButton("بررسی اتصال")
+        self.btn_test.clicked.connect(self.test)
+        for b in (self.btn_add, self.btn_edit, self.btn_del, self.btn_test):
+            row.addWidget(b)
+        row.addStretch()
+        l1.addLayout(row)
+        lay.addWidget(c1)
+
+        c2, l2 = card("بکاپ")
+        brow = QHBoxLayout()
+        self.btn_one = QPushButton("بکاپ از همین روتر")
+        self.btn_one.clicked.connect(lambda: self.backup(only_selected=True))
+        self.btn_all = QPushButton("بکاپ از همه")
+        self.btn_all.setObjectName("Primary")
+        self.btn_all.setCursor(Qt.PointingHandCursor)
+        self.btn_all.clicked.connect(lambda: self.backup(only_selected=False))
+        brow.addWidget(self.btn_all, 1)
+        brow.addWidget(self.btn_one)
+        l2.addLayout(brow)
+        self.backups = QListWidget()
+        self.backups.setMinimumHeight(110)
+        l2.addWidget(self.backups)
+        frow = QHBoxLayout()
+        self.btn_folder = QPushButton("باز کردن پوشه")
+        self.btn_folder.clicked.connect(self.open_folder)
+        self.btn_verify = QPushButton("بررسی بکاپ انتخاب‌شده")
+        self.btn_verify.clicked.connect(self.verify)
+        frow.addWidget(self.btn_folder)
+        frow.addWidget(self.btn_verify)
+        frow.addStretch()
+        l2.addLayout(frow)
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setMaximumHeight(8)
+        self.bar.hide()
+        l2.addWidget(self.bar)
+        self.log = QPlainTextEdit()
+        self.log.setObjectName("Log")
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(110)
+        l2.addWidget(self.log)
+        lay.addWidget(c2, 1)
+        self.reload()
+
+    @property
+    def settings(self):
+        return self.main.settings
+
+    def current(self):
+        i = self.list.currentRow()
+        return self.settings.routers[i] if 0 <= i < len(self.settings.routers) else None
+
+    def reload(self):
+        status = st.load_status()
+        row = max(0, self.list.currentRow())
+        self.list.clear()
+        for r in self.settings.routers:
+            s = status.get(r["id"], {})
+            mark = "✓" if s.get("ok") else ("✗" if s else "•")
+            role = dict(ROLES).get(r.get("role"), "")
+            text = "%s  %s   —   %s:%s   —   %s   —   آخرین بکاپ: %s" % (
+                mark, r.get("name") or r["id"], r["host"], fa(r.get("port", 22)), role, ago(s.get("last_ok")))
+            item = QListWidgetItem(text)
+            if s and not s.get("ok"):
+                item.setToolTip(s.get("error", ""))
+            self.list.addItem(item)
+        if self.settings.routers:
+            self.list.setCurrentRow(min(row, len(self.settings.routers) - 1))
+        self.show_backups()
+        self.update_buttons()
+
+    def update_buttons(self):
+        has, sel = bool(self.settings.routers), self.current() is not None
+        for b in (self.btn_edit, self.btn_del, self.btn_test, self.btn_one, self.btn_verify, self.btn_folder):
+            b.setEnabled(sel and not self.busy)
+        self.btn_all.setEnabled(has and not self.busy)
+        self.btn_add.setEnabled(not self.busy)
+
+    def show_backups(self):
+        self.backups.clear()
+        r = self.current()
+        if not r:
+            return
+        for name in bk.LocalStore(self.settings.backup_dir()).list(r["id"]):
+            m = bk.STAMP_RE.search(name)
+            label = name
+            if m:
+                t = _dt.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S")
+                label = "%s   (%s)" % (fa(t.strftime("%Y-%m-%d %H:%M")), name)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, name)
+            self.backups.addItem(item)
+        self.update_buttons()
+
+    def set_busy(self, busy):
+        self.busy = busy
+        self.bar.setVisible(busy)
+        self.bar.setRange(0, 0)
+        self.update_buttons()
+
+    def on_progress(self, done, total):
+        if total:
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+
+    def fail(self, text):
+        self.set_busy(False)
+        self.log.appendPlainText("✗ " + text)
+        QMessageBox.warning(self, "خطا", text)
+
+    # ---------------------------------------------------------------- actions
+
+    def add(self):
+        d = RouterDialog(self, {"id": self.settings.new_router_id(),
+                                "role": "secondary" if self.settings.routers else "main"})
+        if d.exec():
+            self.settings.routers.append(d.router)
+            self.settings.save()
+            self.reload()
+            self.list.setCurrentRow(len(self.settings.routers) - 1)
+
+    def edit(self):
+        r = self.current()
+        if not r:
+            return
+        d = RouterDialog(self, r)
+        if d.exec():
+            r.update(d.router)
+            self.settings.save()
+            self.reload()
+
+    def delete(self):
+        r = self.current()
+        if r and QMessageBox.question(self, "تأیید", "روتر «%s» از لیست حذف شود؟\n(بکاپ‌هایش پاک نمی‌شوند)"
+                                      % (r.get("name") or r["host"])) == QMessageBox.Yes:
+            self.settings.routers.remove(r)
+            self.settings.save()
+            self.reload()
+
+    def test(self):
+        r = self.current()
+        if not r:
+            return
+        cfg = dict(r)
+
+        def job(log, progress):
+            with SSHRouter(cfg["host"], cfg["port"], cfg["user"], cfg["password"], cfg.get("hostkey", "")) as c:
+                res = c.run("/system resource print")
+                ident = c.run("/system identity print")
+                return c.seen_hostkey, bk.parse_version(res), ident.split(":", 1)[-1].strip()
+
+        def done(out):
+            key, ver, ident = out
+            self.set_busy(False)
+            new = not r.get("hostkey")
+            if new:
+                if QMessageBox.question(self, "کلید SSH روتر",
+                        "اولین اتصال به این روتر.\nاثر انگشت کلید SSH:\n%s\n\n"
+                        "اگر مطمئن هستید این همان روتر شماست، تأیید کنید." % key) != QMessageBox.Yes:
+                    return
+                r["hostkey"] = key
+                self.settings.save()
+            self.log.appendPlainText("✓ %s: RouterOS %s (%s)" % (r.get("name") or r["host"], ver, ident))
+            QMessageBox.information(self, "انجام شد", "اتصال برقرار است.\nRouterOS %s — %s" % (ver, ident))
+
+        self.log.clear()
+        self.log.appendPlainText("اتصال به %s:%s…" % (r["host"], r["port"]))
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.log.appendPlainText, self.on_progress)
+
+    def backup(self, only_selected):
+        if not self.settings.backup_password:
+            return self.fail("اول رمز بکاپ را در ⚙ تنظیمات بگذارید.")
+        only = None
+        if only_selected:
+            r = self.current()
+            if not r:
+                return
+            only = {r["id"]}
+        settings = self.settings
+
+        def job(log, progress):
+            return bk.backup_all(settings, log, progress, only=only)
+
+        def done(results):
+            self.set_busy(False)
+            self.reload()
+            self.main.check_backups()
+            bad = [r for r in results.values() if not r["ok"]]
+            warns = sum(len(r.get("warnings", [])) for r in results.values())
+            no_gh = [r for r in results.values() if r["ok"] and not r.get("github")]
+            if bad:
+                QMessageBox.warning(self, "خطا", "\n\n".join(r["error"] for r in bad))
+            else:
+                msg = "بکاپ کامل شد."
+                if warns:
+                    msg += "\n%s هشدار (در گزارش پایین)." % fa(warns)
+                if no_gh:
+                    msg += "\nبه GitHub فرستاده نشد (توکن یا مخزن بکاپ تنظیم نیست)."
+                QMessageBox.information(self, "انجام شد", msg)
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.log.appendPlainText, self.on_progress)
+
+    def open_folder(self):
+        r = self.current()
+        if not r:
+            return
+        d = bk.LocalStore(self.settings.backup_dir()).dir(r["id"])
+        os.makedirs(d, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(d)
+        else:
+            subprocess.Popen(["xdg-open", d])
+
+    def verify(self):
+        item, r = self.backups.currentItem(), self.current()
+        if not item or not r:
+            return self.fail("یک بکاپ را از لیست انتخاب کنید.")
+        path = os.path.join(bk.LocalStore(self.settings.backup_dir()).dir(r["id"]), item.data(Qt.UserRole))
+        password = self.settings.backup_password
+
+        def job(log, progress):
+            return bk.open_backup(path, password)
+
+        def done(res):
+            m, parts = res
+            self.set_busy(False)
+            files = [p for p in parts if p.startswith("files/")]
+            lines = ["✓ بکاپ سالم است و با رمز فعلی باز می‌شود.",
+                     "روتر: %s (%s) — RouterOS %s" % (m.get("router_name", ""), m.get("host", ""), m.get("routeros", "")),
+                     "زمان: %s" % fa(m.get("created", "")[:16].replace("T", " ")),
+                     "تنظیمات کامل: %s" % ("✓" if "export.rsc" in parts else "✗"),
+                     "یوزر منیجر: %s" % ("✓" if any(p.startswith("um/") for p in parts) else "—"),
+                     "گواهی‌ها: %s" % fa(len(m.get("certificates", []))),
+                     "فایل‌ها: %s" % fa(len(files)),
+                     "بکاپ باینری: %s" % ("✓" if "system.backup" in parts else "—")]
+            if m.get("warnings"):
+                lines.append("هشدارها:\n  " + "\n  ".join(m["warnings"]))
+            self.log.setPlainText("\n".join(lines))
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.log.appendPlainText, self.on_progress)
 
 
 # ------------------------------------------------------------------ main window
@@ -315,7 +762,7 @@ class MainWindow(QMainWindow):
         self.build = None
         self.busy = False
 
-        self.setWindowTitle("Persian VPN — انتشار نسخه")
+        self.setWindowTitle("Persian VPN — مدیریت")
         icon = resource("icon-512.png")
         if icon:
             self.setWindowIcon(QIcon(icon))
@@ -336,12 +783,12 @@ class MainWindow(QMainWindow):
             logo.setPixmap(QPixmap(icon).scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             head.addWidget(logo)
         titles = QVBoxLayout()
-        t = QLabel("انتشار نسخه‌ی جدید")
+        t = QLabel("Persian VPN")
         t.setObjectName("Title")
-        st = QLabel("امضا، ارسال به روتر و به‌روزرسانی GitHub با یک دکمه")
-        st.setObjectName("Subtitle")
+        sub = QLabel("انتشار نسخه، تنظیمات سرور و بکاپ روترها")
+        sub.setObjectName("Subtitle")
         titles.addWidget(t)
-        titles.addWidget(st)
+        titles.addWidget(sub)
         head.addLayout(titles, 1)
         gear = QPushButton("⚙")
         gear.setObjectName("Gear")
@@ -349,6 +796,21 @@ class MainWindow(QMainWindow):
         gear.clicked.connect(self.open_settings)
         head.addWidget(gear, 0, Qt.AlignTop)
         lay.addLayout(head)
+        self.warn = QLabel("")
+        self.warn.setObjectName("Warn")
+        self.warn.setWordWrap(True)
+        self.warn.hide()
+        lay.addWidget(self.warn)
+
+        self.tabs = QTabWidget()
+        lay.addWidget(self.tabs, 1)
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(14)
+        self.tabs.addTab(page, "انتشار")
+        self.servers = ServersPage(self)
+        self.tabs.addTab(self.servers, "سرورها و بکاپ")
 
         # 1. build
         c1, l1 = card("۱. فایل برنامه")
@@ -419,6 +881,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(c3, 1)
 
         self.refresh_state()
+        self.check_backups()
 
     # ---------------------------------------------------------------- state
 
@@ -469,6 +932,31 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         if SettingsDialog(self, self.settings).exec():
             self.refresh_state()
+            self.servers.reload()
+            self.check_backups()
+
+    def check_backups(self):
+        """Warn when a scheduled backup failed or none is recent."""
+        status = st.load_status()
+        problems = []
+        limit = _dt.timedelta(hours=self.settings.backup_hours * 3)
+        now = _dt.datetime.now().astimezone()
+        for r in self.settings.routers:
+            s = status.get(r["id"], {})
+            name = r.get("name") or r["host"]
+            if s and not s.get("ok"):
+                problems.append("آخرین بکاپ «%s» ناموفق بود: %s" % (name, s.get("error", "")[:160]))
+            elif self.settings.auto_backup:
+                try:
+                    last = _dt.datetime.fromisoformat(s.get("last_ok", ""))
+                    if now - last > limit:
+                        problems.append("بکاپ «%s» قدیمی است (%s)." % (name, fa(s["last_ok"][:16].replace("T", " "))))
+                except ValueError:
+                    problems.append("هنوز هیچ بکاپی از «%s» گرفته نشده است." % name)
+        if self.settings.routers and not self.settings.backup_password:
+            problems.append("رمز بکاپ تنظیم نشده است (⚙).")
+        self.warn.setText("⚠ " + "\n⚠ ".join(problems) if problems else "")
+        self.warn.setVisible(bool(problems))
 
     def load_build(self, path):
         try:
@@ -611,7 +1099,10 @@ def smoke():
     w = MainWindow()
     w.show()
     app.processEvents()
-    SettingsDialog(w, w.settings)  # dialog builds too
+    SettingsDialog(w, w.settings)  # dialogs build too
+    RouterDialog(w, {"id": "r1"})
+    w.tabs.setCurrentIndex(1)
+    app.processEvents()
     w.close()
     if sys.stdout:            # a windowed .exe has no console
         print("smoke OK")
@@ -636,6 +1127,8 @@ def _quit(app, code):
 
 
 def main():
+    if "--backup-all" in sys.argv:          # Windows scheduled task: no window
+        return bk.run_scheduled()
     if "--smoke" in sys.argv:
         return smoke()
     app = make_app(sys.argv)
