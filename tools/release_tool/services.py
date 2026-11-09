@@ -220,8 +220,35 @@ def wait_status(r, svc, want, timeout=900, log=print, errors_before=None):
                         % (svc["comment"], last, "\n".join(logs)))
 
 
+def wan_interface(r):
+    """Interface of the active default route (e.g. ether1), or None."""
+    out = r.run(':local g [/ip route find where dst-address=0.0.0.0/0 and active]; '
+                ':if ([:len $g] > 0) do={:put [/ip route get ($g->0) immediate-gw]}', check=False).strip()
+    return out.split("%", 1)[1].strip() if "%" in out else None
+
+
+def ensure_router_dns(r, log=print):
+    """Containers resolve names through the router (DNS straight to the
+    internet may be blocked or routed elsewhere). Remote requests are only
+    answered on the inside: queries arriving on the WAN are dropped."""
+    allowed = (r.run(":put [/ip dns get allow-remote-requests]").strip() in ("true", "yes"))
+    if allowed:
+        return                     # already serving DNS: the owner has set up its protection
+    wan = wan_interface(r)
+    if not wan:
+        raise RouterOSError("کارت شبکه‌ی اینترنت روتر پیدا نشد؛ DNS روتر برای کانتینرها فعال نشد.")
+    for proto in ("udp", "tcp"):
+        tag = "pv-dns-wan-" + proto
+        if count(r, "/ip firewall filter", "comment=%s" % q(tag)) == 0:
+            r.run("/ip firewall filter add chain=input in-interface=%s protocol=%s dst-port=53 action=drop "
+                  "comment=%s%s" % (q(wan), proto, q(tag), place_first(r, "input")))
+    log("فعال کردن DNS روتر برای کانتینرها (از بیرون بسته)…")
+    r.run("/ip dns set allow-remote-requests=yes")
+
+
 def ensure_container(r, svc, log=print):
     """Create (image download) and start the container of svc."""
+    ensure_router_dns(r, log)
     if not has_package(r, "container"):
         raise RouterOSError("پکیج container روی روتر نصب نیست.")
     if not device_mode_container(r):
@@ -234,8 +261,8 @@ def ensure_container(r, svc, log=print):
     if count(r, "/container", "comment=%s" % q(svc["comment"])) == 0:
         log("دانلود ایمیج پایتون برای %s (چند دقیقه)…" % svc["comment"])
         r.run("/container add remote-image=%s interface=%s root-dir=containers/%s mountlists=%s "
-              "cmd=%s logging=yes start-on-boot=yes dns=1.1.1.1,8.8.8.8 comment=%s"
-              % (IMAGE, svc["veth"], svc["comment"], q(svc["dir"]), q(svc["cmd"]), q(svc["comment"])))
+              "cmd=%s logging=yes start-on-boot=yes dns=%s comment=%s"
+              % (IMAGE, svc["veth"], svc["comment"], q(svc["dir"]), q(svc["cmd"]), GW, q(svc["comment"])))
     elif container_status(r, svc) not in ("stopped", "running", "extracting", "downloading"):
         base = -1      # an earlier download already failed: go straight to the next try
     current = r.run(":put [/container config get registry-url]").strip()
