@@ -76,7 +76,7 @@ def client_config(entry, user, password):
          "streamSettings": {"network": "hysteria", "hysteriaSettings": {"version": 2,
                                                                          "auth": pvcreds.hy2_auth(user, password)},
                             "security": "tls", "tlsSettings": {"serverName": "pv", "alpn": ["h3"],
-                                                               "allowInsecure": True}}},
+                                                               "pinnedPeerCertSha256": h["pin_sha256"]}}},
         {"tag": "ss", "protocol": "shadowsocks", "settings": {"servers": [{"address": "127.0.0.1", "port": s["port"],
             "method": s["method"], "password": s["server_key"] + ":" + pvcreds.ss_key(user, password)}]}},
     ]

@@ -245,8 +245,8 @@ class Xray:
         self.service = cfg.get("service", "xray")
         self.last_restart = 0.0
 
-    def _cli(self, *args, timeout=30):
-        p = subprocess.run([self.bin, "api"] + list(args) + ["--server=" + self.api],
+    def _cli(self, command, *args, timeout=30):
+        p = subprocess.run([self.bin, "api", command, "-s", self.api] + list(args),
                            capture_output=True, text=True, timeout=timeout)
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout).strip()[:300])

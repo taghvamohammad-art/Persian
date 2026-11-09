@@ -199,7 +199,7 @@ def install_awg(h, p, log):
               "apt-get update -q && apt-get install -y -q linux-headers-$(uname -r) amneziawg amneziawg-tools",
               timeout=1800)
     except LinuxError as e:
-        log("⚠ AmneziaWG نصب نشد: %s" % str(e).splitlines()[-1][:200])
+        log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-25:]))
         return False
     wan = h.run("ip route show default | awk '{print $5; exit}'").strip() or "eth0"
     conf = """[Interface]
