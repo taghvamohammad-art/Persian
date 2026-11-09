@@ -20,6 +20,20 @@ NET = "172.17.0.0/24"
 GW = "172.17.0.1"
 IMAGE = "library/python:3.12-alpine"
 REGISTRY = "https://registry-1.docker.io"
+# Docker Hub answers 403 to addresses it places in Iran; these mirror it
+MIRRORS = [REGISTRY, "https://docker.arvancloud.ir", "https://mirror.gcr.io", "https://focker.ir"]
+EXTRACT_ERROR = 'topics~"container" and message~"download/extract error"'
+
+
+class ExtractError(RouterOSError):
+    pass
+
+
+def extract_errors(r):
+    try:
+        return int(r.run(":put [:len [/log find where %s]]" % EXTRACT_ERROR).strip().splitlines()[-1])
+    except (RouterOSError, ValueError, IndexError):
+        return 0
 
 UMSTATUS = {"comment": "umstatus", "veth": "veth-umstatus", "ip": "172.17.0.2", "dir": "umstatus",
             "cmd": "python3 /app/umstatus.py serve"}
@@ -174,7 +188,7 @@ def container_status(r, svc):
     return parse_state(container_props(r, svc))
 
 
-def wait_status(r, svc, want, timeout=900, log=print):
+def wait_status(r, svc, want, timeout=900, log=print, errors_before=None):
     end = time.time() + timeout
     last = None
     while time.time() < end:
@@ -190,6 +204,10 @@ def wait_status(r, svc, want, timeout=900, log=print):
             return s
         if s == "error":
             raise RouterOSError("کانتینر %s خطا داد. لاگ: /log print where topics~\"container\"" % svc["comment"])
+        if errors_before is not None and s not in ("extracting", "downloading") \
+                and extract_errors(r) > errors_before:
+            line = r.run('/log print where %s' % EXTRACT_ERROR, check=False).strip().splitlines()[-1:]
+            raise ExtractError("دانلود ایمیج ناموفق بود: %s" % (line[0][-200:] if line else ""))
         time.sleep(3)
     logs = r.run('/log print where topics~"container"', check=False).strip().splitlines()[-15:]
     raise RouterOSError("کانتینر %s در زمان مقرر آماده نشد (وضعیت: %s).\n%s"
@@ -206,12 +224,32 @@ def ensure_container(r, svc, log=print):
         r.run("/container config set registry-url=%s tmpdir=container-tmp" % REGISTRY)
     if count(r, "/container mounts", "list=%s" % q(svc["dir"])) == 0:
         r.run("/container mounts add list=%s src=/%s dst=/app" % (q(svc["dir"]), svc["dir"]))
+    base = extract_errors(r)
     if count(r, "/container", "comment=%s" % q(svc["comment"])) == 0:
         log("دانلود ایمیج پایتون برای %s (چند دقیقه)…" % svc["comment"])
         r.run("/container add remote-image=%s interface=%s root-dir=containers/%s mountlists=%s "
               "cmd=%s logging=yes start-on-boot=yes dns=1.1.1.1,8.8.8.8 comment=%s"
               % (IMAGE, svc["veth"], svc["comment"], q(svc["dir"]), q(svc["cmd"]), q(svc["comment"])))
-    s = wait_status(r, svc, ("stopped", "running"), log=log)
+    elif container_status(r, svc) not in ("stopped", "running", "extracting", "downloading"):
+        base = -1      # an earlier download already failed: go straight to the next try
+    current = r.run(":put [/container config get registry-url]").strip()
+    order = [current] + [m for m in MIRRORS if m.rstrip("/") != current.rstrip("/")]
+    s, failures = None, []
+    for i, registry in enumerate(order):
+        if i > 0:
+            log("دانلود از %s نشد؛ امتحان %s…" % (order[i - 1], registry))
+            r.run("/container config set registry-url=%s" % registry)
+            base = extract_errors(r)
+            r.run("/container repull [find where comment=%s]" % q(svc["comment"]))
+        elif base < 0:
+            continue
+        try:
+            s = wait_status(r, svc, ("stopped", "running"), log=log, errors_before=base)
+            break
+        except ExtractError as e:
+            failures.append("%s: %s" % (registry, e))
+    if s is None:
+        raise RouterOSError("ایمیج پایتون از هیچ مخزنی دانلود نشد:\n" + "\n".join(failures))
     if s != "running":
         start(r, svc, log)
 
