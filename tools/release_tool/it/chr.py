@@ -132,6 +132,16 @@ while True:
 }
 
 
+def wait_cert(r, name):
+    for _ in range(90):
+        fp = r.run(":put [/certificate get [find name=%s] fingerprint]" % name, check=False).strip()
+        key = r.run(":put [/certificate get [find name=%s] private-key]" % name, check=False).strip()
+        if re.fullmatch(r"[0-9a-f]{64}", fp) and key == "true":
+            return
+        time.sleep(2)
+    raise SystemExit("certificate %s not signed" % name)
+
+
 def build_main():
     import provision as pv
     import services as sv
@@ -175,6 +185,9 @@ def build_main():
     for c in cmds:
         print(">", c)
         r.run(c, timeout=180)
+        m = re.match(r"/certificate sign (\S+)", c)
+        if m:      # signing finishes in the background
+            wait_cert(r, m.group(1))
     step("A: umstatus (as in SETUP_FA)")
     sv.ensure_dir(r, "umstatus")
     r.run('/certificate export-certificate umstatus type=pem export-passphrase="certpass1" '

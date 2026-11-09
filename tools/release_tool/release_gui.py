@@ -9,6 +9,7 @@ import datetime as _dt
 import os
 import subprocess
 import sys
+import time
 import tempfile
 import traceback
 
@@ -17,13 +18,15 @@ from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import backup as bk          # noqa: E402
+import provision as pv      # noqa: E402
 import publisher as pb       # noqa: E402
+import services as sv        # noqa: E402
 import settings as st        # noqa: E402
 from routeros import SSHRouter  # noqa: E402
 from settings import Settings  # noqa: E402
@@ -777,6 +780,567 @@ class ServersPage(QWidget):
         run_in_thread(self, job, done, self.fail, self.log.appendPlainText, self.on_progress)
 
 
+# ------------------------------------------------------------------ shared bits of the router pages
+
+def router_connector(r):
+    def connect():
+        return SSHRouter(r["host"], r["port"], r["user"], r["password"], r.get("hostkey", "")).connect()
+    return connect
+
+
+def router_label(r):
+    return "%s  (%s)" % (r.get("name") or r["id"], r["host"])
+
+
+def pc_package(name, version):
+    """Package from mikrotik.com via this PC (when the router cannot download it)."""
+    import io
+    import urllib.request
+    import zipfile
+    url = "https://download.mikrotik.com/routeros/%s/all_packages-x86-%s.zip" % (version, version)
+    try:
+        with urllib.request.urlopen(url, timeout=300) as resp:
+            data = resp.read()
+    except OSError as e:
+        raise pb.ReleaseError("دانلود پکیج‌ها از mikrotik.com ناموفق بود: %s" % e)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for n in z.namelist():
+            if n.endswith("%s-%s.npk" % (name, version)):
+                return z.read(n)
+    raise pb.ReleaseError("پکیج %s در فایل mikrotik.com نبود." % name)
+
+
+class RouterPage(QWidget):
+    """Base of the pages that work on one router: log, progress, busy state."""
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        self.busy = False
+        self.buttons = []
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setMaximumHeight(8)
+        self.bar.hide()
+        self.log = QPlainTextEdit()
+        self.log.setObjectName("Log")
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(140)
+
+    @property
+    def settings(self):
+        return self.main.settings
+
+    def button(self, text, slot, primary=False):
+        b = QPushButton(text)
+        if primary:
+            b.setObjectName("Primary")
+        b.setCursor(Qt.PointingHandCursor)
+        b.clicked.connect(slot)
+        self.buttons.append(b)
+        return b
+
+    def router_combo(self, roles=None):
+        c = QComboBox()
+        c.setLayoutDirection(Qt.LeftToRight)
+        c.roles = roles
+        return c
+
+    def fill_routers(self, combo):
+        cur = combo.currentData()
+        combo.clear()
+        for r in self.settings.routers:
+            if combo.roles is None or r.get("role") in combo.roles:
+                combo.addItem(router_label(r), r["id"])
+        i = combo.findData(cur)
+        if i >= 0:
+            combo.setCurrentIndex(i)
+
+    def chosen(self, combo):
+        return self.settings.router(combo.currentData()) if combo.currentData() else None
+
+    def set_busy(self, busy):
+        self.busy = busy
+        self.bar.setVisible(busy)
+        self.bar.setRange(0, 0)
+        for b in self.buttons:
+            b.setEnabled(not busy and getattr(b, "allowed", True))
+
+    def on_progress(self, done, total):
+        if total:
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+
+    def fail(self, text):
+        self.set_busy(False)
+        self.log.appendPlainText("✗ " + text)
+        QMessageBox.warning(self, "خطا", text)
+
+    def run(self, job, done, clear=True):
+        if clear:
+            self.log.clear()
+        self.set_busy(True)
+
+        def finished(res):
+            self.set_busy(False)
+            done(res)
+        run_in_thread(self, job, finished, self.fail, self.log.appendPlainText, self.on_progress)
+
+
+# ------------------------------------------------------------------ services & bot
+
+class BotSettingsDialog(QDialog):
+    FIELDS = [("BOT_TOKEN", "توکن بات (از BotFather)"), ("ADMIN_IDS", "شناسه‌ی عددی ادمین‌ها (با کاما)"),
+              ("USERNAME_PREFIX", "پیشوند نام یوزر جدید"), ("USERNAME_DIGITS", "تعداد رقم نام یوزر"),
+              ("PASSWORD_LENGTH", "طول رمز یوزر"), ("STOCK_PREFIX", "فروش یوزرهای آماده با این پیشوند (خالی = همه)"),
+              ("INVITE_TTL_HOURS", "اعتبار لینک دعوت (ساعت)")]
+
+    def __init__(self, parent, values, title="تنظیمات بات"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.setMinimumWidth(520)
+        self.values = dict(values)
+        lay = QVBoxLayout(self)
+        self.edits = {}
+        for key, label in self.FIELDS:
+            lay.addWidget(QLabel(label + ":"))
+            e = QLineEdit(self.values.get(key, dict(sv.BOT_DEFAULTS).get(key, "")))
+            e.setLayoutDirection(Qt.LeftToRight)
+            if key == "BOT_TOKEN":
+                e.setEchoMode(QLineEdit.Password)
+            self.edits[key] = e
+            lay.addWidget(e)
+        buttons = QHBoxLayout()
+        save = QPushButton("ذخیره")
+        save.setObjectName("Primary")
+        save.clicked.connect(self.save)
+        cancel = QPushButton("انصراف")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(save, 1)
+        buttons.addWidget(cancel)
+        lay.addLayout(buttons)
+
+    def save(self):
+        for key, e in self.edits.items():
+            self.values[key] = e.text().strip()
+        try:
+            sv.check_bot_values(self.values)
+        except pb.ReleaseError as e:
+            return QMessageBox.warning(self, "خطا", str(e))
+        self.accept()
+
+
+class ServicesPage(RouterPage):
+    def __init__(self, main):
+        super().__init__(main)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(14)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("روتر اصلی:"))
+        self.combo = self.router_combo(("main",))
+        row.addWidget(self.combo, 1)
+        lay.addLayout(row)
+
+        c1, l1 = card("سرویس وضعیت (umstatus)")
+        hint = QLabel("نسخه‌ی همراه این برنامه و کلید عمومی امضا را روی روتر می‌گذارد و سرویس را دوباره راه می‌اندازد.")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        l1.addWidget(hint)
+        l1.addWidget(self.button("به‌روزرسانی umstatus", self.update_umstatus))
+        lay.addWidget(c1)
+
+        c2, l2 = card("بات تلگرام")
+        self.bot_state = QLabel("")
+        l2.addWidget(self.bot_state)
+        r1 = QHBoxLayout()
+        r1.addWidget(self.button("وضعیت و گزارش", self.bot_refresh))
+        r1.addWidget(self.button("راه‌اندازی دوباره", self.bot_restart))
+        r1.addWidget(self.button("تنظیمات بات", self.bot_settings))
+        r1.addWidget(self.button("به‌روزرسانی کد از GitHub", self.bot_update))
+        l2.addLayout(r1)
+        l2.addWidget(self.button("نصب بات روی روتر / انتقال از سرور ویندوز", self.bot_install, primary=True))
+        lay.addWidget(c2)
+
+        c3, l3 = card("گزارش")
+        l3.addWidget(self.bar)
+        l3.addWidget(self.log)
+        lay.addWidget(c3, 1)
+        self.reload()
+
+    def reload(self):
+        self.fill_routers(self.combo)
+
+    def target(self):
+        r = self.chosen(self.combo)
+        if not r:
+            self.fail("اول در تب «سرورها و بکاپ» روتر اصلی را تعریف کنید.")
+        return r
+
+    def update_umstatus(self):
+        r = self.target()
+        if not r:
+            return
+        key = None
+        try:
+            with open(pb.Workspace(self.settings.workspace).path("config_key.public.txt"), "rb") as f:
+                key = f.read()
+        except OSError:
+            pass
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                sv.update_umstatus(c, key, log)
+        self.run(job, lambda _: QMessageBox.information(self, "انجام شد", "umstatus به‌روز شد."))
+
+    def bot_refresh(self):
+        r = self.target()
+        if not r:
+            return
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                return sv.bot_status(c)
+
+        def done(res):
+            st_, lines = res
+            names = {"running": "در حال اجرا ✓", "stopped": "متوقف", "none": "نصب نشده"}
+            self.bot_state.setText("وضعیت بات: " + names.get(st_, st_))
+            self.log.setPlainText("\n".join(lines) or "(گزارشی نیست)")
+        self.run(job, done)
+
+    def bot_restart(self):
+        r = self.target()
+        if not r:
+            return
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                sv.restart(c, sv.UMBOT, log)
+        self.run(job, lambda _: self.bot_refresh())
+
+    def bot_settings(self):
+        r = self.target()
+        if not r:
+            return
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                return sv.bot_values(c)
+
+        def got(values):
+            d = BotSettingsDialog(self, values)
+            if not d.exec():
+                return
+
+            def save(log, progress):
+                with router_connector(r)() as c:
+                    port = sv.ensure_rest(c, log)
+                    env = sv.parse_env(sv.file_text(c, "umbot/.env") or "")
+                    c.put("umbot/.env", sv.render_env(d.values, port, env.get("MT_PASSWORD", "")))
+                    sv.restart(c, sv.UMBOT, log)
+            self.run(save, lambda _: QMessageBox.information(self, "انجام شد", "تنظیمات بات ذخیره شد."), clear=False)
+        self.run(job, got)
+
+    def bot_update(self):
+        r = self.target()
+        if not r:
+            return
+        token = self.settings.token
+
+        def job(log, progress):
+            log("دریافت کد بات از GitHub…")
+            code = sv.download_bot_code(token)
+            with router_connector(r)() as c:
+                sv.install_bot(c, code, None, log=log)
+        self.run(job, lambda _: QMessageBox.information(self, "انجام شد", "کد بات به‌روز شد."))
+
+    def bot_install(self):
+        r = self.target()
+        if not r:
+            return
+        env_path, _ = QFileDialog.getOpenFileName(
+            self, "فایل .env بات (از سرور ویندوز، C:\\umbot\\.env) — اگر ندارید انصراف بزنید", "", "*")
+        values = sv.parse_env(open(env_path, encoding="utf-8-sig").read()) if env_path else {}
+        d = BotSettingsDialog(self, values, "تنظیمات بات روی روتر")
+        if not d.exec():
+            return
+        db = None
+        db_path, _ = QFileDialog.getOpenFileName(
+            self, "دیتابیس بات (C:\\umbot\\data\\umbot.sqlite3) — برای بات تازه انصراف بزنید", "",
+            "SQLite (*.sqlite3 *.db);;*")
+        if db_path:
+            with open(db_path, "rb") as f:
+                db = f.read()
+            if not db.startswith(b"SQLite format 3"):
+                return self.fail("این فایل دیتابیس SQLite نیست.")
+        if QMessageBox.question(
+                self, "تأیید",
+                "قبل از ادامه، بات روی سرور ویندوز را متوقف کنید\n"
+                "(Task Scheduler › umbot › End و Disable).\n"
+                "دو بات با یک توکن هم‌زمان کار نمی‌کنند.\n\nمتوقف کرده‌اید؟") != QMessageBox.Yes:
+            return
+        token, values = self.settings.token, d.values
+
+        def job(log, progress):
+            log("دریافت کد بات از GitHub…")
+            code = sv.download_bot_code(token)
+            with router_connector(r)() as c:
+                sv.install_bot(c, code, values, db=db, overwrite_db=True, log=log)
+                time.sleep(8)
+                return sv.bot_status(c)
+
+        def done(res):
+            st_, lines = res
+            self.log.appendPlainText("\n".join(lines[-15:]))
+            QMessageBox.information(self, "انجام شد",
+                "بات روی روتر نصب شد (وضعیت: %s).\nیک پیام به بات بدهید تا مطمئن شوید جواب می‌دهد." % st_)
+        self.run(job, done)
+
+
+# ------------------------------------------------------------------ new server
+
+class NewServerPage(RouterPage):
+    def __init__(self, main):
+        super().__init__(main)
+        self.result = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+
+        c1, l1 = card("۱. نوع سرور")
+        mrow = QHBoxLayout()
+        self.mode_main = QRadioButton("سرور اصلی جدید (از روی بکاپ)")
+        self.mode_sec = QRadioButton("سرور فرعی (احراز هویت از سرور اصلی)")
+        self.mode_main.setChecked(True)
+        mrow.addWidget(self.mode_main)
+        mrow.addWidget(self.mode_sec)
+        mrow.addStretch()
+        l1.addLayout(mrow)
+        hint = QLabel("روتر جدید را اول در تب «سرورها و بکاپ» اضافه کنید (CHR تازه، با کاربر pvtool).")
+        hint.setObjectName("Hint")
+        l1.addWidget(hint)
+        lay.addWidget(c1)
+
+        c2, l2 = card("۲. مشخصات")
+        grid = QVBoxLayout()
+
+        def row(label, w):
+            h = QHBoxLayout()
+            lb = QLabel(label)
+            lb.setMinimumWidth(150)
+            h.addWidget(lb)
+            h.addWidget(w, 1)
+            grid.addLayout(h)
+            return lb
+
+        self.target = self.router_combo()
+        row("روتر جدید:", self.target)
+        self.source = self.router_combo(("main",))
+        row("سرور اصلی فعلی/قدیم:", self.source)
+        self.backup = QComboBox()
+        self.backup.setLayoutDirection(Qt.LeftToRight)
+        self.lbl_backup = row("بکاپ:", self.backup)
+        self.ip = QLineEdit()
+        self.ip.setLayoutDirection(Qt.LeftToRight)
+        self.ip.setPlaceholderText("IP عمومی روتر جدید")
+        row("IP عمومی روتر جدید:", self.ip)
+        l2.addLayout(grid)
+        orow = QHBoxLayout()
+        self.chk_bot = QCheckBox("بات روی سرور قدیم متوقف شود (اگر در دسترس است)")
+        self.chk_bot.setChecked(True)
+        orow.addWidget(self.chk_bot)
+        orow.addStretch()
+        orow.addWidget(self.button("بکاپ تازه از سرور اصلی", self.fresh_backup))
+        l2.addLayout(orow)
+        lay.addWidget(c2)
+
+        c3, l3 = card("۳. اجرا")
+        self.btn_go = self.button("شروع / ادامه", self.go, primary=True)
+        l3.addWidget(self.btn_go)
+        self.btn_cfg = self.button("به‌روزرسانی سرورهای اپ و انتشار", self.publish_servers)
+        self.btn_cfg.allowed = False
+        self.btn_cfg.setEnabled(False)
+        l3.addWidget(self.btn_cfg)
+        l3.addWidget(self.bar)
+        l3.addWidget(self.log)
+        lay.addWidget(c3, 1)
+
+        self.mode_main.toggled.connect(self.update_mode)
+        self.target.currentIndexChanged.connect(self.fill_ip)
+        self.source.currentIndexChanged.connect(self.fill_backups)
+        self.reload()
+
+    def reload(self):
+        self.fill_routers(self.target)
+        self.fill_routers(self.source)
+        self.fill_backups()
+        self.fill_ip()
+        self.update_mode()
+
+    def update_mode(self):
+        main = self.mode_main.isChecked()
+        self.chk_bot.setVisible(main)
+        self.btn_cfg.setText("به‌روزرسانی سرورهای اپ و انتشار" if main else "اضافه کردن به سرورهای اپ و انتشار")
+
+    def fill_ip(self):
+        r = self.chosen(self.target)
+        if r:
+            self.ip.setText(r["host"])
+
+    def fill_backups(self):
+        self.backup.clear()
+        r = self.chosen(self.source)
+        if not r:
+            return
+        for name in bk.LocalStore(self.settings.backup_dir()).list(r["id"]):
+            self.backup.addItem(name, name)
+
+    def fresh_backup(self):
+        r = self.chosen(self.source)
+        if not r:
+            return self.fail("سرور اصلی را انتخاب کنید.")
+        if not self.settings.backup_password:
+            return self.fail("اول رمز بکاپ را در ⚙ بگذارید.")
+        settings = self.settings
+
+        def job(log, progress):
+            return bk.backup_all(settings, log, progress, only={r["id"]})
+
+        def done(res):
+            self.fill_backups()
+            if not res[r["id"]]["ok"]:
+                self.fail(res[r["id"]]["error"])
+        self.run(job, done)
+
+    def selected_backup(self):
+        src = self.chosen(self.source)
+        name = self.backup.currentData()
+        if not src or not name:
+            raise pb.ReleaseError("بکاپی از سرور اصلی انتخاب نشده است (اول بکاپ بگیرید).")
+        return os.path.join(bk.LocalStore(self.settings.backup_dir()).dir(src["id"]), name)
+
+    def go(self):
+        tgt, src = self.chosen(self.target), self.chosen(self.source)
+        if not tgt or not src:
+            return self.fail("روتر جدید و سرور اصلی را انتخاب کنید.")
+        if tgt["id"] == src["id"]:
+            return self.fail("روتر جدید و سرور اصلی نمی‌توانند یکی باشند.")
+        try:
+            path = self.selected_backup()
+        except pb.ReleaseError as e:
+            return self.fail(str(e))
+        new_ip = self.ip.text().strip()
+        if not new_ip:
+            return self.fail("IP عمومی روتر جدید را وارد کنید.")
+        password = self.settings.backup_password
+        main_mode = self.mode_main.isChecked()
+        what = "سرور اصلی جدید" if main_mode else "سرور فرعی"
+        if QMessageBox.question(self, "تأیید",
+                "«%s» به عنوان %s راه‌اندازی می‌شود.\nتنظیمات فعلی آن روتر تغییر می‌کند. ادامه می‌دهید؟"
+                % (router_label(tgt), what)) != QMessageBox.Yes:
+            return
+        key = None
+        try:
+            with open(pb.Workspace(self.settings.workspace).path("config_key.public.txt"), "rb") as f:
+                key = f.read()
+        except OSError:
+            pass
+        stop_old = self.chk_bot.isChecked()
+
+        def job(log, progress):
+            manifest, parts = bk.open_backup(path, password)
+            if main_mode:
+                res = pv.restore_main(router_connector(tgt), manifest, parts, new_ip, log=log,
+                                      progress=progress, public_key=key, package_source=pc_package)
+                if res["status"] == pv.DONE and stop_old:
+                    try:
+                        with router_connector(src)() as c:
+                            if sv.stop_bot_autostart(c, log):
+                                log("✓ بات روی سرور قدیم متوقف شد")
+                    except Exception as e:
+                        log("⚠ سرور قدیم در دسترس نیست (بات آن متوقف نشد): %s" % e)
+            else:
+                main_ip = pv.old_public_ip(manifest, parts)
+                res = pv.setup_secondary(router_connector(tgt), router_connector(src), manifest, parts,
+                                         new_ip, main_ip, tgt.get("name") or tgt["id"], log=log)
+            res["old_ip"] = res.get("old_ip") or pv.old_public_ip(manifest, parts)
+            return res
+
+        def done(res):
+            self.result = dict(res, new_ip=new_ip, main=main_mode, target=tgt["id"])
+            if res["status"] == pv.NEED_POWER_CYCLE:
+                self.log.appendPlainText("\n⏸ منتظر خاموش و روشن کردن سرور")
+                QMessageBox.information(self, "یک کار دستی",
+                    "برای فعال شدن کانتینر، روتر جدید باید یک بار خاموش و روشن شود:\n\n"
+                    "ظرف ۵ دقیقه از پنل سرویس‌دهنده‌ی VPS، سرور را Power Off و بعد Power On کنید\n"
+                    "(Reboot معمولی کافی نیست).\n\nبعد از بالا آمدن سرور، دوباره «شروع / ادامه» را بزنید.")
+                return
+            lines = ["", "نتیجه:"] + ["  " + c for c in res.get("checks", [])]
+            if res.get("failed"):
+                lines.append("دستورهایی که اجرا نشدند (معمولاً تکراری‌اند و مشکلی ندارند):")
+                lines += ["  %s\n     → %s" % (l[:150], e[:150]) for l, e in res["failed"]]
+            for why, line in res.get("skipped", []):
+                lines.append("  رد شد (%s): %s" % (why, line[:120]))
+            self.log.appendPlainText("\n".join(lines))
+            bad = [c for c in res.get("checks", []) if c.startswith("✗")]
+            self.btn_cfg.allowed = not bad
+            self.btn_cfg.setEnabled(not bad)
+            if bad:
+                QMessageBox.warning(self, "ناقص", "بعضی بررسی‌ها ناموفق بودند:\n" + "\n".join(bad))
+            else:
+                QMessageBox.information(self, "انجام شد",
+                    "سرور آماده است.\nحالا «%s» را بزنید تا اپ‌ها سرور جدید را بشناسند." % self.btn_cfg.text())
+        self.run(job, done)
+
+    def publish_servers(self):
+        res = self.result
+        if not res:
+            return
+        ws = pb.Workspace(self.settings.workspace)
+        try:
+            ws.check()
+            cfg = ws.load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return self.fail(str(e))
+        tgt = self.settings.router(res["target"])
+        if res["main"]:
+            new_cfg = pv.move_server_in_config(cfg, res["old_ip"], res["new_ip"])
+            text = "آدرس سرور اصلی در تنظیمات اپ از %s به %s عوض می‌شود." % (res["old_ip"], res["new_ip"])
+        else:
+            new_cfg = pv.add_server_to_config(cfg, tgt.get("name") or tgt["id"], res["new_ip"])
+            text = "سرور %s به لیست سرورهای اپ اضافه می‌شود." % res["new_ip"]
+        if QMessageBox.question(self, "تأیید", text + "\nبعد تنظیمات امضا و منتشر می‌شود. ادامه می‌دهید؟") != QMessageBox.Yes:
+            return
+        import json
+        import shutil
+        shutil.copy(ws.path("config.json"), ws.path("config.before-%s.json" % bk.stamp()))
+        with open(ws.path("config.json"), "w", encoding="utf-8") as f:
+            json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+        if res["main"]:
+            tgt["role"] = "main"
+            self.settings.save()
+        github = public = None
+        if self.settings.token:
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+
+        def job(log, progress):
+            return pb.release_config_only(ws, send_router=True, github=github, public_github=public,
+                                          log=log, progress=progress)
+
+        def done(cfg):
+            self.btn_cfg.allowed = False
+            self.btn_cfg.setEnabled(False)
+            self.main.refresh_state()
+            QMessageBox.information(self, "انجام شد",
+                "تنظیمات جدید (نسخه‌ی %s) منتشر شد.\nگوشی‌ها با باز کردن برنامه آن را می‌گیرند." % fa(cfg["version"]))
+        self.run(job, done, clear=False)
+
+
 # ------------------------------------------------------------------ main window
 
 class MainWindow(QMainWindow):
@@ -835,6 +1399,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(page, "انتشار")
         self.servers = ServersPage(self)
         self.tabs.addTab(self.servers, "سرورها و بکاپ")
+        self.services = ServicesPage(self)
+        self.tabs.addTab(self.services, "سرویس‌ها و بات")
+        self.newserver = NewServerPage(self)
+        self.tabs.addTab(self.newserver, "سرور جدید")
+        self.tabs.currentChanged.connect(lambda _: (self.services.reload(), self.newserver.reload()))
 
         # 1. build
         c1, l1 = card("۱. فایل برنامه")
@@ -1125,6 +1694,10 @@ def smoke():
     app.processEvents()
     SettingsDialog(w, w.settings)  # dialogs build too
     RouterDialog(w, {"id": "r1"})
+    BotSettingsDialog(w, {})
+    for i in range(w.tabs.count()):
+        w.tabs.setCurrentIndex(i)
+        app.processEvents()
     w.tabs.setCurrentIndex(1)
     app.processEvents()
     # callbacks of background work must run in the GUI thread
