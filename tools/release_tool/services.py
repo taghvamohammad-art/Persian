@@ -51,7 +51,8 @@ runpy.run_module("umbot", run_name="__main__")
 BOT_MANAGED = ("MT_URL", "MT_USER", "MT_PASSWORD", "MT_CA_FILE", "MT_ALLOW_HTTP", "MT_TLS_VERIFY",
                "DB_PATH", "LOG_FILE")
 BOT_DEFAULTS = [("BOT_TOKEN", ""), ("ADMIN_IDS", ""), ("INVITE_TTL_HOURS", "48"), ("STOCK_PREFIX", ""),
-                ("USERNAME_PREFIX", "25g"), ("USERNAME_DIGITS", "5"), ("PASSWORD_LENGTH", "6")]
+                ("USERNAME_PREFIX", "25g"), ("USERNAME_DIGITS", "5"), ("PASSWORD_LENGTH", "6"),
+                ("REPORT_HOUR", "23")]
 
 
 # ---------------------------------------------------------------- small RouterOS helpers

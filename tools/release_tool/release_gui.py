@@ -893,7 +893,8 @@ class BotSettingsDialog(QDialog):
     FIELDS = [("BOT_TOKEN", "توکن بات (از BotFather)"), ("ADMIN_IDS", "شناسه‌ی عددی ادمین‌ها (با کاما)"),
               ("USERNAME_PREFIX", "پیشوند نام یوزر جدید"), ("USERNAME_DIGITS", "تعداد رقم نام یوزر"),
               ("PASSWORD_LENGTH", "طول رمز یوزر"), ("STOCK_PREFIX", "فروش یوزرهای آماده با این پیشوند (خالی = همه)"),
-              ("INVITE_TTL_HOURS", "اعتبار لینک دعوت (ساعت)")]
+              ("INVITE_TTL_HOURS", "اعتبار لینک دعوت (ساعت)"),
+              ("REPORT_HOUR", "ساعت گزارش شبانه‌ی فروش (۰ تا ۲۳ به وقت تهران، یا off)")]
 
     def __init__(self, parent, values, title="تنظیمات بات"):
         super().__init__(parent)
