@@ -172,7 +172,7 @@ def collect(router, log=print, progress=None):
 
     def skip(p):
         base = p.rsplit("/", 1)[-1]
-        return (base.startswith(TMP) or p.endswith(SKIP_EXT) or p in roots
+        return (base.startswith(TMP) or p.endswith(SKIP_EXT) or p in roots or base == "__pycache__"
                 or any(p.startswith(r + "/") for r in roots if r))
 
     files = list(router.walk("", skip))

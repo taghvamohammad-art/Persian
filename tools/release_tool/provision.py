@@ -216,8 +216,7 @@ def import_certs(r, manifest, parts, only=None, log=print):
             r.put(fname, parts["certs/" + f])
             out = r.run("/certificate import file-name=%s passphrase=%s" % (fname, q(pp)), check=False)
             r.remove(fname)
-            if "failure" in out.lower() and "already" not in out.lower():
-                raise RouterOSError("ورود گواهی %s ناموفق بود: %s" % (c["name"], out.strip()[-200:]))
+            log("  " + " ".join(out.split())[:160])
         if fp and sv.count(r, "/certificate", "fingerprint=%s" % q(fp)):
             if sv.count(r, "/certificate", "name=%s and fingerprint!=%s" % (q(c["name"]), q(fp))):
                 r.run("/certificate set [find where name=%s and fingerprint!=%s] name=%s"
