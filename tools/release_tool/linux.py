@@ -212,7 +212,7 @@ def install_awg(h, p, log):
     log("نصب AmneziaWG…")
     try:
         h.run("export DEBIAN_FRONTEND=noninteractive; add-apt-repository -y ppa:amnezia/ppa && "
-              "apt-get update -q && apt-get install -y -q amneziawg-tools git", timeout=1800)
+              "apt-get update -q && apt-get install -y -q --no-install-recommends amneziawg-tools git", timeout=1800)
     except LinuxError as e:
         log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-15:]))
         return False
