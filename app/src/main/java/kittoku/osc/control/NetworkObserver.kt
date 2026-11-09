@@ -90,6 +90,9 @@ internal class NetworkObserver(val bridge: SharedBridge) {
             setStringPrefValue(it, OscPrefKey.HOME_STATUS, bridge.prefs)
         }
         kittoku.osc.brand.SessionTraffic.authFailures = 0
+        // connected again: an error from before the reconnect is no longer news
+        bridge.service.cancelNotification(kittoku.osc.service.NOTIFICATION_ERROR_ID)
+        kittoku.osc.brand.BrandSession.clearError(bridge.prefs)
     }
 
     private fun wipeStatus() {
