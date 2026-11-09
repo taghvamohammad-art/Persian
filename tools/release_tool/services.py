@@ -180,14 +180,17 @@ def wait_status(r, svc, want, timeout=900, log=print):
         if s != last:
             log("  کانتینر %s: %s" % (svc["comment"], s))
             if s == "unknown":
-                log("  " + ";".join("%s=%s" % kv for kv in props.items() if kv[0] != "cmd")[:400])
+                flags = {k: v for k, v in props.items() if v in ("true", "yes") or "status" in k or "state" in k}
+                log("  %s" % flags)
             last = s
         if s in want:
             return s
         if s == "error":
             raise RouterOSError("کانتینر %s خطا داد. لاگ: /log print where topics~\"container\"" % svc["comment"])
         time.sleep(3)
-    raise RouterOSError("کانتینر %s در زمان مقرر آماده نشد (وضعیت: %s)." % (svc["comment"], last))
+    logs = r.run('/log print where topics~"container"', check=False).strip().splitlines()[-15:]
+    raise RouterOSError("کانتینر %s در زمان مقرر آماده نشد (وضعیت: %s).\n%s"
+                        % (svc["comment"], last, "\n".join(logs)))
 
 
 def ensure_container(r, svc, log=print):
