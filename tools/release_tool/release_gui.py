@@ -141,17 +141,41 @@ class Worker(QObject):
             self.failed.emit("خطای پیش‌بینی‌نشده: %s\n\n%s" % (e, traceback.format_exc(limit=3)))
 
 
+class Relay(QObject):
+    """Lives in the GUI thread, so the worker's signals reach the callbacks
+    there (queued). Connecting a signal straight to a plain function runs it
+    in the worker thread, and a message box opened there freezes the window."""
+
+    def __init__(self, parent, on_done, on_failed, on_log, on_progress):
+        super().__init__(parent)
+        self.f = (on_done, on_failed, on_log, on_progress)
+
+    def done(self, result):
+        self.f[0](result)
+
+    def failed(self, text):
+        self.f[1](text)
+
+    def log(self, text):
+        if self.f[2]:
+            self.f[2](text)
+
+    def progress(self, a, b):
+        if self.f[3]:
+            self.f[3](a, b)
+
+
 def run_in_thread(owner, fn, on_done, on_failed, on_log=None, on_progress=None):
     thread = QThread(owner)
     worker = Worker(fn)
     worker.moveToThread(thread)
+    relay = Relay(owner, on_done, on_failed, on_log, on_progress)
     thread.started.connect(worker.run)
-    worker.done.connect(on_done)
-    worker.failed.connect(on_failed)
-    if on_log:
-        worker.log.connect(on_log)
-    if on_progress:
-        worker.progress.connect(on_progress)
+    worker.done.connect(relay.done, Qt.QueuedConnection)
+    worker.failed.connect(relay.failed, Qt.QueuedConnection)
+    worker.log.connect(relay.log, Qt.QueuedConnection)
+    worker.progress.connect(relay.progress, Qt.QueuedConnection)
+    thread.finished.connect(relay.deleteLater)
     for sig in (worker.done, worker.failed):
         sig.connect(thread.quit)
     thread.finished.connect(worker.deleteLater)
@@ -1103,6 +1127,21 @@ def smoke():
     RouterDialog(w, {"id": "r1"})
     w.tabs.setCurrentIndex(1)
     app.processEvents()
+    # callbacks of background work must run in the GUI thread
+    seen = {}
+    run_in_thread(w, lambda log, progress: (log("x"), 42)[1],
+                  lambda r: seen.update(done=QThread.currentThread() is app.thread(), r=r),
+                  lambda e: seen.update(err=e),
+                  lambda line: seen.update(log=QThread.currentThread() is app.thread()))
+    import time
+    end = time.time() + 10
+    while "done" not in seen and "err" not in seen and time.time() < end:
+        app.processEvents()
+        time.sleep(0.01)
+    if seen.get("done") is not True or seen.get("r") != 42 or seen.get("log") is not True:
+        if sys.stdout:
+            print("smoke FAILED: callbacks not in GUI thread: %r" % seen)
+        return _quit(app, 3)
     w.close()
     if sys.stdout:            # a windowed .exe has no console
         print("smoke OK")
