@@ -123,9 +123,14 @@ def ensure_network(r, svc, log=print):
         r.run("/interface veth add name=%s address=%s/24 gateway=%s" % (svc["veth"], svc["ip"], GW))
     if count(r, "/interface bridge port", "interface=%s" % q(svc["veth"])) == 0:
         r.run("/interface bridge port add bridge=%s interface=%s" % (BRIDGE, svc["veth"]))
-    # containers reach the internet (the bot talks to Telegram)
-    if count(r, "/ip firewall nat", "chain=srcnat and action=masquerade") == 0:
+    # containers reach the internet (the bot talks to Telegram). A masquerade
+    # rule for the VPN pool does not cover them, so they get their own.
+    if count(r, "/ip firewall nat", "comment=pv-containers") == 0:
         r.run("/ip firewall nat add chain=srcnat src-address=%s action=masquerade comment=pv-containers" % NET)
+    if count(r, "/ip firewall filter", "chain=forward") and \
+            count(r, "/ip firewall filter", "comment=pv-containers-out") == 0:
+        r.run("/ip firewall filter add chain=forward src-address=%s action=accept "
+              "comment=pv-containers-out place-before=0" % NET)
 
 
 def ensure_rest(r, log=print):

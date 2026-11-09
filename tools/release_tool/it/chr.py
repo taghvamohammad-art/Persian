@@ -122,9 +122,14 @@ def rest():
     return urllib.request.urlopen(req, timeout=5).read().decode()
 while True:
     try:
-        line = "bot alive, router says " + rest()
+        urllib.request.urlopen("https://api.telegram.org", timeout=10).read()
+        net = "internet ok"
     except Exception as e:
-        line = "bot alive, rest error %s" % e
+        net = "internet error %s" % e
+    try:
+        line = "bot alive, " + net + ", router says " + rest()
+    except Exception as e:
+        line = "bot alive, " + net + ", rest error %s" % e
     with open(env["LOG_FILE"], "a") as f:
         f.write(time.strftime("%H:%M:%S ") + line + "\\n")
     time.sleep(10)
@@ -211,6 +216,7 @@ def build_main():
     st, lines = sv.bot_status(r)
     print("bot:", st, lines[-3:])
     assert st == "running" and lines and "router says" in lines[-1], "bot cannot reach REST"
+    assert "internet ok" in lines[-1], "bot container has no internet: %s" % lines[-1]
     r.close()
     import provision
     assert provision.health("https://127.0.0.1:%d/health" % VM["A"]["https"]), "umstatus health on A"
