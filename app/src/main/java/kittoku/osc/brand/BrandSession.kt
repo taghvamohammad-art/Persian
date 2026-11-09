@@ -105,6 +105,7 @@ internal object BrandSession {
         header.contains("ERR_AUTHENTICATION_FAILED") -> context.getString(R.string.brand_vpn_err_auth)
         header.startsWith("CERT") -> context.getString(R.string.brand_vpn_err_cert)
         header.contains("ERR_TIMEOUT") -> context.getString(R.string.brand_vpn_err_timeout)
+        header.contains("ERR_CONNECTION_LOST") -> context.getString(R.string.brand_vpn_err_lost)
         else -> context.getString(R.string.brand_vpn_err_generic, header)
     }
 

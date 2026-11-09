@@ -77,11 +77,18 @@ internal class Controller(internal val bridge: SharedBridge) {
                 }
                 return@CoroutineExceptionHandler
             }
+            // The server or the network closing the connection (a reset, the
+            // router dropping the session after a password change...) is a
+            // dropped line, not a bug: reconnect quietly when we can.
+            val dropped = throwable is java.io.IOException
+            val header = if (dropped) "OSC: ERR_CONNECTION_LOST" else "OSC: ERR_UNEXPECTED"
+            val willRetry = isReconnectionEnabled && isReconnectionAvailable
             kill(isReconnectionEnabled) {
-                val header = "OSC: ERR_UNEXPECTED"
                 bridge.service.logWriter?.report(header + "\n" + throwable.stackTraceToString())
                 kittoku.osc.brand.BrandSession.recordErrorDetail(bridge.prefs, header, throwable.stackTraceToString())
-                bridge.service.notifyError(header)
+                if (!(dropped && willRetry)) {
+                    bridge.service.notifyError(header)
+                }
             }
         }
     }
