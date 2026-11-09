@@ -57,7 +57,7 @@ def _decrypt(value):
     return raw.decode()
 
 
-ROUTER_FIELDS = ("id", "name", "role", "host", "port", "user", "password", "hostkey")
+ROUTER_FIELDS = ("id", "name", "role", "host", "port", "user", "password", "hostkey", "params")
 
 
 class Settings:
@@ -139,3 +139,15 @@ def save_status(status):
     with open(STATUS_FILE + ".tmp", "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=1)
     os.replace(STATUS_FILE + ".tmp", STATUS_FILE)
+
+
+def encrypt_blob(obj):
+    """A dict with secrets (a Linux server's keys) stored like passwords."""
+    return _encrypt(json.dumps(obj)) if obj else ""
+
+
+def decrypt_blob(value):
+    try:
+        return json.loads(_decrypt(value)) if value else None
+    except (ValueError, OSError):
+        return None

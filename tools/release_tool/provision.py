@@ -506,3 +506,13 @@ def add_server_to_config(cfg, name, host, port=443):
         servers.append({"name": name, "host": host, "port": port})
     out["servers"] = servers
     return out
+
+
+def add_linux_server(cfg, entry):
+    """A Linux server in the app config: its own list, so app versions that
+    only know SSTP (which reads "servers") are not confused by it."""
+    out = dict(cfg)
+    servers = [s for s in out.get("linux_servers", []) if s.get("host") != entry["host"]]
+    servers.append(entry)
+    out["linux_servers"] = servers
+    return out

@@ -6,6 +6,7 @@ config + APK to the router and updates the repository on GitHub.
 """
 
 import datetime as _dt
+import re
 import os
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import backup as bk          # noqa: E402
+import linux                # noqa: E402
 import provision as pv      # noqa: E402
 import publisher as pb       # noqa: E402
 import services as sv        # noqa: E402
@@ -413,7 +415,9 @@ class SettingsDialog(QDialog):
 
 # ------------------------------------------------------------------ routers
 
-ROLES = [("main", "اصلی (یوزر منیجر)"), ("secondary", "فرعی")]
+ROLES = [("main", "اصلی (یوزر منیجر)"), ("um2", "یوزر منیجر دوم (پشتیبان)"),
+         ("secondary", "فرعی (SSTP)"), ("linux", "سرور لینوکس (Xray و AmneziaWG)")]
+UM_ROLES = ("main", "um2")
 
 
 class RouterDialog(QDialog):
@@ -465,7 +469,8 @@ class RouterDialog(QDialog):
         krow.addWidget(forget)
         lay.addLayout(krow)
 
-        hint = QLabel("کاربر را روی روتر بسازید:\n/user add name=pvtool group=full password=…")
+        hint = QLabel("روتر: کاربر را بسازید:  /user add name=pvtool group=full password=…\n"
+                      "سرور لینوکس: کاربر root و رمز آن.")
         hint.setObjectName("Hint")
         hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(hint)
@@ -679,10 +684,15 @@ class ServersPage(QWidget):
         cfg = dict(r)
 
         def job(log, progress):
+            if cfg.get("role") == "linux":
+                with linux.LinuxHost(cfg["host"], cfg["port"], cfg["user"], cfg["password"],
+                                     cfg.get("hostkey", "")) as c:
+                    os_name = c.run(". /etc/os-release; echo $PRETTY_NAME").strip()
+                    return c.seen_hostkey, os_name, c.run("hostname").strip()
             with SSHRouter(cfg["host"], cfg["port"], cfg["user"], cfg["password"], cfg.get("hostkey", "")) as c:
                 res = c.run("/system resource print")
                 ident = c.run("/system identity print")
-                return c.seen_hostkey, bk.parse_version(res), ident.split(":", 1)[-1].strip()
+                return c.seen_hostkey, "RouterOS " + bk.parse_version(res), ident.split(":", 1)[-1].strip()
 
         def done(out):
             key, ver, ident = out
@@ -695,8 +705,8 @@ class ServersPage(QWidget):
                     return
                 r["hostkey"] = key
                 self.settings.save()
-            self.log.appendPlainText("✓ %s: RouterOS %s (%s)" % (r.get("name") or r["host"], ver, ident))
-            QMessageBox.information(self, "انجام شد", "اتصال برقرار است.\nRouterOS %s — %s" % (ver, ident))
+            self.log.appendPlainText("✓ %s: %s (%s)" % (r.get("name") or r["host"], ver, ident))
+            QMessageBox.information(self, "انجام شد", "اتصال برقرار است.\n%s — %s" % (ver, ident))
 
         self.log.clear()
         self.log.appendPlainText("اتصال به %s:%s…" % (r["host"], r["port"]))
@@ -781,6 +791,12 @@ class ServersPage(QWidget):
 
 
 # ------------------------------------------------------------------ shared bits of the router pages
+
+def linux_connector(r):
+    def connect():
+        return linux.LinuxHost(r["host"], r["port"], r["user"], r["password"], r.get("hostkey", "")).connect()
+    return connect
+
 
 def router_connector(r):
     def connect():
@@ -1121,9 +1137,11 @@ class NewServerPage(RouterPage):
         mrow = QHBoxLayout()
         self.mode_main = QRadioButton("سرور اصلی جدید (از روی بکاپ)")
         self.mode_sec = QRadioButton("سرور فرعی (احراز هویت از سرور اصلی)")
+        self.mode_linux = QRadioButton("سرور لینوکس (Xray و AmneziaWG)")
         self.mode_main.setChecked(True)
         mrow.addWidget(self.mode_main)
         mrow.addWidget(self.mode_sec)
+        mrow.addWidget(self.mode_linux)
         mrow.addStretch()
         l1.addLayout(mrow)
         hint = QLabel("روتر جدید را اول در تب «سرورها و بکاپ» اضافه کنید (CHR تازه، با کاربر pvtool).")
@@ -1176,6 +1194,7 @@ class NewServerPage(RouterPage):
         lay.addWidget(c3, 1)
 
         self.mode_main.toggled.connect(self.update_mode)
+        self.mode_linux.toggled.connect(self.update_mode)
         self.target.currentIndexChanged.connect(self.fill_ip)
         self.source.currentIndexChanged.connect(self.fill_backups)
         self.reload()
@@ -1189,7 +1208,10 @@ class NewServerPage(RouterPage):
 
     def update_mode(self):
         main = self.mode_main.isChecked()
+        lin = self.mode_linux.isChecked()
         self.chk_bot.setVisible(main)
+        self.backup.setVisible(not lin)
+        self.lbl_backup.setVisible(not lin)
         self.btn_cfg.setText("به‌روزرسانی سرورهای اپ و انتشار" if main else "اضافه کردن به سرورهای اپ و انتشار")
 
     def fill_ip(self):
@@ -1229,7 +1251,43 @@ class NewServerPage(RouterPage):
             raise pb.ReleaseError("بکاپی از سرور اصلی انتخاب نشده است (اول بکاپ بگیرید).")
         return os.path.join(bk.LocalStore(self.settings.backup_dir()).dir(src["id"]), name)
 
+    def go_linux(self, tgt, new_ip):
+        ums = [r for r in self.settings.routers if r.get("role") in UM_ROLES]
+        ums.sort(key=lambda r: r.get("role") != "main")
+        if not ums:
+            return self.fail("اول روتر یوزر منیجر (اصلی) را در تب «سرورها و بکاپ» تعریف کنید.")
+        if tgt.get("role") != "linux":
+            return self.fail("نقش این سرور در تب «سرورها و بکاپ» باید «سرور لینوکس» باشد.")
+        if QMessageBox.question(self, "تأیید",
+                "روی «%s» این‌ها نصب و تنظیم می‌شود:\nXray (Reality، XHTTP، Hysteria2، Shadowsocks)، AmneziaWG و "
+                "سرویس هماهنگی با یوزر منیجر.\n\nروی %s هم دسترسی این سرور (RADIUS و REST) ثبت می‌شود.\nادامه می‌دهید؟"
+                % (router_label(tgt), "، ".join(router_label(r) for r in ums))) != QMessageBox.Yes:
+            return
+        name = re.sub(r"[^A-Za-z0-9_-]", "-", tgt.get("name") or tgt["id"])
+        params = st.decrypt_blob(tgt.get("params"))
+
+        def job(log, progress):
+            return linux.setup_linux(linux_connector(tgt), [(router_connector(r), r["host"]) for r in ums],
+                                     name, new_ip, params=params, log=log)
+
+        def done(res):
+            p, entry = res
+            tgt["params"] = st.encrypt_blob(p)
+            self.settings.save()
+            self.result = {"linux": True, "entry": entry, "target": tgt["id"], "new_ip": new_ip, "main": False}
+            self.log.appendPlainText("\n✓ سرور لینوکس آماده است: %s" % "، ".join(x["type"] for x in entry["protocols"]))
+            self.btn_cfg.allowed = True
+            self.btn_cfg.setEnabled(True)
+            QMessageBox.information(self, "انجام شد",
+                "سرور لینوکس آماده است.\nحالا «%s» را بزنید تا اپ‌ها آن را بشناسند." % self.btn_cfg.text())
+        self.run(job, done)
+
     def go(self):
+        if self.mode_linux.isChecked():
+            tgt = self.chosen(self.target)
+            if not tgt:
+                return self.fail("سرور لینوکس را انتخاب کنید.")
+            return self.go_linux(tgt, self.ip.text().strip() or tgt["host"])
         tgt, src = self.chosen(self.target), self.chosen(self.source)
         if not tgt or not src:
             return self.fail("روتر جدید و سرور اصلی را انتخاب کنید.")
@@ -1313,7 +1371,10 @@ class NewServerPage(RouterPage):
         except (pb.ReleaseError, OSError, ValueError) as e:
             return self.fail(str(e))
         tgt = self.settings.router(res["target"])
-        if res["main"]:
+        if res.get("linux"):
+            new_cfg = pv.add_linux_server(cfg, res["entry"])
+            text = "سرور لینوکس %s به تنظیمات اپ اضافه می‌شود." % res["new_ip"]
+        elif res["main"]:
             new_cfg = pv.move_server_in_config(cfg, res["old_ip"], res["new_ip"])
             text = "آدرس سرور اصلی در تنظیمات اپ از %s به %s عوض می‌شود." % (res["old_ip"], res["new_ip"])
         else:

@@ -423,6 +423,8 @@ def backup_all(settings, log=print, progress=None, only=None, connect=None, gith
     for rc in settings.routers:
         if only and rc["id"] not in only:
             continue
+        if rc.get("role") == "linux":
+            continue           # rebuilt from its saved keys by the setup, nothing to back up
         gh = None
         if settings.token and settings.backup_repo:
             gh = (github_factory or GitHubClient)(settings.token, settings.backup_repo)
