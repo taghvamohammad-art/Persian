@@ -223,6 +223,7 @@ internal class SstpVpnService : VpnService() {
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        synchronized(statusLock) { statusClosed = false }
         startForeground(NOTIFICATION_DISCONNECT_ID, statusNotification(pendingIntent))
 
         // keep duration and traffic in the notification up to date
@@ -230,7 +231,12 @@ internal class SstpVpnService : VpnService() {
         jobStatusNotification = scope.launch {
             while (true) {
                 delay(2_000)
-                tryNotify(statusNotification(pendingIntent), NOTIFICATION_DISCONNECT_ID)
+                val notification = statusNotification(pendingIntent)
+                // never post after close(): a late post would leave a stale
+                // "connected" notification that cannot be swiped away
+                synchronized(statusLock) {
+                    if (!statusClosed) tryNotify(notification, NOTIFICATION_DISCONNECT_ID)
+                }
             }
         }
     }
@@ -255,6 +261,15 @@ internal class SstpVpnService : VpnService() {
     }
 
     private var jobStatusNotification: Job? = null
+    private val statusLock = Any()
+    @Volatile private var statusClosed = false
+
+    private fun removeStatusNotification() {
+        synchronized(statusLock) { statusClosed = true }
+        jobStatusNotification?.cancel()
+        jobStatusNotification = null
+        cancelNotification(NOTIFICATION_DISCONNECT_ID)
+    }
 
     /** Ongoing notification: state, connected time (system chronometer) and traffic. */
     private fun statusNotification(disconnect: PendingIntent): Notification {
@@ -308,9 +323,9 @@ internal class SstpVpnService : VpnService() {
 
     internal fun close() {
         // stop updating first, or a late update would bring the notification back
-        jobStatusNotification?.cancel()
-        jobStatusNotification = null
+        removeStatusNotification()
         stopForeground(true)
+        cancelNotification(NOTIFICATION_DISCONNECT_ID)
         stopSelf()
     }
 
@@ -319,7 +334,7 @@ internal class SstpVpnService : VpnService() {
         logWriter?.close()
         logWriter = null
 
-        jobStatusNotification?.cancel()
+        removeStatusNotification()
         controller?.kill(false, null)
         controller = null
 

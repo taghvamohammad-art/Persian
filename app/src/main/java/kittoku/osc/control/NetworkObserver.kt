@@ -89,6 +89,7 @@ internal class NetworkObserver(val bridge: SharedBridge) {
         }.also {
             setStringPrefValue(it, OscPrefKey.HOME_STATUS, bridge.prefs)
         }
+        kittoku.osc.brand.SessionTraffic.authFailures = 0
     }
 
     private fun wipeStatus() {

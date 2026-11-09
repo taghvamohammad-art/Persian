@@ -38,6 +38,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
 
 
+private const val MAX_AUTH_RETRIES = 8  // ~2 minutes at the 15 s interval
+
+
 internal class Controller(internal val bridge: SharedBridge) {
     private var observer: NetworkObserver? = null
     private var networkWatcher: UnderlyingNetworkWatcher? = null
@@ -262,11 +265,14 @@ internal class Controller(internal val bridge: SharedBridge) {
         // password or an expired / used-up account: retrying cannot help.
         // A rejection while reconnecting after a drop is usually the previous
         // session still open on the router (one session per user), which
-        // clears within a minute or two, so keep retrying then.
+        // clears within a minute or two, so keep retrying then — but not for
+        // long: a password changed by the reseller is rejected forever.
         val isFirstAttempt = getIntPrefValue(OscPrefKey.RECONNECTION_LIFE, bridge.prefs) >=
                 getIntPrefValue(OscPrefKey.RECONNECTION_COUNT, bridge.prefs)
-        val doRetry = isReconnectionEnabled &&
-                (received.result != Result.ERR_AUTHENTICATION_FAILED || !isFirstAttempt)
+        val authFailed = received.result == Result.ERR_AUTHENTICATION_FAILED
+        if (authFailed) kittoku.osc.brand.SessionTraffic.authFailures++
+        val doRetry = isReconnectionEnabled && (!authFailed ||
+                (!isFirstAttempt && kittoku.osc.brand.SessionTraffic.authFailures < MAX_AUTH_RETRIES))
 
         kill(doRetry) {
             sstpClient?.sendLastPacket(lastPacketType)
