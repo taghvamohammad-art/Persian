@@ -366,6 +366,33 @@ def download_bot_code(gh_token, repo=BOT_REPO, ref="main"):
         raise ReleaseError("دانلود کد بات ناموفق بود: %s" % e)
 
 
+def merged_sqlite(path):
+    """The database file with its -wal merged in (the bot uses WAL mode: when it
+    was stopped hard, recent data is only in umbot.sqlite3-wal)."""
+    import shutil
+    import sqlite3
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="umbot-db-")
+    dst = os.path.join(tmp, "umbot.sqlite3")
+    shutil.copy(path, dst)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(path + ext):
+            shutil.copy(path + ext, dst + ext)
+    con = sqlite3.connect(dst)
+    try:
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        resellers = con.execute("SELECT COUNT(*) FROM resellers").fetchone()[0]
+        con.execute("PRAGMA journal_mode=DELETE")
+    except sqlite3.DatabaseError as e:
+        raise ReleaseError("فایل دیتابیس بات خوانده نشد: %s" % e)
+    finally:
+        con.close()
+    with open(dst, "rb") as f:
+        data = f.read()
+    shutil.rmtree(tmp, ignore_errors=True)
+    return data, resellers
+
+
 def bot_values(r):
     """Current settings of the bot on the router (without the managed keys)."""
     env = parse_env(file_text(r, "umbot/.env") or "")
@@ -401,6 +428,9 @@ def install_bot(r, code, values=None, db=None, overwrite_db=False, log=print):
         if exists and not overwrite_db:
             raise ReleaseError("روی روتر از قبل دیتابیس بات هست؛ برای جایگزینی تأیید لازم است.")
         log("ارسال دیتابیس بات…")
+        # the old database's write-ahead log would be replayed onto the new file
+        r.remove("umbot/data/umbot.sqlite3-wal")
+        r.remove("umbot/data/umbot.sqlite3-shm")
         r.put("umbot/data/umbot.sqlite3", db)
     log("کانتینر بات…")
     ensure_container(r, UMBOT, log)

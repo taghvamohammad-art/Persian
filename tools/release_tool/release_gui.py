@@ -1069,13 +1069,19 @@ class ServicesPage(RouterPage):
             return
         db = None
         db_path, _ = QFileDialog.getOpenFileName(
-            self, "دیتابیس بات (C:\\umbot\\data\\umbot.sqlite3) — برای بات تازه انصراف بزنید", "",
-            "SQLite (*.sqlite3 *.db);;*")
+            self, "دیتابیس بات umbot.sqlite3 (کنار آن umbot.sqlite3-wal و -shm هم باشد) — برای بات تازه انصراف بزنید",
+            "", "SQLite (*.sqlite3 *.db);;*")
         if db_path:
             with open(db_path, "rb") as f:
-                db = f.read()
-            if not db.startswith(b"SQLite format 3"):
-                return self.fail("این فایل دیتابیس SQLite نیست.")
+                if not f.read(16).startswith(b"SQLite format 3"):
+                    return self.fail("این فایل دیتابیس SQLite نیست.")
+            try:
+                db, resellers = sv.merged_sqlite(db_path)
+            except pb.ReleaseError as e:
+                return self.fail(str(e))
+            if QMessageBox.question(self, "دیتابیس بات",
+                    "در این دیتابیس %s ریسلر هست. همین منتقل شود؟" % fa(resellers)) != QMessageBox.Yes:
+                return
         if QMessageBox.question(
                 self, "تأیید",
                 "قبل از ادامه، بات روی سرور ویندوز را متوقف کنید\n"
