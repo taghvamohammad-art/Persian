@@ -136,7 +136,7 @@ def x25519(h):
     """(private, public) Reality keys; xray changed its output format over time."""
     out = h.run("/usr/local/bin/xray x25519")
     priv = re.search(r"Private\s*key:\s*(\S+)|PrivateKey:\s*(\S+)", out)
-    pub = re.search(r"Public\s*key:\s*(\S+)|Password:\s*(\S+)", out)
+    pub = re.search(r"Public\s*key:\s*(\S+)|Password(?:\s*\(PublicKey\))?:\s*(\S+)", out)
     if not priv or not pub:
         raise LinuxError("خروجی xray x25519 شناخته نشد:\n" + out)
     return (priv.group(1) or priv.group(2)), (pub.group(1) or pub.group(2))
