@@ -190,17 +190,45 @@ def xray_template(p):
     }
 
 
+AMNEZIAWG_GO = r"""set -e
+cd /tmp
+ver=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
+arch=$(dpkg --print-architecture)
+curl -fsSL -o go.tgz https://go.dev/dl/$ver.linux-$arch.tar.gz
+rm -rf /usr/local/go && tar -C /usr/local -xzf go.tgz
+rm -rf amneziawg-go && git clone -q --depth 1 https://github.com/amnezia-vpn/amneziawg-go
+cd amneziawg-go && PATH=/usr/local/go/bin:$PATH make >/dev/null
+install -m 755 amneziawg-go /usr/bin/amneziawg-go
+mkdir -p /etc/systemd/system/awg-quick@.service.d
+printf '[Service]\nEnvironment=WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go\nEnvironment=AWG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go\n' > /etc/systemd/system/awg-quick@.service.d/userspace.conf
+systemctl daemon-reload
+"""
+
+
 def install_awg(h, p, log):
-    """AmneziaWG (kernel module from the Amnezia PPA). Returns False if it
-    could not be installed (the other protocols still work)."""
+    """AmneziaWG: the kernel module from the Amnezia PPA, or (when the kernel
+    module cannot be built, e.g. no headers for this kernel) the userspace
+    amneziawg-go. Returns False if neither works; the other protocols still do."""
     log("نصب AmneziaWG…")
     try:
         h.run("export DEBIAN_FRONTEND=noninteractive; add-apt-repository -y ppa:amnezia/ppa && "
-              "apt-get update -q && apt-get install -y -q linux-headers-$(uname -r) amneziawg amneziawg-tools",
-              timeout=1800)
+              "apt-get update -q && apt-get install -y -q amneziawg-tools git", timeout=1800)
     except LinuxError as e:
-        log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-25:]))
+        log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-15:]))
         return False
+    kernel = h.run("export DEBIAN_FRONTEND=noninteractive; (apt-get install -y -q linux-headers-$(uname -r) "
+                   "amneziawg-dkms >/dev/null 2>&1 && modprobe amneziawg && echo KERNEL_OK) || true",
+                   timeout=1800)
+    if "KERNEL_OK" in kernel:
+        log("  ماژول کرنل AmneziaWG نصب شد")
+    else:
+        log("  ماژول کرنل ساخته نشد؛ نسخه‌ی userspace (amneziawg-go) ساخته می‌شود…")
+        h.run("export DEBIAN_FRONTEND=noninteractive; apt-get purge -y -q amneziawg-dkms amneziawg >/dev/null 2>&1 || true")
+        try:
+            h.run(AMNEZIAWG_GO, timeout=1800)
+        except LinuxError as e:
+            log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-15:]))
+            return False
     wan = h.run("ip route show default | awk '{print $5; exit}'").strip() or "eth0"
     conf = """[Interface]
 PrivateKey = %(priv)s

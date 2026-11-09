@@ -185,7 +185,8 @@ def main():
     res = run_clients(entry, USER2, PASS2, only=["vision"])
     if res.get("vision") != "204":
         problems.append("user from UM2 not let in after UM1 died")
-    time.sleep(25)
+    time.sleep(45)
+    print(agent_log(30))
     if USER2 not in um_usage("B", USER2):
         problems.append("no accounting on UM2 after failover")
 
@@ -224,7 +225,8 @@ ip link set vc netns c1
 ip addr add 10.200.0.1/24 dev vh; ip link set vh up
 ip netns exec c1 ip addr add 10.200.0.2/24 dev vc
 ip netns exec c1 ip link set vc up; ip netns exec c1 ip link set lo up
-ip netns exec c1 ip link add awgc type amneziawg
+ip netns exec c1 ip link add awgc type amneziawg 2>/dev/null || ip netns exec c1 amneziawg-go awgc
+sleep 1
 ip netns exec c1 awg setconf awgc /tmp/awgc.conf
 ip netns exec c1 ip addr add %s/32 dev awgc
 ip netns exec c1 ip link set awgc up

@@ -43,6 +43,10 @@ class FakeRadius:
             auth, a = data[4:20], self.attrs(data[20:length])
             user = a[1][0].decode()
             if code == 1:
+                import hmac
+                ma = a[80][0]
+                zeroed = data[:length].replace(ma, b"\0" * 16)
+                assert hmac.new(self.secret, zeroed, hashlib.md5).digest() == ma, "bad Message-Authenticator"
                 enc, plain, last = a[2][0], b"", auth
                 for k in range(0, len(enc), 16):
                     key = hashlib.md5(self.secret + last).digest()

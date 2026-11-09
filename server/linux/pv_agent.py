@@ -16,6 +16,7 @@ Standard library only (Ubuntu's python3). Config: /etc/pv-agent/config.json.
 import base64
 import copy
 import hashlib
+import hmac
 import http.client
 import json
 import logging
@@ -77,10 +78,17 @@ class Radius:
     def __init__(self, servers, nas_ip, nas_id, timeout=3.0):
         self.servers = servers            # [{"host", "secret", "auth_port", "acct_port"}]
         self.nas_ip, self.nas_id, self.timeout = nas_ip, nas_id, timeout
+        self.down = {}
+
+    def _order(self):
+        """Servers that answered lately first; one that timed out waits 60 s."""
+        now = time.time()
+        fresh = [s for s in self.servers if self.down.get(s["host"] + str(s.get("acct_port")), 0) < now]
+        return fresh or list(self.servers)
 
     def _exchange(self, code, attrs, acct):
         last = None
-        for srv in self.servers:
+        for srv in self._order():
             secret = srv["secret"].encode()
             ident = secrets.randbelow(256)
             if code == ACCOUNTING_REQUEST:
@@ -89,8 +97,13 @@ class Radius:
                 auth = hashlib.md5(struct.pack("!BBH", code, ident, length) + b"\0" * 16 + body + secret).digest()
             else:
                 auth = os.urandom(16)
-                body = b"".join(attrs(secret, auth))
+                # Message-Authenticator (RFC 3579): RouterOS 7.16+ drops
+                # Access-Requests without it (BlastRADIUS protection)
+                body = b"".join(attrs(secret, auth)) + struct.pack("!BB", 80, 18) + b"\0" * 16
                 length = 20 + len(body)
+                draft = struct.pack("!BBH", code, ident, length) + auth + body
+                mac = hmac.new(secret, draft, hashlib.md5).digest()
+                body = body[:-16] + mac
             packet = struct.pack("!BBH", code, ident, length) + auth + body
             port = srv.get("acct_port", 1813) if acct else srv.get("auth_port", 1812)
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -109,6 +122,7 @@ class Radius:
                         log.warning("radius %s: bad response authenticator", srv["host"])
                         continue
                     return data[0], srv["host"]
+                self.down[srv["host"] + str(srv.get("acct_port"))] = time.time() + 60
             except OSError as e:
                 last = e
             finally:
