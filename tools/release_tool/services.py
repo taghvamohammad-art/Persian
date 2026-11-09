@@ -140,18 +140,47 @@ def ensure_api_user(r, name, ip, policy, password):
               % (q(name), q(name), ip, q(password)))
 
 
+STATES = ("running", "stopped", "extracting", "downloading", "starting", "stopping", "error")
+
+
+def container_props(r, svc):
+    """All properties of the container as a dict ({} when there is none)."""
+    out = r.run(':local i [/container find where comment=%s]; :if ([:len $i] = 0) do={:put "<none>"} '
+                'else={:put [/container get ($i->0)]}' % q(svc["comment"])).strip()
+    if out == "<none>":
+        return {}
+    props = {}
+    for part in out.split(";"):
+        k, _, v = part.partition("=")
+        props[k.strip()] = v.strip()
+    return props
+
+
+def parse_state(props):
+    if not props:
+        return "none"
+    if props.get("status"):
+        return props["status"].lower()
+    for st in STATES:          # newer RouterOS: flags as boolean properties
+        if props.get(st) == "true":
+            return st
+    return "unknown"
+
+
 def container_status(r, svc):
-    s = get(r, "/container", "comment=%s" % q(svc["comment"]), "status")
-    return (s or "none").strip().lower()
+    return parse_state(container_props(r, svc))
 
 
 def wait_status(r, svc, want, timeout=900, log=print):
     end = time.time() + timeout
     last = None
     while time.time() < end:
-        s = container_status(r, svc)
+        props = container_props(r, svc)
+        s = parse_state(props)
         if s != last:
             log("  کانتینر %s: %s" % (svc["comment"], s))
+            if s == "unknown":
+                log("  " + ";".join("%s=%s" % kv for kv in props.items() if kv[0] != "cmd")[:400])
             last = s
         if s in want:
             return s

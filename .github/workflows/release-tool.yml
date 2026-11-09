@@ -33,7 +33,7 @@ jobs:
 
       - name: Unit tests
         working-directory: tools/release_tool
-        run: python -m unittest test_backup -v
+        run: python -m unittest test_backup test_provision -v
 
       - name: Download RouterOS ${{ env.ROS_VERSION }}
         run: |
