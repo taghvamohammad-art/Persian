@@ -164,6 +164,9 @@ def parse_state(props):
     for st in STATES:          # newer RouterOS: flags as boolean properties
         if props.get(st) == "true":
             return st
+    for k, v in props.items():  # e.g. "downloading/extracting=true"
+        if v == "true" and ("extract" in k or "download" in k):
+            return "extracting"
     return "unknown"
 
 
