@@ -97,7 +97,7 @@ internal class LinuxTunnel(
         }.awaitAll().flatten().sortedBy { it.ms }
     }
 
-    private fun connect(c: Choice): Boolean {
+    private suspend fun connect(c: Choice): Boolean {
         val awg = c.kind == "amneziawg"
         val builder = service.Builder()
         try {
@@ -141,15 +141,14 @@ internal class LinuxTunnel(
         } catch (e: Exception) {
             Log.w(TAG, "start ${c.kind}: $e")
             service.logWriter?.report("start ${c.name}/${c.kind} failed: $e")
-            runCatching { android.os.ParcelFileDescriptor.adoptFd(fd.toInt()).close() }
-            return false
+            return false        // pvcore has closed the descriptor
         }
         current = "${c.name}/${c.kind}"
         onConnected(c)
         return true
     }
 
-    private fun onConnected(c: Choice) {
+    private suspend fun onConnected(c: Choice) {
         SessionTraffic.authFailures = 0
         SessionTraffic.protocol = PROTOCOL_LABELS[c.kind] ?: c.kind
         val summary = "[Protocol]\n${SessionTraffic.protocol}\n\n[Server]\n${c.name}\n\n[Latency]\n${c.ms} ms"

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
@@ -91,21 +92,26 @@ func Running() string {
 // StartXray runs one Xray protocol of a server behind the VPN's TUN (fd).
 // The app's own sockets bypass the VPN (its package is excluded), so the
 // engine's connections to the server go out directly.
+// The descriptor belongs to the engine: it is closed on failure too.
 func StartXray(serverJSON, kind, user, pass string, tunFd, mtu int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	stopLocked()
+	fail := func(err error) error {
+		syscall.Close(tunFd)
+		return err
+	}
 	port, err := freePort()
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	cfg, err := XrayConfig(serverJSON, kind, user, pass, port)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	inst, err := startXrayInstance(cfg)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	xrayInst = inst
 	engine.Insert(&engine.Key{
@@ -128,10 +134,12 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 	stopLocked()
 	uapi, err := AwgUAPI(serverJSON, user, pass)
 	if err != nil {
+		syscall.Close(tunFd)
 		return err
 	}
 	tdev, _, err := tun.CreateUnmonitoredTUNFromFD(tunFd)
 	if err != nil {
+		syscall.Close(tunFd)
 		return fmt.Errorf("awg tun: %w", err)
 	}
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
