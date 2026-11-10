@@ -200,7 +200,8 @@ arch=$(dpkg --print-architecture)
 curl -fsSL -o go.tgz https://go.dev/dl/$ver.linux-$arch.tar.gz
 rm -rf /usr/local/go && tar -C /usr/local -xzf go.tgz
 rm -rf amneziawg-go && git clone -q --depth 1 https://github.com/amnezia-vpn/amneziawg-go
-cd amneziawg-go && PATH=/usr/local/go/bin:$PATH make >/dev/null
+# no C toolchain needed (some servers lack the libc headers)
+cd amneziawg-go && CGO_ENABLED=0 PATH=/usr/local/go/bin:$PATH make >/dev/null
 install -m 755 amneziawg-go /usr/bin/amneziawg-go
 mkdir -p /etc/systemd/system/awg-quick@.service.d
 printf '[Service]\nEnvironment=WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go\nEnvironment=AWG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go\n' > /etc/systemd/system/awg-quick@.service.d/userspace.conf
