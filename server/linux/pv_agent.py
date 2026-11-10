@@ -37,6 +37,12 @@ import pvcreds  # noqa: E402
 log = logging.getLogger("pv-agent")
 
 CONFIG = "/etc/pv-agent/config.json"
+# 2026/11/09 20:11:23.649858 from tcp:1.2.3.4:59426 accepted tcp:x:443 [vless-vision >> direct] email: 25g00001
+import re as _re  # noqa: E402
+ACCESS_RE = _re.compile(r"\[([\w.-]+) (?:>>|->) [^\]]*\] email: (\S+)")
+ACCESS_LOG = "/var/log/xray/access.log"
+STATUS_FILE = "/var/lib/pv-agent/status.json"
+ONLINE_WINDOW = 180      # a user seen in the last 3 minutes counts as connected
 IDLE_STOP = 300          # seconds without traffic before the accounting session is closed
 BLOCK_RETRY = 600        # a user User Manager rejected is asked again after this long
 XRAY_RESTART_GAP = 120   # at most one fallback restart of Xray per this many seconds
@@ -393,6 +399,15 @@ class Awg:
             self._run("set", self.iface, "peer", pub, "allowed-ips", want[pub][1] + "/32")
         return want
 
+    def handshakes(self):
+        """{public key: unix time of the latest handshake} (0 = never)."""
+        out = {}
+        for line in self._run("show", self.iface, "latest-handshakes").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                out[parts[0]] = int(parts[1])
+        return out
+
     def transfer(self):
         """{public key: (received, sent)} as counted by the interface (cumulative)."""
         out = {}
@@ -458,6 +473,7 @@ class Agent:
                 self.awg_peers = self.awg.apply(new)
             except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
                 log.warning("awg: %s", e)
+        self.source = source
         if new.keys() != self.users.keys():
             log.info("%d users allowed (from %s)", len(new), source)
         self.users = new
@@ -532,12 +548,61 @@ class Agent:
             except OSError as e:
                 log.warning("radius accounting %s: %s (kept for the next round)", s["name"], e)
 
+    # ---------------------------------------------------------------- who is connected
+
+    def read_access_log(self, now):
+        """Who used which inbound, from Xray's access log; the log is emptied
+        after reading so it never grows."""
+        path = self.cfg.get("access_log", ACCESS_LOG)
+        seen = self.state.setdefault("seen", {})        # "user|protocol" -> last time
+        try:
+            with open(path, "r+", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+                f.seek(0)
+                f.truncate()
+        except OSError:
+            text = ""
+        for m in ACCESS_RE.finditer(text):
+            seen["%s|%s" % (m.group(2).lower(), m.group(1))] = now
+        if self.awg:
+            try:
+                peers = getattr(self, "awg_peers", {})
+                for pub, t in self.awg.handshakes().items():
+                    if pub in peers and t and now - t < ONLINE_WINDOW:
+                        seen["%s|amneziawg" % peers[pub][0].lower()] = t
+            except (RuntimeError, OSError, subprocess.TimeoutExpired):
+                pass
+        for key in [k for k, t in seen.items() if now - t > ONLINE_WINDOW]:
+            del seen[key]
+        return seen
+
+    def write_status(self, now):
+        seen = self.read_access_log(now)
+        online = sorted(({"user": k.split("|")[0], "protocol": k.split("|")[1], "last": int(t)}
+                         for k, t in seen.items()), key=lambda x: (x["protocol"], x["user"]))
+        by_proto = {}
+        for o in online:
+            by_proto[o["protocol"]] = by_proto.get(o["protocol"], 0) + 1
+        status = {"time": int(now), "allowed": len(self.users), "online": online, "by_protocol": by_proto,
+                  "users_online": len({o["user"] for o in online}), "um_source": getattr(self, "source", ""),
+                  "blocked": len(self.state.get("blocked", {}))}
+        path = self.cfg.get("status_file", STATUS_FILE)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w") as f:
+                json.dump(status, f)
+            os.replace(path + ".tmp", path)
+        except OSError as e:
+            log.warning("status file: %s", e)
+        return status
+
     # ---------------------------------------------------------------- main
 
     def round(self):
         self.sync_users()
         traffic = self.collect()
         self.account(traffic)
+        self.write_status(time.time())
         removed = [n for n in list(self.users) if n.lower() in self.state.get("blocked", {})]
         if removed:
             self.sync_users()

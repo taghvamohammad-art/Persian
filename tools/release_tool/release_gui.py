@@ -14,18 +14,20 @@ import time
 import tempfile
 import traceback
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QHeaderView, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTableWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import backup as bk          # noqa: E402
 import linux                # noqa: E402
+import monitor              # noqa: E402
 import provision as pv      # noqa: E402
 import publisher as pb       # noqa: E402
 import services as sv        # noqa: E402
@@ -101,6 +103,13 @@ QProgressBar {
 QProgressBar::chunk { background: #2EE6C5; border-radius: 4px; }
 #Log { background: rgba(0,0,0,0.18); border-radius: 12px; font-size: 10pt; }
 QDialog { background: #12324A; }
+QTableWidget {
+    background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.16); border-radius: 12px;
+    gridline-color: rgba(255,255,255,0.08); selection-background-color: rgba(46,230,197,0.25);
+}
+QHeaderView::section {
+    background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); border: none; padding: 6px;
+}
 QTabWidget::pane { border: none; }
 QTabBar::tab {
     background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.75);
@@ -1409,6 +1418,134 @@ class NewServerPage(RouterPage):
         self.run(job, done, clear=False)
 
 
+# ------------------------------------------------------------------ monitoring
+
+ROLE_SHORT = {"main": "میکروتیک اصلی", "um2": "یوزر منیجر دوم", "secondary": "میکروتیک فرعی", "linux": "لینوکس"}
+STATE_FA = {"running": "✓", "active": "✓", "stopped": "✗ متوقف", "failed": "✗ خطا", "inactive": "✗"}
+
+
+def item(text, align=Qt.AlignCenter):
+    it = QTableWidgetItem(str(text))
+    it.setTextAlignment(align)
+    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+    return it
+
+
+class MonitorPage(RouterPage):
+    COLUMNS = ["سرور", "نوع", "وضعیت", "CPU", "حافظه", "روشن از", "آنلاین", "به تفکیک پروتکل", "سرویس‌ها"]
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.status = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+
+        top = QHBoxLayout()
+        self.btn_refresh = self.button("🔄 به‌روزرسانی", self.refresh, primary=True)
+        top.addWidget(self.btn_refresh)
+        self.auto = QCheckBox("خودکار هر ۶۰ ثانیه")
+        self.auto.toggled.connect(self.toggle_auto)
+        top.addWidget(self.auto)
+        top.addStretch()
+        self.total = QLabel("")
+        self.total.setObjectName("Hint")
+        top.addWidget(self.total)
+        lay.addLayout(top)
+
+        c1, l1 = card("سرورها")
+        self.table = QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        self.table.itemSelectionChanged.connect(self.show_users)
+        l1.addWidget(self.table)
+        lay.addWidget(c1, 1)
+
+        c2, l2 = card("کاربران آنلاین سرور انتخاب‌شده")
+        self.users = QTableWidget(0, 4)
+        self.users.setHorizontalHeaderLabels(["کاربر", "پروتکل", "آدرس", "مدت / آخرین فعالیت"])
+        self.users.verticalHeader().setVisible(False)
+        self.users.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        l2.addWidget(self.users)
+        l2.addWidget(self.bar)
+        lay.addWidget(c2, 1)
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(60_000)
+        self.timer.timeout.connect(self.tick)
+
+    def toggle_auto(self, on):
+        if on:
+            self.timer.start()
+            self.refresh()
+        else:
+            self.timer.stop()
+
+    def tick(self):
+        if not self.busy and self.main.tabs.currentWidget() is self:
+            self.refresh()
+
+    def refresh(self):
+        routers = list(self.settings.routers)
+        if not routers:
+            return self.fail("اول در تب «سرورها و بکاپ» سرورها را تعریف کنید.")
+
+        def connector_for(r):
+            return linux_connector(r) if r.get("role") == "linux" else router_connector(r)
+
+        def job(log, progress):
+            return monitor.poll(routers, connector_for)
+
+        def done(res):
+            self.status = res
+            self.fill()
+        self.set_busy(True)
+        run_in_thread(self, job, lambda r: (self.set_busy(False), done(r)), self.fail, None, None)
+
+    def fill(self):
+        routers = self.settings.routers
+        sel = self.table.currentRow()
+        self.table.setRowCount(len(routers))
+        total = 0
+        for i, r in enumerate(routers):
+            st = self.status.get(r["id"], {})
+            ok = st.get("ok")
+            cells = [r.get("name") or r["host"], ROLE_SHORT.get(r.get("role"), r.get("role", "")),
+                     "🟢 روشن" if ok else ("🔴 در دسترس نیست" if st else "—")]
+            if ok:
+                total += st.get("users_online", 0)
+                by = "  ".join("%s: %s" % (monitor.proto_name(k), fa(v))
+                               for k, v in sorted(st.get("by_protocol", {}).items(), key=lambda kv: -kv[1]))
+                svc = "  ".join("%s %s" % (k, STATE_FA.get(v, v)) for k, v in st.get("services", {}).items())
+                cells += ["%s٪" % fa(st.get("cpu", 0)), ("%s٪" % fa(st["mem"])) if st.get("mem") is not None else "—",
+                          st.get("uptime", ""), fa(st.get("users_online", 0)), by or "—", svc or "—"]
+            else:
+                cells += ["", "", "", "", st.get("error", ""), ""]
+            for c, text in enumerate(cells):
+                self.table.setItem(i, c, item(text, Qt.AlignCenter if c not in (7, 8) else Qt.AlignRight | Qt.AlignVCenter))
+        if 0 <= sel < len(routers):
+            self.table.selectRow(sel)
+        self.total.setText("مجموع کاربران آنلاین: %s   —   به‌روزرسانی: %s"
+                           % (fa(total), fa(_dt.datetime.now().strftime("%H:%M:%S"))))
+        self.show_users()
+
+    def show_users(self):
+        i = self.table.currentRow()
+        routers = self.settings.routers
+        rows = []
+        if 0 <= i < len(routers):
+            rows = self.status.get(routers[i]["id"], {}).get("online", [])
+        self.users.setRowCount(len(rows))
+        for k, o in enumerate(rows):
+            for c, text in enumerate([o["user"], monitor.proto_name(o["protocol"]), o.get("address", ""),
+                                      o.get("since", "")]):
+                self.users.setItem(k, c, item(text))
+
+
 # ------------------------------------------------------------------ main window
 
 class MainWindow(QMainWindow):
@@ -1471,6 +1608,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.services, "سرویس‌ها و بات")
         self.newserver = NewServerPage(self)
         self.tabs.addTab(self.newserver, "سرور جدید")
+        self.monitor = MonitorPage(self)
+        self.tabs.addTab(self.monitor, "مانیتورینگ")
         self.tabs.currentChanged.connect(lambda _: (self.services.reload(), self.newserver.reload()))
 
         # 1. build

@@ -200,6 +200,25 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(srv.accounting[-1][1], pa.STOP)
         self.assertEqual(agent.state["sessions"], {})
 
+    def test_status_file_counts_online_users_per_protocol(self):
+        agent, srv = self.make({})
+        log_path = os.path.join(os.path.dirname(agent.state_path), "access.log")
+        agent.cfg["access_log"] = log_path
+        agent.cfg["status_file"] = os.path.join(os.path.dirname(agent.state_path), "status.json")
+        with open(log_path, "w") as f:
+            f.write("2026/11/09 20:11:23.6 from tcp:1.2.3.4:5 accepted tcp:a:443 [vless-vision >> direct] email: 25G00001\n"
+                    "2026/11/09 20:11:24.6 from tcp:1.2.3.4:6 accepted tcp:b:443 [hy2 -> direct] email: 25g00002\n"
+                    "2026/11/09 20:11:25.6 from tcp:1.2.3.4:7 accepted tcp:c:443 [vless-vision >> direct] email: 25g00003\n"
+                    "2026/11/09 20:11:26.6 from tcp:1.2.3.4:8 accepted tcp:d:443 [vless-vision >> direct] email: 25g00001\n")
+        st = agent.write_status(1000)
+        self.assertEqual(st["by_protocol"], {"vless-vision": 2, "hy2": 1})
+        self.assertEqual(st["users_online"], 3)
+        self.assertEqual(os.path.getsize(log_path), 0)                    # emptied after reading
+        with open(agent.cfg["status_file"]) as f:
+            self.assertEqual(json.load(f)["by_protocol"]["hy2"], 1)
+        st = agent.write_status(1000 + pa.ONLINE_WINDOW + 1)              # nobody seen since
+        self.assertEqual(st["users_online"], 0)
+
     def test_rejected_user_is_removed(self):
         agent, srv = self.make({})                         # User Manager says no (e.g. volume used up)
         router_users = {"25g00001": "abc123"}

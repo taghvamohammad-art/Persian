@@ -156,7 +156,7 @@ def xray_template(p):
     reality = {"show": False, "target": "%s:443" % p["sni"], "serverNames": [p["sni"]],
                "privateKey": p["reality_private"], "shortIds": [p["short_id"]]}
     return {
-        "log": {"loglevel": "warning"},
+        "log": {"loglevel": "warning", "access": "/var/log/xray/access.log"},
         "api": {"tag": "api", "listen": "127.0.0.1:10085",
                 "services": ["HandlerService", "StatsService"]},
         "stats": {},
@@ -368,7 +368,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
         p["xray_version"] = install_xray(h, log)
         if not p.get("reality_private"):
             p["reality_private"], p["reality_public"] = x25519(h)
-        h.run("mkdir -p %s" % XRAY_CONF_DIR)
+        h.run("mkdir -p %s /var/log/xray" % XRAY_CONF_DIR)
         p["hy2_pin"] = make_cert(h)
         h.write(XRAY_CONF_DIR + "/template.json", json.dumps(xray_template(p), indent=1))
         h.write(XRAY_CONF_DIR + "/config.json", json.dumps(xray_template(p), indent=1))

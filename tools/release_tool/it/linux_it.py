@@ -151,6 +151,18 @@ def main():
     res = run_clients(entry, USER, PASS)
     problems += ["%s with right password: %s" % kv for kv in res.items() if kv[1] != "204"]
 
+    step("monitoring sees who is connected with which protocol")
+    import monitor
+    time.sleep(15)
+    with connect_linux() as h:
+        st = monitor.linux_status(h)
+    print(json.dumps(st, ensure_ascii=False, indent=1)[:2000])
+    for tag in ("vless-vision", "vless-xhttp", "hy2", "ss"):
+        if st["by_protocol"].get(tag, 0) < 1:
+            problems.append("monitor: no %s user online" % tag)
+    if st["services"].get("xray") != "active" or st["services"].get("pv-agent") != "active":
+        problems.append("monitor: services %s" % st["services"])
+
     step("clients with a wrong password must fail")
     res = run_clients(entry, USER, "nope", only=["vision", "ss"])
     problems += ["%s let a wrong password in" % k for k, v in res.items() if v == "204"]

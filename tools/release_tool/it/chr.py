@@ -217,6 +217,11 @@ def build_main():
     print("bot:", st, lines[-3:])
     assert st == "running" and lines and "router says" in lines[-1], "bot cannot reach REST"
     assert "internet ok" in lines[-1], "bot container has no internet: %s" % lines[-1]
+    import monitor
+    st = monitor.router_status(r)
+    print("monitor A:", st)
+    assert st["ok"] and isinstance(st["cpu"], int) and st["mem"] is not None, st
+    assert st["services"] == {"umstatus": "running", "umbot": "running"}, st["services"]
     r.close()
     import provision
     assert provision.health("https://127.0.0.1:%d/health" % VM["A"]["https"]), "umstatus health on A"
