@@ -342,6 +342,23 @@ def register_on_router(r, linux_ip, name, p, log):
     return port, fp
 
 
+def public_address(r, host):
+    """Address the Linux server uses for this router: the one the tool uses,
+    unless that is a private one (reached over a tunnel or LAN)."""
+    import ipaddress
+    try:
+        if not ipaddress.ip_address(host).is_private:
+            return host
+    except ValueError:
+        return host                    # a domain name
+    import provision as pv
+    found = pv.first_public_ip(r.run("/ip address print without-paging"))
+    if not found:
+        raise LinuxError("آدرس %s خصوصی است و روی این روتر آدرس عمومی پیدا نشد؛ "
+                         "سرور لینوکس از اینترنت به آن نمی‌رسد." % host)
+    return found
+
+
 # ---------------------------------------------------------------- whole server
 
 def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=print,
@@ -354,9 +371,19 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
     routers_cfg, radius_servers = [], []
     for i, (connect, host) in enumerate(um_routers):
         log("ثبت سرور لینوکس روی یوزر منیجر %d (%s)…" % (i + 1, host))
-        with connect() as r:
+        r = connect()
+        try:
+            if not sv.has_package(r, "user-manager"):
+                import provision as pv
+                log("  پکیج user-manager روی این روتر نیست؛ نصب می‌شود (روتر یک بار ری‌استارت می‌شود)…")
+                r = pv.install_packages(r, connect, ["user-manager"], log)
+            if r.run(":put [/user-manager get enabled]").strip() not in ("true", "yes"):
+                r.run("/user-manager set enabled=yes")
             port, fp = register_on_router(r, seen, name, p, log)
-        reach = (router_addresses or {}).get(host, {})
+            public = public_address(r, host)
+        finally:
+            r.close()
+        reach = (router_addresses or {}).get(host, {"host": public})
         routers_cfg.append({"name": "um%d" % (i + 1), "url": "https://%s:%d" % (reach.get("host", host),
                                                                                 reach.get("rest_port", port)),
                             "user": "pvagent", "password": p["agent_password"], "pin": fp})
