@@ -163,6 +163,28 @@ def main():
     if st["services"].get("xray") != "active" or st["services"].get("pv-agent") != "active":
         problems.append("monitor: services %s" % st["services"])
 
+    step("the app's engine (pvcore) probes every protocol")
+    path = tempfile.mktemp(suffix=".json")
+    probe_entry = dict(entry, host="127.0.0.1")
+    with open(path, "w") as f:
+        json.dump(probe_entry, f)
+    out = sh("/tmp/pvprobe -entry %s -user %s -pass %s -timeout 10000" % (path, USER, PASS), check=False)
+    print(out)
+    try:
+        res = json.loads(out.splitlines()[0])
+    except (ValueError, IndexError):
+        res = {}
+    for p_ in entry["protocols"]:
+        if not isinstance(res.get(p_["type"]), int) or res[p_["type"]] < 0:
+            problems.append("pvcore probe failed for %s: %s" % (p_["type"], res.get("errors", {}).get(p_["type"])))
+    bad = sh("/tmp/pvprobe -entry %s -user %s -pass wrong -timeout 5000" % (path, USER), check=False)
+    print(bad)
+    try:
+        if any(isinstance(v, int) and v >= 0 for v in json.loads(bad.splitlines()[0]).values()):
+            problems.append("pvcore probe: a wrong password worked")
+    except (ValueError, IndexError):
+        pass
+
     step("clients with a wrong password must fail")
     res = run_clients(entry, USER, "nope", only=["vision", "ss"])
     problems += ["%s let a wrong password in" % k for k, v in res.items() if v == "204"]

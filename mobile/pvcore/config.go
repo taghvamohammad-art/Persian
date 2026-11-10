@@ -1,0 +1,179 @@
+package pvcore
+
+import (
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net"
+	"strings"
+)
+
+// Protocol is one entry of a Linux server in the app config (linux.server_entry).
+type Protocol struct {
+	Type      string `json:"type"`
+	Port      int    `json:"port"`
+	SNI       string `json:"sni"`
+	PublicKey string `json:"public_key"`
+	ShortID   string `json:"short_id"`
+	Path      string `json:"path"`
+	PinSha256 string `json:"pin_sha256"`
+	Method    string `json:"method"`
+	ServerKey string `json:"server_key"`
+	Jc        int    `json:"jc"`
+	Jmin      int    `json:"jmin"`
+	Jmax      int    `json:"jmax"`
+	S1        int    `json:"s1"`
+	S2        int    `json:"s2"`
+	H1        int64  `json:"h1"`
+	H2        int64  `json:"h2"`
+	H3        int64  `json:"h3"`
+	H4        int64  `json:"h4"`
+}
+
+// Server is a Linux server of the app config.
+type Server struct {
+	Name      string     `json:"name"`
+	Host      string     `json:"host"`
+	Protocols []Protocol `json:"protocols"`
+}
+
+// XrayTypes are the protocols the Xray engine serves, in order of preference
+// when they are equally fast.
+var XrayTypes = []string{"vless-reality-vision", "vless-xhttp-reality", "hysteria2", "shadowsocks-2022"}
+
+func parseServer(serverJSON string) (*Server, error) {
+	var s Server
+	if err := json.Unmarshal([]byte(serverJSON), &s); err != nil {
+		return nil, fmt.Errorf("server config: %w", err)
+	}
+	if s.Host == "" {
+		return nil, fmt.Errorf("server config: no host")
+	}
+	return &s, nil
+}
+
+func (s *Server) protocol(kind string) (*Protocol, error) {
+	for i := range s.Protocols {
+		if s.Protocols[i].Type == kind {
+			return &s.Protocols[i], nil
+		}
+	}
+	return nil, fmt.Errorf("server %s has no %s", s.Host, kind)
+}
+
+func reality(p *Protocol) map[string]any {
+	return map[string]any{"serverName": p.SNI, "publicKey": p.PublicKey, "shortId": p.ShortID, "fingerprint": "chrome"}
+}
+
+func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error) {
+	switch p.Type {
+	case "vless-reality-vision":
+		return map[string]any{"tag": "proxy", "protocol": "vless",
+			"settings": map[string]any{"vnext": []any{map[string]any{"address": s.Host, "port": p.Port,
+				"users": []any{map[string]any{"id": VlessUUID(user, pass), "encryption": "none", "flow": "xtls-rprx-vision"}}}}},
+			"streamSettings": map[string]any{"network": "tcp", "security": "reality", "realitySettings": reality(p)}}, nil
+	case "vless-xhttp-reality":
+		return map[string]any{"tag": "proxy", "protocol": "vless",
+			"settings": map[string]any{"vnext": []any{map[string]any{"address": s.Host, "port": p.Port,
+				"users": []any{map[string]any{"id": VlessUUID(user, pass), "encryption": "none"}}}}},
+			"streamSettings": map[string]any{"network": "xhttp", "xhttpSettings": map[string]any{"path": p.Path},
+				"security": "reality", "realitySettings": reality(p)}}, nil
+	case "hysteria2":
+		return map[string]any{"tag": "proxy", "protocol": "hysteria",
+			"settings": map[string]any{"version": 2, "address": s.Host, "port": p.Port},
+			"streamSettings": map[string]any{"network": "hysteria",
+				"hysteriaSettings": map[string]any{"version": 2, "auth": Hy2Auth(user, pass)},
+				"security":         "tls",
+				"tlsSettings": map[string]any{"serverName": "pv", "alpn": []string{"h3"},
+					"pinnedPeerCertSha256": p.PinSha256}}}, nil
+	case "shadowsocks-2022":
+		return map[string]any{"tag": "proxy", "protocol": "shadowsocks",
+			"settings": map[string]any{"servers": []any{map[string]any{"address": s.Host, "port": p.Port,
+				"method": p.Method, "password": p.ServerKey + ":" + SSKey(user, pass)}}}}, nil
+	}
+	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
+}
+
+// XrayConfig is the client config for one protocol of a server, with a SOCKS
+// inbound on 127.0.0.1:socksPort that the TUN is forwarded to.
+func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, error) {
+	s, err := parseServer(serverJSON)
+	if err != nil {
+		return "", err
+	}
+	p, err := s.protocol(kind)
+	if err != nil {
+		return "", err
+	}
+	out, err := outbound(s, p, user, pass)
+	if err != nil {
+		return "", err
+	}
+	cfg := map[string]any{
+		"log": map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
+			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
+			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
+		"outbounds": []any{out, map[string]any{"tag": "direct", "protocol": "freedom"}},
+		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{
+			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
+				"outboundTag": "direct"}}},
+	}
+	b, err := json.Marshal(cfg)
+	return string(b), err
+}
+
+func b64ToHex(s string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil || len(raw) != 32 {
+		return "", fmt.Errorf("bad key")
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// AwgUAPI is the AmneziaWG device configuration (UAPI text) for a user.
+func AwgUAPI(serverJSON, user, pass string) (string, error) {
+	s, err := parseServer(serverJSON)
+	if err != nil {
+		return "", err
+	}
+	p, err := s.protocol("amneziawg")
+	if err != nil {
+		return "", err
+	}
+	priv := hex.EncodeToString(awgPrivateRaw(user, pass))
+	pub, err := b64ToHex(p.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("server awg key: %w", err)
+	}
+	host := s.Host
+	if net.ParseIP(host) == nil {
+		addrs, err := net.LookupIP(host)
+		if err != nil || len(addrs) == 0 {
+			return "", fmt.Errorf("resolve %s: %v", host, err)
+		}
+		host = addrs[0].String()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "private_key=%s\n", priv)
+	fmt.Fprintf(&b, "jc=%d\njmin=%d\njmax=%d\ns1=%d\ns2=%d\nh1=%d\nh2=%d\nh3=%d\nh4=%d\n",
+		p.Jc, p.Jmin, p.Jmax, p.S1, p.S2, p.H1, p.H2, p.H3, p.H4)
+	fmt.Fprintf(&b, "replace_peers=true\npublic_key=%s\nendpoint=%s\n", pub, net.JoinHostPort(host, fmt.Sprint(p.Port)))
+	b.WriteString("persistent_keepalive_interval=25\nreplace_allowed_ips=true\nallowed_ip=0.0.0.0/0\n")
+	return b.String(), nil
+}
+
+// Types lists the protocol types a server offers (JSON array), for the app.
+func Types(serverJSON string) (string, error) {
+	s, err := parseServer(serverJSON)
+	if err != nil {
+		return "", err
+	}
+	var out []string
+	for _, p := range s.Protocols {
+		out = append(out, p.Type)
+	}
+	b, _ := json.Marshal(out)
+	return string(b), nil
+}

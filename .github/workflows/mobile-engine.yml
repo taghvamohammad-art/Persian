@@ -1,0 +1,50 @@
+name: Mobile engine (pvcore.aar)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-engine.yml"
+  workflow_dispatch:
+
+jobs:
+  aar:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Dependencies
+        working-directory: mobile
+        run: |
+          go get github.com/xtls/xray-core@latest github.com/xjasonlyu/tun2socks/v2@latest \
+                 github.com/amnezia-vpn/amneziawg-go@latest golang.org/x/mobile@latest
+          go mod tidy
+          cat go.mod
+
+      - name: Tests
+        working-directory: mobile
+        run: go vet ./... && go test ./...
+
+      - name: gomobile bind (arm64, armv7)
+        working-directory: mobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
+          gomobile init
+          gomobile bind -v -target=android/arm64,android/arm -androidapi 21 -ldflags="-s -w" \
+            -javapkg=ir.persianvpn -o pvcore.aar ./pvcore
+          ls -la pvcore.aar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pvcore-aar
+          path: |
+            mobile/pvcore.aar
+            mobile/go.mod
+            mobile/go.sum
