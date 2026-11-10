@@ -38,7 +38,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
 
 
-private const val MAX_AUTH_RETRIES = 8  // ~2 minutes at the 15 s interval
+private const val MAX_AUTH_RETRIES = 12  // ~3 minutes at the 15 s interval
 
 
 internal class Controller(internal val bridge: SharedBridge) {
@@ -291,7 +291,12 @@ internal class Controller(internal val bridge: SharedBridge) {
             }
 
             bridge.service.logWriter?.report(log)
-            bridge.service.notifyError(header)
+            kittoku.osc.brand.BrandSession.recordErrorDetail(bridge.prefs, header, log)
+            // while reconnecting, the status notification already says so;
+            // an error is news only when we give up
+            if (!(doRetry && isReconnectionAvailable)) {
+                bridge.service.notifyError(header)
+            }
         }
 
         return false

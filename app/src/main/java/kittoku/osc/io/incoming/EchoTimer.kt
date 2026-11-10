@@ -1,5 +1,12 @@
 package kittoku.osc.io.incoming
 
+import android.os.SystemClock
+
+// Awake time, not wall time: while the phone sleeps (screen off) the loop
+// that reads the echo replies is frozen too, so wall time would declare a
+// healthy tunnel dead the moment the phone wakes, before the buffered
+// replies are read. uptimeMillis() does not advance during deep sleep.
+
 internal class EchoTimer(private val interval: Long, private val echoFunction: suspend () -> Unit) {
     private var lastTicked = 0L
     private var deadline = 0L
@@ -7,10 +14,10 @@ internal class EchoTimer(private val interval: Long, private val echoFunction: s
     private var isEchoWaited = false
 
     private val isOutOfTime: Boolean
-        get() = System.currentTimeMillis() - lastTicked > interval
+        get() = SystemClock.uptimeMillis() - lastTicked > interval
 
     private val isDead: Boolean
-        get() = System.currentTimeMillis() > deadline
+        get() = SystemClock.uptimeMillis() > deadline
 
     internal suspend fun checkAlive(): Boolean {
         if (isOutOfTime) {
@@ -21,7 +28,7 @@ internal class EchoTimer(private val interval: Long, private val echoFunction: s
             } else {
                 echoFunction.invoke()
                 isEchoWaited = true
-                deadline = System.currentTimeMillis() + interval
+                deadline = SystemClock.uptimeMillis() + interval
             }
         }
 
@@ -29,7 +36,7 @@ internal class EchoTimer(private val interval: Long, private val echoFunction: s
     }
 
     internal fun tick() {
-        lastTicked = System.currentTimeMillis()
+        lastTicked = SystemClock.uptimeMillis()
         isEchoWaited = false
     }
 }
