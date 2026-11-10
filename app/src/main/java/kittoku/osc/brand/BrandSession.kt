@@ -106,7 +106,7 @@ internal object BrandSession {
         header.startsWith("CERT") -> context.getString(R.string.brand_vpn_err_cert)
         header.contains("ERR_TIMEOUT") -> context.getString(R.string.brand_vpn_err_timeout)
         header.contains("ERR_CONNECTION_LOST") -> context.getString(R.string.brand_vpn_err_lost)
-        else -> context.getString(R.string.brand_vpn_err_generic, header)
+        else -> context.getString(R.string.brand_vpn_err_generic)
     }
 
     private const val PREF_ERROR_DETAIL = "BRAND_ERROR_DETAIL"

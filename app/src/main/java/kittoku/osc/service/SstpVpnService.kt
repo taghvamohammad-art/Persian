@@ -354,7 +354,8 @@ internal class SstpVpnService : VpnService() {
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
             it.setContentIntent(open)
             val title = getString(if (connected) R.string.brand_notif_connected else R.string.brand_state_connecting)
-            it.setContentTitle(if (connected && traffic.protocol.isNotEmpty()) "$title · ${traffic.protocol}" else title)
+            // users are not told how they are connected (protocol, server)
+            it.setContentTitle(title)
             if (connected) {
                 it.setContentText(usage)
                 it.setUsesChronometer(true)

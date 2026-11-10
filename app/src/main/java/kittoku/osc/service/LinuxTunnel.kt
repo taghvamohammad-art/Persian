@@ -101,7 +101,7 @@ internal class LinuxTunnel(
         val awg = c.kind == "amneziawg"
         val builder = service.Builder()
         try {
-            builder.setSession(c.name.ifEmpty { "Persian VPN" })
+            builder.setSession(service.getString(kittoku.osc.R.string.app_name))
             if (awg) {
                 builder.addAddress(Pvcore.awgAddress(user), 32)
                 builder.setMtu(AWG_MTU)
@@ -151,8 +151,7 @@ internal class LinuxTunnel(
     private suspend fun onConnected(c: Choice) {
         SessionTraffic.authFailures = 0
         SessionTraffic.protocol = PROTOCOL_LABELS[c.kind] ?: c.kind
-        val summary = "[Protocol]\n${SessionTraffic.protocol}\n\n[Server]\n${c.name}\n\n[Latency]\n${c.ms} ms"
-        setStringPrefValue(summary, OscPrefKey.HOME_STATUS, prefs)
+        setStringPrefValue("connected", OscPrefKey.HOME_STATUS, prefs)   // only "connected or not"
         service.cancelNotification(NOTIFICATION_ERROR_ID)
         service.cancelNotification(NOTIFICATION_RECONNECT_ID)
         BrandSession.clearError(prefs)

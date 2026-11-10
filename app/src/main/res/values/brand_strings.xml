@@ -47,7 +47,7 @@
     <string name="brand_vpn_err_cert">هویت سرور تأیید نشد و اتصال برای امنیت شما برقرار نشد.</string>
     <string name="brand_vpn_err_lost">ارتباط با سرور قطع شد. دوباره «اتصال» را بزنید.</string>
     <string name="brand_vpn_err_timeout">سرور پاسخ نداد. اینترنت خود را بررسی کنید یا کمی بعد دوباره امتحان کنید.</string>
-    <string name="brand_vpn_err_generic">اتصال قطع شد (%1$s).</string>
+    <string name="brand_vpn_err_generic">اتصال قطع شد. دوباره «اتصال» را بزنید.</string>
     <string name="brand_vpn_denied">برای اتصال، اجازه‌ی ساخت VPN لازم است.</string>
 
     <string name="brand_import_title">وارد کردن تنظیمات سرور</string>
