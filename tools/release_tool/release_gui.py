@@ -1287,8 +1287,13 @@ class NewServerPage(RouterPage):
             self.log.appendPlainText("\n✓ سرور لینوکس آماده است: %s" % "، ".join(x["type"] for x in entry["protocols"]))
             self.btn_cfg.allowed = True
             self.btn_cfg.setEnabled(True)
-            QMessageBox.information(self, "انجام شد",
-                "سرور لینوکس آماده است.\nحالا «%s» را بزنید تا اپ‌ها آن را بشناسند." % self.btn_cfg.text())
+            msg = "سرور لینوکس آماده است.\nحالا «%s» را بزنید تا اپ‌ها آن را بشناسند." % self.btn_cfg.text()
+            if not any(x["type"] == "amneziawg" for x in entry["protocols"]):
+                msg += ("\n\n⚠ AmneziaWG نصب نشد (بقیه‌ی پروتکل‌ها کار می‌کنند). دلیلش در گزارش بالا با علامت ⚠ "
+                        "آمده است؛ همان چند خط را بفرستید.")
+                QMessageBox.warning(self, "انجام شد، بدون AmneziaWG", msg)
+            else:
+                QMessageBox.information(self, "انجام شد", msg)
         self.run(job, done)
 
     def go(self):
