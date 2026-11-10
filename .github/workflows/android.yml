@@ -21,10 +21,21 @@ jobs:
         working-directory: tools/release_tool
         run: python -m unittest -v test_publisher
 
+  engine:
+    uses: ./.github/workflows/mobile-engine.yml
+
   apk:
+    needs: engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Xray / AmneziaWG engine for the Linux servers
+      - uses: actions/download-artifact@v4
+        with:
+          name: pvcore-aar
+          path: engine
+      - run: mkdir -p app/libs && cp engine/pvcore.aar app/libs/
 
       - name: Check server-config files
         run: |

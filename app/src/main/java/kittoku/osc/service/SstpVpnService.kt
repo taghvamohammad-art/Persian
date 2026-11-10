@@ -38,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
@@ -69,6 +70,8 @@ internal class SstpVpnService : VpnService() {
     private var controller: Controller?  = null
 
     private var jobReconnect: Job? = null
+    private var jobConnect: Job? = null
+    private var linuxTunnel: LinuxTunnel? = null
 
     private fun setRootState(state: Boolean) {
         setBooleanPrefValue(state, OscPrefKey.ROOT_STATE, prefs)
@@ -105,6 +108,8 @@ internal class SstpVpnService : VpnService() {
         return when (intent?.action) {
             ACTION_VPN_CONNECT -> {
                 controller?.kill(false, null)
+                controller = null
+                stopLinux()
 
                 kittoku.osc.brand.SessionTraffic.reset()
                 cancelNotification(NOTIFICATION_ERROR_ID)
@@ -117,7 +122,7 @@ internal class SstpVpnService : VpnService() {
 
                 logWriter?.write("Establish VPN connection")
 
-                initializeClient()
+                startConnection()
 
                 setRootState(true)
 
@@ -128,6 +133,7 @@ internal class SstpVpnService : VpnService() {
                 // ensure that reconnection has been completely canceled or done
                 runBlocking { jobReconnect?.cancelAndJoin() }
 
+                stopLinux()
                 controller?.disconnect()
                 controller = null
 
@@ -143,7 +149,61 @@ internal class SstpVpnService : VpnService() {
         }
     }
 
+    /**
+     * Linux servers first (fastest working protocol, chosen automatically),
+     * SSTP when none of them works.
+     */
+    private fun startConnection() {
+        val linux = try {
+            kittoku.osc.brand.ConfigManager.current(this).linuxServers.map { it.toString() }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (linux.isEmpty()) {
+            initializeClient()
+            return
+        }
+        jobConnect?.cancel()
+        jobConnect = scope.launch {
+            val tunnel = LinuxTunnel(this@SstpVpnService, prefs, linux)
+            linuxTunnel = tunnel
+            val ok = try {
+                tunnel.start()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logWriter?.report("linux tunnel failed: $e")
+                false
+            }
+            if (ok) return@launch
+            tunnel.close()
+            if (linuxTunnel === tunnel) linuxTunnel = null
+            if (!isActive) return@launch
+            logWriter?.report("no Linux protocol works, falling back to SSTP")
+            initializeClient()
+        }
+    }
+
+    private fun stopLinux() {
+        jobConnect?.cancel()
+        jobConnect = null
+        linuxTunnel?.close()
+        linuxTunnel = null
+    }
+
+    /** Every Linux protocol stopped working while connected. */
+    internal fun onLinuxTunnelLost() {
+        stopLinux()
+        if (getIntPrefValue(OscPrefKey.RECONNECTION_LIFE, prefs) > 0) {
+            launchJobReconnect()
+        } else {
+            notifyError("OSC: ERR_CONNECTION_LOST")
+            close()
+        }
+    }
+
     private fun initializeClient() {
+        kittoku.osc.brand.SessionTraffic.protocol = PROTOCOL_LABELS["sstp"] ?: "SSTP"
         controller = Controller(SharedBridge(this)).also {
             it.launchJobMain()
         }
@@ -194,7 +254,7 @@ internal class SstpVpnService : VpnService() {
 
                 delay(getIntPrefValue(OscPrefKey.RECONNECTION_INTERVAL, prefs) * 1000L)
 
-                initializeClient()
+                startConnection()
             } catch (_: CancellationException) { }
             finally {
                 cancelNotification(NOTIFICATION_RECONNECT_ID)
@@ -293,8 +353,8 @@ internal class SstpVpnService : VpnService() {
             it.setSilent(true)
             it.setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
             it.setContentIntent(open)
-            it.setContentTitle(getString(
-                if (connected) R.string.brand_notif_connected else R.string.brand_state_connecting))
+            val title = getString(if (connected) R.string.brand_notif_connected else R.string.brand_state_connecting)
+            it.setContentTitle(if (connected && traffic.protocol.isNotEmpty()) "$title · ${traffic.protocol}" else title)
             if (connected) {
                 it.setContentText(usage)
                 it.setUsesChronometer(true)
@@ -335,6 +395,7 @@ internal class SstpVpnService : VpnService() {
         logWriter = null
 
         removeStatusNotification()
+        stopLinux()
         controller?.kill(false, null)
         controller = null
 

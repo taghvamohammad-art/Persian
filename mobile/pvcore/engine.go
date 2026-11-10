@@ -29,6 +29,7 @@ var (
 	tunOn    bool
 	awgDev   *device.Device
 	running  string
+	socksAt  int
 )
 
 func freePort() (int, error) {
@@ -70,6 +71,7 @@ func stopLocked() {
 		awgDev = nil
 	}
 	running = ""
+	socksAt = 0
 }
 
 // Stop ends whatever engine is running.
@@ -115,6 +117,7 @@ func StartXray(serverJSON, kind, user, pass string, tunFd, mtu int) error {
 	engine.Start()
 	tunOn = true
 	running = kind
+	socksAt = port
 	return nil
 }
 
@@ -145,6 +148,61 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 	return nil
 }
 
+// Check tells whether the running engine still reaches the internet:
+// milliseconds of a test request through it, or -1. For AmneziaWG it is
+// the age of the last handshake (servers answer every 2 minutes at most
+// while keepalives flow), so no extra traffic is made.
+func Check(timeoutMs int) int {
+	mu.Lock()
+	kind, port, dev := running, socksAt, awgDev
+	mu.Unlock()
+	switch {
+	case kind == "":
+		return -1
+	case dev != nil:
+		state, err := dev.IpcGet()
+		if err != nil {
+			return -1
+		}
+		for _, line := range strings.Split(state, "\n") {
+			if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
+				var sec int64
+				fmt.Sscan(v, &sec)
+				if sec == 0 {
+					return -1
+				}
+				age := time.Since(time.Unix(sec, 0))
+				if age > 200*time.Second {
+					return -1
+				}
+				return int(age.Milliseconds())
+			}
+		}
+		return -1
+	default:
+		ms, err := getThrough(port, time.Duration(timeoutMs)*time.Millisecond)
+		if err != nil {
+			return -1
+		}
+		return ms
+	}
+}
+
+func getThrough(port int, timeout time.Duration) (int, error) {
+	proxy, _ := url.Parse(fmt.Sprintf("socks5h://127.0.0.1:%d", port))
+	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}}
+	start := time.Now()
+	resp, err := client.Get(ProbeURL)
+	if err != nil {
+		return -1, err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 204 && resp.StatusCode != 200 {
+		return -1, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return int(time.Since(start).Milliseconds()), nil
+}
+
 // ---------------------------------------------------------------- probing
 
 func probeXray(serverJSON, kind, user, pass string, timeout time.Duration) (int, error) {
@@ -161,18 +219,7 @@ func probeXray(serverJSON, kind, user, pass string, timeout time.Duration) (int,
 		return -1, err
 	}
 	defer inst.Close()
-	proxy, _ := url.Parse(fmt.Sprintf("socks5h://127.0.0.1:%d", port))
-	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
-	start := time.Now()
-	resp, err := client.Get(ProbeURL)
-	if err != nil {
-		return -1, err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 204 && resp.StatusCode != 200 {
-		return -1, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return int(time.Since(start).Milliseconds()), nil
+	return getThrough(port, timeout)
 }
 
 // nullTun is a TUN that carries nothing: enough to see whether the

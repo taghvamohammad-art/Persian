@@ -40,6 +40,9 @@ internal data class AppConfig(
     @SerialName("config_urls") val configUrls: List<String> = emptyList(),
     @SerialName("config_pins") val configPins: List<String> = emptyList(),
     @SerialName("app_update") val appUpdate: AppUpdate? = null,
+    // Xray / AmneziaWG servers (tools/release_tool/linux.py server_entry);
+    // kept as raw JSON and handed to the pvcore engine as is
+    @SerialName("linux_servers") val linuxServers: List<kotlinx.serialization.json.JsonObject> = emptyList(),
 )
 
 /** Newest app release. Its SHA-256 is covered by the config signature. */

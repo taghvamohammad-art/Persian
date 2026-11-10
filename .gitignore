@@ -26,3 +26,4 @@ __pycache__/
 
 # real app config (copy from tools/config.example.json)
 tools/config.json
+/app/libs/*.aar

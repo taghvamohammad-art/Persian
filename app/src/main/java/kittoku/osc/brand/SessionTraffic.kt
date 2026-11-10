@@ -15,6 +15,9 @@ internal object SessionTraffic {
     /** wall-clock ms when the tunnel first came up in this session, 0 = not yet */
     @Volatile internal var connectedSince = 0L
 
+    /** protocol of the tunnel in use ("Reality", "SSTP", ...), "" = not connected */
+    @Volatile internal var protocol = ""
+
     /** rejected logins while reconnecting; reset when the tunnel comes up */
     @Volatile internal var authFailures = 0
 
@@ -23,5 +26,6 @@ internal object SessionTraffic {
         downloaded.set(0)
         uploaded.set(0)
         connectedSince = 0L
+        protocol = ""
     }
 }
