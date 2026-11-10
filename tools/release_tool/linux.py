@@ -320,16 +320,16 @@ def register_on_router(r, linux_ip, name, p, log):
     """Let the Linux server read users over REST and send RADIUS to User Manager."""
     tag = "pv-linux-%s" % re.sub(r"[^A-Za-z0-9_-]", "-", name)
     port, fp = router_rest_port(r, log)
-    addr = (sv.get(r, "/ip service", "name=www-ssl", "address") or "").strip()
-    if addr and linux_ip not in addr.split(","):
-        r.run("/ip service set www-ssl address=%s" % q(addr + "," + linux_ip + "/32"))
+    addrs = sv.addr_list(sv.get(r, "/ip service", "name=www-ssl", "address"))
+    mine = sv.with_prefix(linux_ip)
+    if addrs and mine not in addrs and linux_ip not in addrs:
+        r.run("/ip service set www-ssl address=%s" % ",".join(addrs + [mine]))
     if sv.count(r, "/user group", "name=pvagent") == 0:
         r.run("/user group add name=pvagent policy=read,api,rest-api,web,sensitive")
     if sv.count(r, "/user", "name=pvagent"):
-        cur = (sv.get(r, "/user", "name=pvagent", "address") or "").strip()
-        addrs = [a for a in cur.split(",") if a]
-        if linux_ip + "/32" not in addrs:
-            addrs.append(linux_ip + "/32")
+        addrs = sv.addr_list(sv.get(r, "/user", "name=pvagent", "address"))
+        if sv.with_prefix(linux_ip) not in addrs:
+            addrs.append(sv.with_prefix(linux_ip))
         r.run("/user set [find where name=pvagent] group=pvagent password=%s address=%s"
               % (q(p["agent_password"]), ",".join(addrs)))
     else:

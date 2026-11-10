@@ -57,6 +57,19 @@ BOT_DEFAULTS = [("BOT_TOKEN", ""), ("ADMIN_IDS", ""), ("INVITE_TTL_HOURS", "48")
 
 # ---------------------------------------------------------------- small RouterOS helpers
 
+def addr_list(value):
+    """An address list read with [get]: RouterOS joins it with ";"."""
+    out = []
+    for a in re.split(r"[;,\s]+", (value or "").strip()):
+        if a and a not in out:
+            out.append(a)
+    return out
+
+
+def with_prefix(ip):
+    return ip if "/" in ip else ip + "/32"
+
+
 def count(r, menu, where=""):
     out = r.run(":put [:len [%s find%s]]" % (menu, (" where " + where) if where else "")).strip()
     try:
@@ -141,9 +154,9 @@ def ensure_rest(r, log=print):
     if disabled in ("true", "yes"):
         log("فعال کردن سرویس www (REST) برای کانتینرها…")
         r.run("/ip service set www disabled=no")
-    addr = (get(r, "/ip service", "name=www", "address") or "").strip()
-    if addr and NET not in addr.split(","):
-        r.run("/ip service set www address=%s" % q(addr + "," + NET))
+    addrs = addr_list(get(r, "/ip service", "name=www", "address"))
+    if addrs and NET not in addrs:
+        r.run("/ip service set www address=%s" % ",".join(addrs + [NET]))
     ensure_input_accept(r, NET, "tcp", port, "pv-containers-rest")
     return int(port)
 

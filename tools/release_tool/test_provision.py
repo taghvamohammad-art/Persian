@@ -73,6 +73,15 @@ class Filter(unittest.TestCase):
         self.assertEqual(pv.add_server_to_config(added, "sec", "9.9.9.9"), added)
 
 
+class Addresses(unittest.TestCase):
+    def test_routeros_lists(self):
+        self.assertEqual(sv.addr_list("93.118.136.58/32;5.181.156.189/32;5.181.156.189/32"),
+                         ["93.118.136.58/32", "5.181.156.189/32"])
+        self.assertEqual(sv.addr_list("a,b"), ["a", "b"])
+        self.assertEqual(sv.addr_list(None), [])
+        self.assertEqual(sv.with_prefix("1.2.3.4"), "1.2.3.4/32")
+
+
 class Bot(unittest.TestCase):
     def test_env(self):
         env = sv.parse_env('﻿BOT_TOKEN=1:abc\n# c\nADMIN_IDS="1,2"\nMT_URL=https://x\nCUSTOM=7\n')
