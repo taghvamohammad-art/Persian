@@ -37,6 +37,9 @@ class LinuxHost(SSHRouter):
     """SSH to a Linux server: commands fail on a non-zero exit status."""
 
     def run(self, cmd, timeout=900, check=True):
+        return SSHRouter.run(self, cmd, timeout, check)
+
+    def _run(self, cmd, timeout=900, check=True):
         ch = self._t.open_session(timeout=self.timeout)
         try:
             ch.settimeout(timeout)

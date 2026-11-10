@@ -22,6 +22,11 @@ ERROR_MARKERS = (
 )
 
 
+DROPPED = ("ارتباط SSH با %s وسط کار قطع شد (%s).\n\n"
+           "اگر سرور خارج از ایران است، احتمالاً اینترنت شما اتصال SSH به خارج را قطع می‌کند: "
+           "یک بار با روشن بودن VPN روی همین کامپیوتر امتحان کنید.")
+
+
 class RouterOSError(ReleaseError):
     pass
 
@@ -116,6 +121,16 @@ class SSHRouter:
     # ---------------------------------------------------------------- commands
 
     def run(self, cmd, timeout=300, check=True):
+        try:
+            return self._run(cmd, timeout, check)
+        except (OSError, EOFError) as e:
+            raise RouterOSError(DROPPED % (self.host, e))
+        except Exception as e:      # paramiko.SSHException and friends
+            if type(e).__module__.startswith("paramiko"):
+                raise RouterOSError(DROPPED % (self.host, e))
+            raise
+
+    def _run(self, cmd, timeout=300, check=True):
         ch = self._t.open_session(timeout=self.timeout)
         try:
             ch.settimeout(timeout)
