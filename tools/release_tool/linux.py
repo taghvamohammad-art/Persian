@@ -88,10 +88,15 @@ def check_os(h):
 
 
 def install_base(h, log):
-    log("نصب بسته‌های پایه (چند دقیقه)…")
-    h.run("export DEBIAN_FRONTEND=noninteractive; apt-get update -q && "
-          "apt-get install -y -q curl unzip python3 openssl iptables ca-certificates "
-          "software-properties-common", timeout=1800)
+    pkgs = "curl unzip python3 openssl iptables ca-certificates software-properties-common"
+    have = h.run("dpkg-query -W -f='${db:Status-Status}\\n' %s 2>/dev/null | grep -c '^installed$' || true"
+                 % pkgs, check=False).strip()
+    if have == str(len(pkgs.split())):
+        log("بسته‌های پایه از قبل نصب‌اند.")       # no apt: a broken Ubuntu mirror does not stop a re-run
+    else:
+        log("نصب بسته‌های پایه (چند دقیقه)…")
+        h.run("export DEBIAN_FRONTEND=noninteractive; apt-get update -q && "
+              "apt-get install -y -q %s" % pkgs, timeout=1800)
     h.write("/etc/sysctl.d/90-pv.conf",
             "net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\nnet.ipv4.ip_forward=1\n"
             "net.core.rmem_max=16777216\nnet.core.wmem_max=16777216\n")
@@ -442,6 +447,12 @@ def install_awg(h, p, log):
     module cannot be built, e.g. no headers for this kernel) the userspace
     amneziawg-go. Returns False if neither works; the other protocols still do."""
     log("نصب AmneziaWG…")
+    present = h.run("command -v awg >/dev/null && command -v awg-quick >/dev/null && "
+                    "(lsmod | grep -q '^amneziawg' || command -v amneziawg-go >/dev/null) && echo YES || true",
+                    check=False).strip()
+    if present == "YES":
+        log("  AmneziaWG از قبل نصب است.")
+        return configure_awg(h, p, log)
     try:
         h.run("export DEBIAN_FRONTEND=noninteractive; add-apt-repository -y ppa:amnezia/ppa && "
               "apt-get update -q && apt-get install -y -q --no-install-recommends amneziawg-tools git", timeout=1800)
@@ -461,6 +472,10 @@ def install_awg(h, p, log):
         except LinuxError as e:
             log("⚠ AmneziaWG نصب نشد:\n%s" % "\n".join(str(e).splitlines()[-15:]))
             return False
+    return configure_awg(h, p, log)
+
+
+def configure_awg(h, p, log):
     wan = h.run("ip route show default | awk '{print $5; exit}'").strip() or "eth0"
     conf = """[Interface]
 PrivateKey = %(priv)s
