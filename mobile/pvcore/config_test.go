@@ -11,6 +11,8 @@ const testServer = `{"name":"t","host":"1.2.3.4","protocols":[
  {"type":"vless-xhttp-reality","port":8443,"sni":"www.microsoft.com","path":"/x","public_key":"PK","short_id":"ab12"},
  {"type":"hysteria2","port":443,"pin_sha256":"ff00"},
  {"type":"shadowsocks-2022","port":20001,"method":"2022-blake3-aes-128-gcm","server_key":"c2VydmVya2V5c2VydmVya2V5"},
+ {"type":"vless-xhttp-cdn","host":"cdn.example","port":443,"path":"/c","encryption":"mlkem768x25519plus.native.0rtt.KEY","ips":["104.16.1.1"],"ech_config":"AEX+DQBB"},
+ {"type":"vless-dns","domain":"d.example","encryption":"mlkem768x25519plus.native.0rtt.KEY","resolvers":["udp://8.8.8.8:53"]},
  {"type":"amneziawg","port":30001,"public_key":"iEOjwrLAGYLR3gCJd8hsCtL+1cqeTz1lO1EWQXlQYlw=","jc":4,"jmin":40,"jmax":70,"s1":20,"s2":30,"h1":11,"h2":22,"h3":33,"h4":44}]}`
 
 func TestXrayConfigs(t *testing.T) {
@@ -30,6 +32,15 @@ func TestXrayConfigs(t *testing.T) {
 	cfg, _ := XrayConfig(testServer, "shadowsocks-2022", "25g00001", "abc123", 1)
 	if !strings.Contains(cfg, "c2VydmVya2V5c2VydmVya2V5:kIPsqZJOWdJYPjSbZ7zSrQ==") {
 		t.Error("ss password", cfg)
+	}
+	SetResolvers("10.0.0.1, 8.8.8.8:53,")
+	cfg, _ = XrayConfig(testServer, "vless-dns", "25g00001", "abc123", 1)
+	if !strings.Contains(cfg, `"addrs":["udp://10.0.0.1:53","udp://8.8.8.8:53"]`) || !strings.Contains(cfg, `"edns0":1232`) {
+		t.Error("dns tunnel resolvers", cfg)
+	}
+	cfg, _ = XrayConfig(testServer, "vless-xhttp-cdn", "25g00001", "abc123", 1)
+	if !strings.Contains(cfg, `"address":"104.16.1.1"`) || !strings.Contains(cfg, `"echConfigList":"AEX+DQBB"`) {
+		t.Error("cdn", cfg)
 	}
 	if _, err := XrayConfig(testServer, "nope", "a", "b", 1); err == nil {
 		t.Error("unknown protocol accepted")

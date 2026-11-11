@@ -70,6 +70,8 @@ func SetResolvers(csv string) {
 		}
 		if ip := net.ParseIP(a); ip != nil {
 			a = "udp://" + net.JoinHostPort(ip.String(), "53")
+		} else if !strings.Contains(a, "://") {
+			a = "udp://" + a
 		}
 		out = append(out, a)
 	}
@@ -179,7 +181,7 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 			"streamSettings": map[string]any{"network": "mkcp",
 				"kcpSettings": map[string]any{"mtu": 130, "tti": 200},
 				"finalmask": map[string]any{"udp": []any{map[string]any{"type": "xdns", "settings": map[string]any{
-					"domains":   []any{map[string]any{"names": []string{p.Domain}}},
+					"domains":   []any{map[string]any{"names": []string{p.Domain}, "edns0": 1232}},
 					"resolvers": []any{map[string]any{"addrs": rs}}}}}}}}, nil
 	}
 	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
