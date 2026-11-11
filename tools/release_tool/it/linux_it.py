@@ -233,7 +233,14 @@ def main():
         else:
             problems += awg_client_test(entry)
     else:
-        problems.append("AmneziaWG not installed")
+        # Launchpad (the AmneziaWG PPA) is sometimes unreachable from GitHub's
+        # runners; that is their outage, not ours
+        ppa_down = sh("timeout 20 curl -sf -o /dev/null https://ppa.launchpadcontent.net/ && echo up",
+                      check=False).strip() != "up"
+        if ppa_down:
+            print("WARNING: AmneziaWG not installed, Launchpad unreachable from this runner")
+        else:
+            problems.append("AmneziaWG not installed")
 
     step("UM1 dies: the agent keeps going with UM2")
     with base.connector("B")() as r:
