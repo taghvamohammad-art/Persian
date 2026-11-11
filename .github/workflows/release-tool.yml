@@ -91,8 +91,6 @@ jobs:
       - name: Build the app engine's probe (same code as the phone)
         working-directory: mobile
         run: |
-          go get github.com/xtls/xray-core@latest github.com/xjasonlyu/tun2socks/v2@latest \
-                 github.com/amnezia-vpn/amneziawg-go@latest
           go mod tidy
           go build -o /tmp/pvprobe ./pvcore/cmd/probe
 

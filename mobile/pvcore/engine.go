@@ -300,16 +300,31 @@ func Probe(serverJSON, user, pass string, timeoutMs int) string {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	var wg sync.WaitGroup
 	var lock sync.Mutex
+	anyOK := false
+	tunnel := make(chan struct{})
+	hasTunnel := false
 	for _, p := range s.Protocols {
 		kind := p.Type
-		wg.Add(1)
+		slow := kind == "vless-dns" // the DNS tunnel is the last resort and slow to answer
+		if slow {
+			hasTunnel = true
+		} else {
+			wg.Add(1)
+		}
 		go func() {
-			defer wg.Done()
+			if slow {
+				defer close(tunnel)
+			} else {
+				defer wg.Done()
+			}
 			var ms int
 			var err error
-			if kind == "amneziawg" {
+			switch {
+			case kind == "amneziawg":
 				ms, err = probeAwg(serverJSON, user, pass, timeout)
-			} else {
+			case slow:
+				ms, err = probeXray(serverJSON, kind, user, pass, 3*timeout)
+			default:
 				ms, err = probeXray(serverJSON, kind, user, pass, timeout)
 			}
 			lock.Lock()
@@ -317,10 +332,35 @@ func Probe(serverJSON, user, pass string, timeoutMs int) string {
 			if err != nil {
 				errs[kind] = err.Error()
 			}
+			if ms >= 0 {
+				anyOK = true
+			}
 			lock.Unlock()
 		}()
 	}
 	wg.Wait()
+	if hasTunnel {
+		lock.Lock()
+		ok := anyOK
+		lock.Unlock()
+		if ok {
+			// something faster works: do not wait for the tunnel
+			select {
+			case <-tunnel:
+			case <-time.After(200 * time.Millisecond):
+			}
+		} else {
+			<-tunnel
+		}
+		lock.Lock()
+		if _, done := out["vless-dns"]; !done {
+			out["vless-dns"] = -1
+			errs["vless-dns"] = "skipped"
+		}
+		lock.Unlock()
+	}
+	lock.Lock()
+	defer lock.Unlock()
 	out["errors"] = errs
 	b, _ := json.Marshal(out)
 	return string(b)

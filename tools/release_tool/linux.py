@@ -184,13 +184,229 @@ def xray_template(p):
             {"tag": "ss", "port": p["ss_port"], "protocol": "shadowsocks",
              "settings": {"method": "2022-blake3-aes-128-gcm", "password": p["ss_server_key"],
                           "clients": [], "network": "tcp,udp"}},
-        ],
+        ] + domain_inbounds(p),
         "outbounds": [{"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}],
         "routing": {"rules": [
             {"ip": ["geoip:private"], "outboundTag": "block"},
             {"protocol": ["bittorrent"], "outboundTag": "block"},
         ]},
     }
+
+
+def dns_name(p):
+    """Delegated zone of the DNS tunnel: d.<domain> (NS -> ns.<domain>)."""
+    return "d." + p["domain"]
+
+
+def domain_inbounds(p):
+    """With a domain: XHTTP behind Cloudflare (nginx on port 80 hands the
+    secret path to Xray) and the DNS tunnel on UDP 53. Both carry VLESS
+    Encryption, since Cloudflare-to-server is plain HTTP and DNS queries
+    cross public resolvers."""
+    if not p.get("domain") or not p.get("vless_dec"):
+        return []
+    sniff = {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}
+    return [
+        {"tag": "vless-cdn", "listen": "127.0.0.1", "port": p["cdn_local_port"], "protocol": "vless",
+         "settings": {"clients": [], "decryption": p["vless_dec"]},
+         "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": p["cdn_path"], "mode": "auto"}},
+         "sniffing": sniff},
+        {"tag": "vless-dns", "port": 53, "protocol": "vless",
+         "settings": {"clients": [], "decryption": p["vless_dec"]},
+         "streamSettings": {"network": "mkcp", "kcpSettings": {"mtu": 900, "tti": 200},
+                            "finalmask": {"udp": [{"type": "xdns", "settings": {"domains": [
+                                {"names": [dns_name(p)], "edns0": 1232}]}}]}},
+         "sniffing": sniff},
+    ]
+
+
+def vless_encryption(h):
+    """(decryption, encryption) pair of VLESS Encryption (X25519 authentication)."""
+    out = h.run("/usr/local/bin/xray vlessenc")
+    dec = re.findall(r'"decryption":\s*"([^"]+)"', out)
+    enc = re.findall(r'"encryption":\s*"([^"]+)"', out)
+    if not dec or not enc:
+        raise LinuxError("خروجی xray vlessenc شناخته نشد:\n" + out)
+    return dec[0], enc[0]
+
+
+DECOY_HTML = """<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%(name)s</title>
+<style>
+body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f6f7f9;color:#222}
+header{background:#123;color:#fff;padding:18px 24px;font-size:20px}
+main{max-width:860px;margin:32px auto;padding:0 16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px}
+.card{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+footer{text-align:center;color:#888;font-size:13px;margin:40px 0}
+</style></head><body>
+<header>%(name)s</header>
+<main>
+<p>فروشگاه آنلاین لوازم جانبی موبایل و کامپیوتر. سایت در حال به‌روزرسانی است و به‌زودی سفارش آنلاین فعال می‌شود.</p>
+<div class="grid">
+<div class="card">کابل و شارژر</div><div class="card">هدفون و هندزفری</div>
+<div class="card">قاب و گلس</div><div class="card">لوازم شبکه</div>
+</div>
+</main>
+<footer>&copy; %(name)s</footer>
+</body></html>
+"""
+
+
+def install_web(h, p, log):
+    """nginx on port 80: the decoy shop for everyone, the secret path to Xray.
+    Cloudflare (SSL mode Flexible) reaches the server here."""
+    log("نصب وب‌سرور و سایت ظاهری…")
+    h.run("export DEBIAN_FRONTEND=noninteractive; command -v nginx >/dev/null || "
+          "apt-get install -y -q --no-install-recommends nginx", timeout=900)
+    h.run("mkdir -p /var/www/pv")
+    h.write("/var/www/pv/index.html", DECOY_HTML % {"name": p["domain"].split(".")[0].capitalize() + " Shop"})
+    h.write("/etc/nginx/sites-available/pv", """server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    root /var/www/pv;
+    index index.html;
+    server_tokens off;
+    access_log off;
+
+    location %(path)s {
+        proxy_pass http://127.0.0.1:%(port)d;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        client_max_body_size 0;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+""" % {"path": p["cdn_path"], "port": p["cdn_local_port"]})
+    h.run("rm -f /etc/nginx/sites-enabled/default; ln -sf /etc/nginx/sites-available/pv /etc/nginx/sites-enabled/pv; "
+          "nginx -t 2>&1 && systemctl enable nginx >/dev/null 2>&1; systemctl restart nginx")
+
+
+def free_port_53(h):
+    """systemd-resolved's stub listener holds port 53; the DNS tunnel needs it."""
+    h.run(r"""if systemctl is-active -q systemd-resolved; then
+  mkdir -p /etc/systemd/resolved.conf.d
+  printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/pv.conf
+  ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+  systemctl restart systemd-resolved
+fi""")
+
+
+CLOUDFLARE_PY = r"""
+import json, os, sys, urllib.request
+TOKEN, DOMAIN, IP = os.environ["CF_TOKEN"], sys.argv[1], sys.argv[2]
+def api(method, path, body=None):
+    req = urllib.request.Request("https://api.cloudflare.com/client/v4" + path, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return json.load(e)
+out = {"warnings": []}
+z = api("GET", "/zones?name=" + DOMAIN)
+if not z.get("success") or not z.get("result"):
+    print(json.dumps({"error": "zone", "detail": z.get("errors")})); sys.exit(0)
+zone = z["result"][0]
+out["status"] = zone.get("status")
+zid = zone["id"]
+want = [("A", DOMAIN, IP, True), ("A", "www." + DOMAIN, IP, True), ("A", "ns." + DOMAIN, IP, False),
+        ("NS", "d." + DOMAIN, "ns." + DOMAIN, False)]
+for typ, name, content, proxied in want:
+    have = api("GET", "/zones/%s/dns_records?name=%s" % (zid, name)).get("result") or []
+    body = {"type": typ, "name": name, "content": content, "ttl": 1 if proxied else 300}
+    if typ == "A":
+        body["proxied"] = proxied
+    same = [r for r in have if r["type"] == typ]
+    for r in have:
+        if r["type"] in ("A", "AAAA", "CNAME", "NS") and r not in same[:1]:
+            api("DELETE", "/zones/%s/dns_records/%s" % (zid, r["id"]))
+    res = api("PUT", "/zones/%s/dns_records/%s" % (zid, same[0]["id"]), body) if same else         api("POST", "/zones/%s/dns_records" % zid, body)
+    if not res.get("success"):
+        print(json.dumps({"error": "record", "name": name, "detail": res.get("errors")})); sys.exit(0)
+api("PATCH", "/zones/%s/settings/ssl_automatic_mode" % zid, {"value": "custom"})
+r = api("PATCH", "/zones/%s/settings/ssl" % zid, {"value": "flexible"})
+if not r.get("success"):
+    out["warnings"].append("ssl")
+r = api("PATCH", "/zones/%s/settings/ech" % zid, {"value": "on"})
+print(json.dumps(out))
+"""
+
+
+def cloudflare_setup(h, p, ip, log):
+    """DNS records and SSL mode of the domain, through Cloudflare's API.
+    Runs on the server (outside Iran), so the tool's own internet does not matter."""
+    if not p.get("cf_token"):
+        log("⚠ توکن Cloudflare وارد نشده؛ این رکوردها را خودتان در Cloudflare بسازید:\n"
+            "    A  %(d)s → %(ip)s (Proxied، ابر نارنجی)\n    A  www.%(d)s → %(ip)s (Proxied)\n"
+            "    A  ns.%(d)s → %(ip)s (DNS only، ابر خاکستری)\n    NS d.%(d)s → ns.%(d)s\n"
+            "    و در SSL/TLS حالت را روی Flexible بگذارید." % {"d": p["domain"], "ip": ip})
+        return
+    log("تنظیم دامنه در Cloudflare…")
+    h.write("/tmp/pv-cf.py", CLOUDFLARE_PY)
+    out = h.run("CF_TOKEN=%s python3 /tmp/pv-cf.py %s %s; rm -f /tmp/pv-cf.py"
+                % (shell_quote(p["cf_token"]), shell_quote(p["domain"]), shell_quote(ip)), check=False)
+    try:
+        res = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise LinuxError("جواب Cloudflare شناخته نشد:\n" + out[-800:])
+    if res.get("error") == "zone":
+        raise LinuxError("دامنه‌ی %s در حساب Cloudflare پیدا نشد یا توکن اجازه ندارد.\n%s"
+                         % (p["domain"], res.get("detail")))
+    if res.get("error"):
+        raise LinuxError("Cloudflare رکورد %s را نساخت (توکن باید اجازه‌ی DNS Edit داشته باشد):\n%s"
+                         % (res.get("name"), res.get("detail")))
+    if "ssl" in res.get("warnings", []):
+        log("⚠ حالت SSL عوض نشد (توکن اجازه‌ی Zone Settings ندارد). در Cloudflare، بخش SSL/TLS، "
+            "حالت را دستی روی Flexible بگذارید؛ وگرنه مسیر CDN کار نمی‌کند.")
+    if res.get("status") != "active":
+        log("⚠ دامنه در Cloudflare هنوز فعال نشده (%s). رکوردها ساخته شد؛ بعد از فعال شدن، مسیر CDN و "
+            "تونل DNS خودشان کار می‌کنند." % res.get("status"))
+    else:
+        log("  رکوردهای دامنه و حالت SSL تنظیم شد.")
+
+
+def domain_lookup(h, domain):
+    """ECH config and Cloudflare addresses of the domain (empty until it is active)."""
+    script = r"""
+import json, sys, urllib.request
+def q(t):
+    req = urllib.request.Request("https://cloudflare-dns.com/dns-query?name=%s&type=%s" % (sys.argv[1], t),
+                                 headers={"accept": "application/dns-json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return [a["data"] for a in json.load(r).get("Answer", []) if a.get("type") in (1, 65)]
+out = {"ips": [], "ech": ""}
+try:
+    out["ips"] = q("A")
+    for rec in q("HTTPS"):
+        for part in rec.split():
+            if part.startswith("ech="):
+                out["ech"] = part[4:].strip('"')
+except Exception:
+    pass
+print(json.dumps(out))
+"""
+    h.write("/tmp/pv-dns.py", script)
+    out = h.run("python3 /tmp/pv-dns.py %s; rm -f /tmp/pv-dns.py" % shell_quote(domain), check=False)
+    try:
+        return json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"ips": [], "ech": ""}
+
+
+def shell_quote(s):
+    return "'" + str(s).replace("'", "'\\''") + "'"
 
 
 AMNEZIAWG_GO = r"""set -e
@@ -284,6 +500,8 @@ def new_params(old=None):
     p.setdefault("ss_port", 20000 + secrets.randbelow(40000))
     p.setdefault("ss_server_key", base64.b64encode(secrets.token_bytes(16)).decode())
     p.setdefault("awg", awg_params())
+    p.setdefault("cdn_path", "/" + secrets.token_urlsafe(10))
+    p.setdefault("cdn_local_port", 10086)
     p.setdefault("radius_secret", secrets.token_urlsafe(24))
     p.setdefault("agent_password", secrets.token_urlsafe(24))
     return p
@@ -401,6 +619,12 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
             p["reality_private"], p["reality_public"] = x25519(h)
         h.run("mkdir -p %s /var/log/xray" % XRAY_CONF_DIR)
         p["hy2_pin"] = make_cert(h)
+        if p.get("domain"):
+            if not p.get("vless_dec"):
+                p["vless_dec"], p["vless_enc"] = vless_encryption(h)
+            free_port_53(h)
+            install_web(h, p, log)
+            cloudflare_setup(h, p, public_ip, log)
         h.write(XRAY_CONF_DIR + "/template.json", json.dumps(xray_template(p), indent=1))
         h.write(XRAY_CONF_DIR + "/config.json", json.dumps(xray_template(p), indent=1))
         h.run("/usr/local/bin/xray run -test -config %s/config.json" % XRAY_CONF_DIR)
@@ -415,8 +639,9 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
             "routers": routers_cfg,
             "radius": {"servers": radius_servers, "nas_ip": public_ip, "nas_identifier": "pv-" + name},
             "xray": {"template": XRAY_CONF_DIR + "/template.json", "config": XRAY_CONF_DIR + "/config.json",
-                     "inbounds": {"vless-vision": "vless-vision", "vless-xhttp": "vless",
-                                  "hy2": "hysteria", "ss": "shadowsocks"}},
+                     "inbounds": dict({"vless-vision": "vless-vision", "vless-xhttp": "vless",
+                                       "hy2": "hysteria", "ss": "shadowsocks"},
+                                      **({"vless-cdn": "vless", "vless-dns": "vless"} if p.get("domain") else {}))},
             "interval": p.get("interval", 60),
         }
         if awg:
@@ -435,8 +660,11 @@ RestartSec=10
 WantedBy=multi-user.target
 """ % AGENT_DIR)
         h.run("systemctl daemon-reload && systemctl enable pv-agent >/dev/null 2>&1 && systemctl restart pv-agent")
+        if p.get("domain"):
+            p["domain_info"] = domain_lookup(h, p["domain"])
         status = {s: h.run("systemctl is-active %s" % s, check=False).strip()
-                  for s in ("xray", "pv-agent") + (("awg-quick@awg0",) if awg else ())}
+                  for s in ("xray", "pv-agent") + (("awg-quick@awg0",) if awg else ())
+                  + (("nginx",) if p.get("domain") else ())}
         log("وضعیت سرویس‌ها: %s" % ", ".join("%s=%s" % kv for kv in status.items()))
         bad = [s for s, v in status.items() if v != "active"]
         if bad:
@@ -459,6 +687,16 @@ def server_entry(name, host, p, awg=True):
         {"type": "shadowsocks-2022", "port": p["ss_port"], "method": "2022-blake3-aes-128-gcm",
          "server_key": p["ss_server_key"]},
     ]}
+    if p.get("domain") and p.get("vless_enc"):
+        info = p.get("domain_info") or {}
+        entry["protocols"] += [
+            {"type": "vless-xhttp-cdn", "host": p["domain"], "port": 443, "path": p["cdn_path"],
+             "encryption": p["vless_enc"], "ips": info.get("ips", [])[:4], "ech_config": info.get("ech", ""),
+             "ech_dns": ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query", "https://9.9.9.9/dns-query",
+                         "udp://8.8.8.8", "udp://1.1.1.1"]},
+            {"type": "vless-dns", "domain": dns_name(p), "encryption": p["vless_enc"],
+             "resolvers": ["udp://8.8.8.8:53", "udp://1.1.1.1:53", "udp://9.9.9.9:53"]},
+        ]
     if awg and p["awg"].get("public"):
         a = p["awg"]
         entry["protocols"].append({"type": "amneziawg", "port": a["port"], "public_key": a["public"],

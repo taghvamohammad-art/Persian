@@ -1181,6 +1181,15 @@ class NewServerPage(RouterPage):
         self.ip.setLayoutDirection(Qt.LeftToRight)
         self.ip.setPlaceholderText("IP عمومی روتر جدید")
         row("IP عمومی روتر جدید:", self.ip)
+        self.domain = QLineEdit()
+        self.domain.setLayoutDirection(Qt.LeftToRight)
+        self.domain.setPlaceholderText("مثلاً example.com (خالی = بدون CDN و تونل DNS)")
+        self.lbl_domain = row("دامنه (Cloudflare):", self.domain)
+        self.cf_token = QLineEdit()
+        self.cf_token.setLayoutDirection(Qt.LeftToRight)
+        self.cf_token.setEchoMode(QLineEdit.Password)
+        self.cf_token.setPlaceholderText("API Token با اجازه‌ی DNS Edit و Zone Settings Edit")
+        self.lbl_cf = row("توکن Cloudflare:", self.cf_token)
         l2.addLayout(grid)
         orow = QHBoxLayout()
         self.chk_bot = QCheckBox("بات روی سرور قدیم متوقف شود (اگر در دسترس است)")
@@ -1221,12 +1230,17 @@ class NewServerPage(RouterPage):
         self.chk_bot.setVisible(main)
         self.backup.setVisible(not lin)
         self.lbl_backup.setVisible(not lin)
+        for w in (self.domain, self.lbl_domain, self.cf_token, self.lbl_cf):
+            w.setVisible(lin)
         self.btn_cfg.setText("به‌روزرسانی سرورهای اپ و انتشار" if main else "اضافه کردن به سرورهای اپ و انتشار")
 
     def fill_ip(self):
         r = self.chosen(self.target)
         if r:
             self.ip.setText(r["host"])
+            p = st.decrypt_blob(r.get("params")) if r.get("role") == "linux" and r.get("params") else {}
+            self.domain.setText((p or {}).get("domain", ""))
+            self.cf_token.setText((p or {}).get("cf_token", ""))
 
     def fill_backups(self):
         self.backup.clear()
@@ -1273,7 +1287,17 @@ class NewServerPage(RouterPage):
                 % (router_label(tgt), "، ".join(router_label(r) for r in ums))) != QMessageBox.Yes:
             return
         name = re.sub(r"[^A-Za-z0-9_-]", "-", tgt.get("name") or tgt["id"])
-        params = st.decrypt_blob(tgt.get("params"))
+        params = st.decrypt_blob(tgt.get("params")) or {}
+        domain = self.domain.text().strip().lower().rstrip(".")
+        if domain and not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", domain):
+            return self.fail("دامنه درست نیست: %s" % domain)
+        if domain != params.get("domain"):
+            params.pop("domain_info", None)
+        if domain:
+            params["domain"] = domain
+        else:
+            params.pop("domain", None)
+        params["cf_token"] = self.cf_token.text().strip()
 
         def job(log, progress):
             return linux.setup_linux(linux_connector(tgt), [(router_connector(r), r["host"]) for r in ums],

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 )
 
 // Protocol is one entry of a Linux server in the app config (linux.server_entry).
@@ -29,6 +30,15 @@ type Protocol struct {
 	H2        int64  `json:"h2"`
 	H3        int64  `json:"h3"`
 	H4        int64  `json:"h4"`
+	// CDN (vless-xhttp-cdn) and DNS tunnel (vless-dns)
+	Host       string   `json:"host"`
+	Encryption string   `json:"encryption"`
+	IPs        []string `json:"ips"`
+	ECHConfig  string   `json:"ech_config"`
+	ECHDNS     []string `json:"ech_dns"`
+	Domain     string   `json:"domain"`
+	Resolvers  []string `json:"resolvers"`
+	Plain      bool     `json:"plain"` // tests only: straight to the server, no TLS/ECH, no public resolvers
 }
 
 // Server is a Linux server of the app config.
@@ -40,7 +50,49 @@ type Server struct {
 
 // XrayTypes are the protocols the Xray engine serves, in order of preference
 // when they are equally fast.
-var XrayTypes = []string{"vless-reality-vision", "vless-xhttp-reality", "hysteria2", "shadowsocks-2022"}
+var XrayTypes = []string{"vless-reality-vision", "vless-xhttp-reality", "hysteria2", "shadowsocks-2022",
+	"vless-xhttp-cdn", "vless-dns"}
+
+var (
+	resolverMu sync.Mutex
+	resolvers  []string
+)
+
+// SetResolvers gives the phone's own DNS servers (comma separated IPs) to the
+// DNS tunnel; they are tried before the public ones, since in a shutdown
+// only the operator's resolvers may still reach the internet.
+func SetResolvers(csv string) {
+	var out []string
+	for _, a := range strings.Split(csv, ",") {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if ip := net.ParseIP(a); ip != nil {
+			a = "udp://" + net.JoinHostPort(ip.String(), "53")
+		}
+		out = append(out, a)
+	}
+	resolverMu.Lock()
+	resolvers = out
+	resolverMu.Unlock()
+}
+
+func tunnelResolvers(p *Protocol) []string {
+	resolverMu.Lock()
+	out := append([]string{}, resolvers...)
+	resolverMu.Unlock()
+	seen := map[string]bool{}
+	for _, r := range out {
+		seen[r] = true
+	}
+	for _, r := range p.Resolvers {
+		if !seen[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 func parseServer(serverJSON string) (*Server, error) {
 	var s Server
@@ -91,6 +143,44 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 		return map[string]any{"tag": "proxy", "protocol": "shadowsocks",
 			"settings": map[string]any{"servers": []any{map[string]any{"address": s.Host, "port": p.Port,
 				"method": p.Method, "password": p.ServerKey + ":" + SSKey(user, pass)}}}}, nil
+	case "vless-xhttp-cdn":
+		addr, port := p.Host, p.Port
+		if len(p.IPs) > 0 {
+			addr = p.IPs[0] // Cloudflare's address: no DNS lookup that could be tampered with
+		}
+		stream := map[string]any{"network": "xhttp",
+			"xhttpSettings": map[string]any{"path": p.Path, "host": p.Host, "mode": "packet-up"}}
+		if p.Plain {
+			addr = s.Host
+		} else {
+			ech, err := echConfig(p)
+			if err != nil {
+				return nil, err
+			}
+			stream["security"] = "tls"
+			stream["tlsSettings"] = map[string]any{"serverName": p.Host, "fingerprint": "chrome",
+				"alpn": []string{"h2", "http/1.1"}, "echConfigList": ech}
+		}
+		return map[string]any{"tag": "proxy", "protocol": "vless",
+			"settings": map[string]any{"vnext": []any{map[string]any{"address": addr, "port": port,
+				"users": []any{map[string]any{"id": VlessUUID(user, pass), "encryption": p.Encryption}}}}},
+			"streamSettings": stream}, nil
+	case "vless-dns":
+		rs := tunnelResolvers(p)
+		if p.Plain {
+			rs = []string{"udp://" + net.JoinHostPort(s.Host, "53")}
+		}
+		if len(rs) == 0 {
+			return nil, fmt.Errorf("dns tunnel: no resolvers")
+		}
+		return map[string]any{"tag": "proxy", "protocol": "vless",
+			"settings": map[string]any{"vnext": []any{map[string]any{"address": "8.8.8.8", "port": 53,
+				"users": []any{map[string]any{"id": VlessUUID(user, pass), "encryption": p.Encryption}}}}},
+			"streamSettings": map[string]any{"network": "mkcp",
+				"kcpSettings": map[string]any{"mtu": 130, "tti": 200},
+				"finalmask": map[string]any{"udp": []any{map[string]any{"type": "xdns", "settings": map[string]any{
+					"domains":   []any{map[string]any{"names": []string{p.Domain}}},
+					"resolvers": []any{map[string]any{"addrs": rs}}}}}}}}, nil
 	}
 	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
 }

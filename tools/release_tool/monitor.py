@@ -15,7 +15,7 @@ import services as sv
 PROTOCOL_NAMES = {
     "sstp": "SSTP", "l2tp": "L2TP", "ovpn": "OpenVPN", "pptp": "PPTP", "pppoe": "PPPoE",
     "vless-vision": "Reality", "vless-xhttp": "XHTTP", "hy2": "Hysteria2", "ss": "Shadowsocks",
-    "amneziawg": "AmneziaWG",
+    "amneziawg": "AmneziaWG", "vless-cdn": "CDN", "vless-dns": "DNS tunnel",
 }
 
 
@@ -64,7 +64,7 @@ def linux_status(h):
     raw = h.run("cat /var/lib/pv-agent/status.json 2>/dev/null || echo {}")
     st = json.loads(raw or "{}")
     sysinfo = h.run("cat /proc/loadavg; nproc; free -b | awk '/Mem:/{print $2, $7}'; cut -d. -f1 /proc/uptime; "
-                    "for s in xray pv-agent awg-quick@awg0; do echo $s $(systemctl is-active $s 2>/dev/null); done",
+                    "for s in xray pv-agent awg-quick@awg0 nginx; do echo $s $(systemctl is-active $s 2>/dev/null); done",
                     check=False).split("\n")
     load = float(sysinfo[0].split()[0]) if sysinfo and sysinfo[0] else 0.0
     cpus = int(sysinfo[1]) if len(sysinfo) > 1 and sysinfo[1].strip().isdigit() else 1
@@ -76,7 +76,7 @@ def linux_status(h):
         if len(parts) != 2:
             continue
         name = "amneziawg" if parts[0] == "awg-quick@awg0" else parts[0]
-        if name == "amneziawg" and parts[1] == "inactive":
+        if name in ("amneziawg", "nginx") and parts[1] == "inactive":
             continue           # not installed on this server
         services[name] = parts[1]
     online = [{"user": o["user"], "protocol": o["protocol"], "address": "",

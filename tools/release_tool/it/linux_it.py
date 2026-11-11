@@ -138,7 +138,7 @@ def main():
     ip = sh("ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'").strip()
     params, entry = linux.setup_linux(
         connect_linux, [(base.connector("A"), "A"), (base.connector("B"), "B")], "it1", ip,
-        params={"interval": 10}, log=print, linux_ip_seen_by_router=base.SLIRP_HOST, router_addresses=REACH)
+        params={"interval": 10, "domain": "pv-it.example"}, log=print, linux_ip_seen_by_router=base.SLIRP_HOST, router_addresses=REACH)
     print(json.dumps(entry, indent=1))
     problems = []
     for _ in range(12):
@@ -160,6 +160,9 @@ def main():
     for tag in ("vless-vision", "vless-xhttp", "hy2", "ss"):
         if st["by_protocol"].get(tag, 0) < 1:
             problems.append("monitor: no %s user online" % tag)
+    page = sh("curl -s --max-time 10 http://127.0.0.1/", check=False)
+    if "Shop" not in page:
+        problems.append("decoy site not served on port 80: %r" % page[:200])
     if st["services"].get("xray") != "active" or st["services"].get("pv-agent") != "active":
         problems.append("monitor: services %s" % st["services"])
 
@@ -176,11 +179,27 @@ def main():
     step("the app's engine (pvcore) probes every protocol")
     path = tempfile.mktemp(suffix=".json")
     probe_entry = dict(entry, host="127.0.0.1")
+    # no Cloudflare here: the CDN path straight to the server's port 80, the
+    # DNS tunnel with the server itself as the resolver
+    probe_entry["protocols"] = [dict(p_, plain=True, **({"port": 80} if p_["type"] == "vless-xhttp-cdn" else {}))
+                                if p_["type"] in ("vless-xhttp-cdn", "vless-dns") else p_
+                                for p_ in entry["protocols"]]
+    for want in ("vless-xhttp-cdn", "vless-dns"):
+        if not any(p_["type"] == want for p_ in entry["protocols"]):
+            problems.append("no %s in the server entry" % want)
     with open(path, "w") as f:
         json.dump(probe_entry, f)
     out = sh("/tmp/pvprobe -entry %s -user %s -pass %s -timeout 10000" % (path, USER, PASS), check=False)
     print(out)
     res = probe_json(out)
+    # the DNS tunnel is skipped when a faster protocol works: probe it alone
+    tunnel_path = tempfile.mktemp(suffix=".json")
+    with open(tunnel_path, "w") as f:
+        json.dump(dict(probe_entry, protocols=[p_ for p_ in probe_entry["protocols"] if p_["type"] == "vless-dns"]), f)
+    tout = sh("/tmp/pvprobe -entry %s -user %s -pass %s -timeout 10000" % (tunnel_path, USER, PASS), check=False)
+    print(tout)
+    res.update({k: v for k, v in probe_json(tout).items() if k == "vless-dns"})
+    res.setdefault("errors", {}).update(probe_json(tout).get("errors", {}))
     for p_ in entry["protocols"]:
         if not isinstance(res.get(p_["type"]), int) or res[p_["type"]] < 0:
             problems.append("pvcore probe failed for %s: %s" % (p_["type"], res.get("errors", {}).get(p_["type"])))

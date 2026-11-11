@@ -1,11 +1,11 @@
 module persianvpn/mobile
 
-go 1.26.3
+go 1.27
 
 require (
 	github.com/amnezia-vpn/amneziawg-go v1.0.4
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
-	github.com/xtls/xray-core v1.260327.0
+	github.com/xtls/xray-core v1.261109.0
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867
 )
 

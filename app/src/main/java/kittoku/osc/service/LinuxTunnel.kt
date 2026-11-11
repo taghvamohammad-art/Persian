@@ -38,6 +38,8 @@ internal val PROTOCOL_LABELS = mapOf(
     "hysteria2" to "Hysteria2",
     "shadowsocks-2022" to "Shadowsocks",
     "amneziawg" to "AmneziaWG",
+    "vless-xhttp-cdn" to "CDN",
+    "vless-dns" to "DNS",
     "sstp" to "SSTP",
 )
 
@@ -70,6 +72,12 @@ internal class LinuxTunnel(
 
     /** Probes and connects. False when no Linux protocol works right now. */
     internal suspend fun start(exclude: String? = null): Boolean = withContext(Dispatchers.IO) {
+        // the DNS tunnel tries the operator's own resolvers first
+        runCatching {
+            val cm = service.getSystemService(ConnectivityManager::class.java)
+            val dns = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
+            Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
+        }
         val choices = probeAll().filter { "${it.name}/${it.kind}" != exclude }
         for (c in choices) {
             if (closed || !isActive) return@withContext false
