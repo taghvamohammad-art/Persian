@@ -79,7 +79,7 @@
 
     <string name="brand_login_subtitle">با نام کاربری و رمز اشتراک خود وارد شوید</string>
     <string name="brand_hint_connect">برای اتصال بزنید</string>
-    <string name="brand_hint_cancel">برای لغو بزنید</string>
+    <string name="brand_hint_cancel">در حال انتخاب بهترین سرور…\nبرای لغو بزنید</string>
     <string name="brand_hint_disconnect">برای قطع اتصال بزنید</string>
     <string name="brand_days_label">روز باقی‌مانده</string>
     <string name="brand_gb_label">گیگابایت باقی‌مانده</string>
