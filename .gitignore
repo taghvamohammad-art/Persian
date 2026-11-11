@@ -27,3 +27,8 @@ __pycache__/
 # real app config (copy from tools/config.example.json)
 tools/config.json
 /app/libs/*.aar
+windows/pvwin.exe
+windows/wintun.dll
+windows/app_config.signed.json
+windows/config_key.public.txt
+windows/icon-512.png

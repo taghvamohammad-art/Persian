@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
@@ -115,7 +114,7 @@ func startXrayWith(build func(port int) (string, error), kind string, tunFd, mtu
 	defer mu.Unlock()
 	stopLocked()
 	fail := func(err error) error {
-		syscall.Close(tunFd)
+		closeFd(tunFd)
 		return err
 	}
 	port, err := freePort()
@@ -151,12 +150,12 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 	stopLocked()
 	uapi, err := AwgUAPI(serverJSON, user, pass)
 	if err != nil {
-		syscall.Close(tunFd)
+		closeFd(tunFd)
 		return err
 	}
-	tdev, _, err := tun.CreateUnmonitoredTUNFromFD(tunFd)
+	tdev, err := tunFromFd(tunFd)
 	if err != nil {
-		syscall.Close(tunFd)
+		closeFd(tunFd)
 		return fmt.Errorf("awg tun: %w", err)
 	}
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))

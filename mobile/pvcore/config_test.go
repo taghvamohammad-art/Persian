@@ -79,3 +79,16 @@ func TestAwgUAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsConfig(t *testing.T) {
+	choices := `[{"server":` + testServer + `,"kind":"hysteria2"}]`
+	cfg, err := WindowsConfig(choices, "25g00001", "abc123", 10808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"protocol":"tun"`, `"autoSystemRoutingTable":["0.0.0.0/0"]`, `"protocol":"socks"`, `"balancerTag":"best"`} {
+		if !strings.Contains(cfg, want) {
+			t.Error("windows config lacks", want)
+		}
+	}
+}
