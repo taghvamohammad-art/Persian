@@ -1156,12 +1156,13 @@ class ServicesPage(RouterPage):
         if not r:
             return
         token = self.settings.token
+        linux_status = linux.bot_linux_status(self.settings.routers)
 
         def job(log, progress):
             log("دریافت کد بات از GitHub…")
             code = sv.download_bot_code(token)
             with router_connector(r)() as c:
-                sv.install_bot(c, code, None, log=log)
+                sv.install_bot(c, code, {"LINUX_STATUS": linux_status}, log=log)
         self.run(job, lambda _: QMessageBox.information(self, "انجام شد", "کد بات به‌روز شد."))
 
     def bot_install(self):
@@ -1195,7 +1196,7 @@ class ServicesPage(RouterPage):
                 "(Task Scheduler › umbot › End و Disable).\n"
                 "دو بات با یک توکن هم‌زمان کار نمی‌کنند.\n\nمتوقف کرده‌اید؟") != QMessageBox.Yes:
             return
-        token, values = self.settings.token, d.values
+        token, values = self.settings.token, dict(d.values, LINUX_STATUS=linux.bot_linux_status(self.settings.routers))
 
         def job(log, progress):
             log("دریافت کد بات از GitHub…")
@@ -1387,9 +1388,21 @@ class NewServerPage(RouterPage):
                 "بدون توکن ادامه می‌دهید؟") != QMessageBox.Yes:
             return
 
+        others = [r for r in self.settings.routers if r.get("id") != tgt.get("id")]
+
         def job(log, progress):
-            return linux.setup_linux(linux_connector(tgt), [(router_connector(r), r["host"]) for r in ums],
-                                     name, new_ip, params=params, log=log)
+            res = linux.setup_linux(linux_connector(tgt), [(router_connector(r), r["host"]) for r in ums],
+                                    name, new_ip, params=params, log=log)
+            # the bot's "online users" learns about this server
+            value = linux.bot_linux_status(others + [dict(tgt, params=st.encrypt_blob(res[0]))])
+            for r in ums:
+                try:
+                    with router_connector(r)() as c:
+                        if sv.set_bot_env(c, {"LINUX_STATUS": value}, log):
+                            log("✓ بات تلگرام از این سرور خبر دارد (آنلاین‌ها).")
+                except Exception as e:
+                    log("⚠ تنظیم بات روی %s نشد: %s" % (r["host"], str(e).splitlines()[0]))
+            return res
 
         def done(res):
             p, entry = res

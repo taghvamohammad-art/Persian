@@ -478,6 +478,29 @@ def install_bot(r, code, values=None, db=None, overwrite_db=False, log=print):
     log("✓ بات روی روتر اجرا شد")
 
 
+def set_bot_env(r, updates, log=print):
+    """Change some settings of an installed bot and restart it. False when
+    the bot is not on this router."""
+    text = file_text(r, "umbot/.env")
+    if text is None or count(r, "/container", "comment=%s" % q(UMBOT["comment"])) == 0:
+        return False
+    lines, done = text.replace("\r", "").split("\n"), set()
+    for i, line in enumerate(lines):
+        k = line.split("=", 1)[0].strip()
+        if "=" in line and k in updates:
+            lines[i] = "%s=%s" % (k, updates[k])
+            done.add(k)
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines += ["%s=%s" % (k, v) for k, v in updates.items() if k not in done]
+    new = "\n".join(lines) + "\n"
+    if new == text:
+        return True
+    r.put("umbot/.env", new.encode())
+    restart(r, UMBOT, log)
+    return True
+
+
 def bot_status(r):
     st = container_status(r, UMBOT)
     log = file_text(r, "umbot/data/umbot.log") or ""

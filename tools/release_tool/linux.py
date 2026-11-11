@@ -256,22 +256,16 @@ footer{text-align:center;color:#888;font-size:13px;margin:40px 0}
 
 
 def install_web(h, p, log):
-    """nginx on port 80: the decoy shop for everyone, the secret path to Xray.
-    Cloudflare (SSL mode Flexible) reaches the server here."""
+    """nginx on port 80: the decoy shop for everyone; with a domain the secret
+    path to Xray (Cloudflare, SSL mode Flexible, reaches the server here);
+    the status page for the bot, only for the routers' addresses."""
     log("نصب وب‌سرور و سایت ظاهری…")
     h.run("export DEBIAN_FRONTEND=noninteractive; command -v nginx >/dev/null || "
           "apt-get install -y -q --no-install-recommends nginx", timeout=900)
-    h.run("mkdir -p /var/www/pv")
-    h.write("/var/www/pv/index.html", DECOY_HTML % {"name": p["domain"].split(".")[0].capitalize() + " Shop"})
-    h.write("/etc/nginx/sites-available/pv", """server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    root /var/www/pv;
-    index index.html;
-    server_tokens off;
-    access_log off;
-
+    h.run("mkdir -p /var/www/pv /var/lib/pv-agent && chmod 755 /var/lib/pv-agent")
+    shop = p["domain"].split(".")[0].capitalize() + " Shop" if p.get("domain") else "Online Shop"
+    h.write("/var/www/pv/index.html", DECOY_HTML % {"name": shop})
+    cdn = """
     location %(path)s {
         proxy_pass http://127.0.0.1:%(port)d;
         proxy_http_version 1.1;
@@ -282,12 +276,30 @@ def install_web(h, p, log):
         proxy_send_timeout 1h;
         client_max_body_size 0;
     }
+""" % {"path": p["cdn_path"], "port": p["cdn_local_port"]} if p.get("domain") else ""
+    # online users for the Telegram bot on the routers (and nobody else)
+    allow = "".join("        allow %s;\n" % a for a in ["127.0.0.1"] + list(p.get("status_allow") or []))
+    h.write("/etc/nginx/sites-available/pv", """server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    root /var/www/pv;
+    index index.html;
+    server_tokens off;
+    access_log off;
+%(cdn)s
+    location = /pvs/%(token)s {
+%(allow)s        deny all;
+        default_type application/json;
+        add_header Cache-Control no-store;
+        alias /var/lib/pv-agent/status.json;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;
     }
 }
-""" % {"path": p["cdn_path"], "port": p["cdn_local_port"]})
+""" % {"cdn": cdn, "token": p["status_token"], "allow": allow})
     h.run("rm -f /etc/nginx/sites-enabled/default; ln -sf /etc/nginx/sites-available/pv /etc/nginx/sites-enabled/pv; "
           "nginx -t 2>&1 && systemctl enable nginx >/dev/null 2>&1; systemctl restart nginx")
 
@@ -501,6 +513,7 @@ def new_params(old=None):
     p.setdefault("ss_server_key", base64.b64encode(secrets.token_bytes(16)).decode())
     p.setdefault("awg", awg_params())
     p.setdefault("cdn_path", "/" + secrets.token_urlsafe(10))
+    p.setdefault("status_token", secrets.token_urlsafe(18))
     p.setdefault("cdn_local_port", 10086)
     p.setdefault("radius_secret", secrets.token_urlsafe(24))
     p.setdefault("agent_password", secrets.token_urlsafe(24))
@@ -588,6 +601,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
     p = new_params(params)
     seen = linux_ip_seen_by_router or public_ip
     routers_cfg, radius_servers = [], []
+    allow = set()            # who may read the status page (the bot runs on the routers)
     for i, (connect, host) in enumerate(um_routers):
         log("ثبت سرور لینوکس روی یوزر منیجر %d (%s)…" % (i + 1, host))
         r = connect()
@@ -600,6 +614,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
                 r.run("/user-manager set enabled=yes")
             port, fp = register_on_router(r, seen, name, p, log)
             public = public_address(r, host)
+            allow.update(a for a in (public, host) if re.fullmatch(r"[\d.]+", a or ""))
         finally:
             r.close()
         reach = (router_addresses or {}).get(host, {"host": public})
@@ -619,11 +634,13 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
             p["reality_private"], p["reality_public"] = x25519(h)
         h.run("mkdir -p %s /var/log/xray" % XRAY_CONF_DIR)
         p["hy2_pin"] = make_cert(h)
+        p["status_allow"] = sorted(allow)
         if p.get("domain"):
             if not p.get("vless_dec"):
                 p["vless_dec"], p["vless_enc"] = vless_encryption(h)
             free_port_53(h)
-            install_web(h, p, log)
+        install_web(h, p, log)
+        if p.get("domain"):
             cloudflare_setup(h, p, public_ip, log)
         h.write(XRAY_CONF_DIR + "/template.json", json.dumps(xray_template(p), indent=1))
         h.write(XRAY_CONF_DIR + "/config.json", json.dumps(xray_template(p), indent=1))
@@ -662,7 +679,7 @@ WantedBy=multi-user.target
         h.run("systemctl daemon-reload && systemctl enable pv-agent >/dev/null 2>&1 && systemctl restart pv-agent")
         if p.get("domain"):
             p["domain_info"] = domain_lookup(h, p["domain"])
-        names = ("xray", "pv-agent") + (("awg-quick@awg0",) if awg else ()) + (("nginx",) if p.get("domain") else ())
+        names = ("xray", "pv-agent", "nginx") + (("awg-quick@awg0",) if awg else ())
         # pv-agent restarts Xray with the users as it starts: give it a moment
         for _ in range(15):
             status = {s: h.run("systemctl is-active %s" % s, check=False).strip() for s in names}
@@ -707,3 +724,22 @@ def server_entry(name, host, p, awg=True):
                                    "jc": a["jc"], "jmin": a["jmin"], "jmax": a["jmax"], "s1": a["s1"],
                                    "s2": a["s2"], "h1": a["h1"], "h2": a["h2"], "h3": a["h3"], "h4": a["h4"]})
     return entry
+
+
+def status_url(router):
+    """The bot's view of a Linux server's online users (settings router entry)."""
+    import settings as st
+    p = st.decrypt_blob(router.get("params")) if router.get("params") else {}
+    tok = (p or {}).get("status_token")
+    return "http://%s/pvs/%s" % (router["host"], tok) if tok else None
+
+
+def bot_linux_status(routers):
+    """LINUX_STATUS for the bot's settings."""
+    out = []
+    for r in routers:
+        if r.get("role") == "linux":
+            u = status_url(r)
+            if u:
+                out.append("%s|%s" % (r.get("name") or r["host"], u))
+    return ";".join(out)

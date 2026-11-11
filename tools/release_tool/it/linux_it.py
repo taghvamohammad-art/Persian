@@ -160,6 +160,14 @@ def main():
     for tag in ("vless-vision", "vless-xhttp", "hy2", "ss"):
         if st["by_protocol"].get(tag, 0) < 1:
             problems.append("monitor: no %s user online" % tag)
+    stat = sh("curl -s --max-time 10 http://127.0.0.1/pvs/%s" % params["status_token"], check=False)
+    try:
+        json.loads(stat)["online"]
+    except (ValueError, KeyError):
+        problems.append("status page for the bot: %r" % stat[:200])
+    if sh("curl -s -o /dev/null -w '%%{http_code}' --max-time 10 http://127.0.0.1/pvs/wrong", check=False).strip() == "200" \
+            and "online" in sh("curl -s --max-time 10 http://127.0.0.1/pvs/wrong", check=False):
+        problems.append("status page answers a wrong token")
     page = sh("curl -s --max-time 10 http://127.0.0.1/", check=False)
     if "Shop" not in page:
         problems.append("decoy site not served on port 80: %r" % page[:200])
