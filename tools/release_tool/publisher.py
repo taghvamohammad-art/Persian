@@ -133,7 +133,62 @@ def read_build(path):
 
 # ------------------------------------------------------------------ signing
 
-def prepare_release(ws, build, version_code, version_name, notes, public_repo=None):
+APK_HISTORY = 3          # older versions kept to make patches from
+PATCH_MAX_SHARE = 0.7    # a patch bigger than this share of the APK is not worth it
+
+
+def apk_history(ws):
+    """[(version_code, path)] of earlier APKs kept in the workspace, newest first."""
+    d = ws.path("apks")
+    out = []
+    if os.path.isdir(d):
+        for n in os.listdir(d):
+            m = re.fullmatch(r"app-(\d+)\.apk", n)
+            if m:
+                out.append((int(m.group(1)), os.path.join(d, n)))
+    if os.path.isfile(ws.path("app.apk")):
+        out.append((-1, ws.path("app.apk")))          # the current one, version unknown
+    out.sort(reverse=True)
+    return out
+
+
+def make_patches(ws, build, log=print):
+    """{from_sha256: patch bytes} from the kept older APKs to this build."""
+    import apkdelta
+    out = {}
+    for _, path in apk_history(ws):
+        try:
+            with open(path, "rb") as f:
+                old = f.read()
+        except OSError:
+            continue
+        old_sha = hashlib.sha256(old).hexdigest()
+        if old_sha == build.sha256 or old_sha in out:
+            continue
+        try:
+            patch = apkdelta.make_patch(old, build.apk)
+        except (ValueError, zipfile.BadZipFile) as e:
+            log("⚠ وصله از %s ساخته نشد: %s" % (os.path.basename(path), e))
+            continue
+        if len(patch) <= PATCH_MAX_SHARE * len(build.apk):
+            out[old_sha] = patch
+        if len(out) >= APK_HISTORY:
+            break
+    return out
+
+
+def patch_name(from_sha):
+    return from_sha[:16] + ".pvdl"
+
+
+def patch_entries(cfg, patches):
+    """app_update.patches of the config (the bytes themselves go to the router)."""
+    bases = [u.replace("/v1/config", "/v1/patch/") for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
+    return [{"from_sha256": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b),
+             "urls": [base + patch_name(f) for base in bases]} for f, b in patches.items()]
+
+
+def prepare_release(ws, build, version_code, version_name, notes, public_repo=None, patches=None):
     """Returns (new_config_dict, envelope_text). Nothing is written yet."""
     cfg = ws.load_config()
     if public_repo:
@@ -158,6 +213,8 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
         "size": len(build.apk),
         "notes": notes.strip(),
     }
+    if patches:
+        cfg["app_update"]["patches"] = patch_entries(cfg, patches)
     cfg["version"] = int(cfg.get("version", 0)) + 1
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
@@ -174,7 +231,21 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     return cfg, envelope
 
 
-def prepare_config_only(ws, public_repo=None):
+def local_patches(ws, upd):
+    """{from_sha256: bytes} of the config's patches still in the workspace."""
+    out = {}
+    for p in upd.get("patches") or []:
+        try:
+            with open(os.path.join(ws.path("patches"), patch_name(p["from_sha256"])), "rb") as f:
+                b = f.read()
+        except OSError:
+            continue
+        if hashlib.sha256(b).hexdigest() == p.get("sha256"):
+            out[p["from_sha256"]] = b
+    return out
+
+
+def prepare_config_only(ws, public_repo=None, with_patches=True):
     """New signed config with the same app version: for a server change."""
     cfg = ws.load_config()
     if public_repo:
@@ -187,6 +258,12 @@ def prepare_config_only(ws, public_repo=None):
         # the APK is served by the router in config_urls[0]; keep it pointing there
         upd["urls"] = [u.replace("/v1/config", "/v1/app.apk") for u in cfg.get("config_urls", [])
                        if u.endswith("/v1/config")]
+        if upd.get("patches"):
+            have = local_patches(ws, upd)
+            if have and with_patches:
+                upd["patches"] = patch_entries(cfg, have)
+            else:
+                upd.pop("patches")
     cfg["version"] = int(cfg.get("version", 0)) + 1
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
@@ -202,8 +279,12 @@ def prepare_config_only(ws, public_repo=None):
     return cfg, envelope
 
 
-def save_local(ws, cfg, envelope, build):
+def save_local(ws, cfg, envelope, build, patches=None):
     """Called only after the router accepted the release."""
+    try:
+        prev = int(ws.load_config().get("app_update", {}).get("version_code", 0))
+    except (ReleaseError, OSError, ValueError):
+        prev = 0
     tmp = ws.path("config.json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -212,8 +293,26 @@ def save_local(ws, cfg, envelope, build):
     with open(ws.path(sc.SIGNED_FILE), "w", encoding="utf-8") as f:
         f.write(envelope)
     if build is not None:
+        os.makedirs(ws.path("apks"), exist_ok=True)
+        if os.path.isfile(ws.path("app.apk")):
+            # the previous version stays to make the next patches from
+            name = "app-%d.apk" % prev
+            os.replace(ws.path("app.apk"), os.path.join(ws.path("apks"), name))
         with open(ws.path("app.apk"), "wb") as f:
             f.write(build.apk)
+        for _, path in apk_history(ws)[APK_HISTORY + 1:]:
+            if os.path.basename(path) != "app.apk":
+                os.remove(path)
+    if patches is not None:
+        d = ws.path("patches")
+        os.makedirs(d, exist_ok=True)
+        keep = {patch_name(f) for f in patches}
+        for n in os.listdir(d):
+            if n not in keep:
+                os.remove(os.path.join(d, n))
+        for f, b in patches.items():
+            with open(os.path.join(d, patch_name(f)), "wb") as out:
+                out.write(b)
 
 
 # ------------------------------------------------------------------ router
@@ -288,7 +387,9 @@ class RouterClient:
             conn.close()
         if resp.status != 200:
             err = data.get("error", "HTTP %d" % resp.status)
-            raise ReleaseError(ROUTER_ERRORS.get(err, "روتر خطا داد: %s" % err))
+            ex = ReleaseError(ROUTER_ERRORS.get(err, "روتر خطا داد: %s" % err))
+            ex.code = err
+            raise ex
         return data
 
     def publish(self, envelope, apk, progress=None):
@@ -400,17 +501,32 @@ def release(ws, build, version_code, version_name, notes,
     release, so a failed attempt can simply be repeated.
     """
     ws.check()
+    patches = make_patches(ws, build, log)
+    if patches:
+        log("وصله‌های به‌روزرسانی سبک: %s" % "، ".join(
+            "%.1f MB" % (len(b) / 1048576) for b in patches.values()))
     log("امضای تنظیمات نسخه‌ی %d…" % version_code)
     cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
-                                    public_github.repo if public_github else None)
+                                    public_github.repo if public_github else None, patches)
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
 
     if send_router:
         log("ارسال به روتر…")
-        body = RouterClient(cfg).publish(envelope, build.apk, progress)
+        try:
+            body = RouterClient(cfg).publish(envelope, build.apk + b"".join(patches.values()), progress)
+        except ReleaseError as e:
+            if not patches or getattr(e, "code", "") != "apk_size_mismatch":
+                raise
+            # umstatus on the router is older than patches: plain release
+            log("⚠ سرویس umstatus روتر قدیمی است و وصله نمی‌پذیرد (از تب سرویس‌ها به‌روزش کنید)؛ "
+                "این نسخه بدون وصله منتشر می‌شود.")
+            patches = {}
+            cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
+                                            public_github.repo if public_github else None)
+            body = RouterClient(cfg).publish(envelope, build.apk, progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
-    save_local(ws, cfg, envelope, build)
+    save_local(ws, cfg, envelope, build, patches)
     log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
 
     if github is not None:
@@ -447,15 +563,27 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
 
     if send_router:
-        apk = b""
-        upd = cfg.get("app_update")
-        if upd and os.path.isfile(ws.path("app.apk")):
+        def body_for(cfg):
+            upd = cfg.get("app_update")
+            if not upd or not os.path.isfile(ws.path("app.apk")):
+                return b""
             with open(ws.path("app.apk"), "rb") as f:
                 apk = f.read()
             if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
-                apk = b""      # stale local copy: let the router use its own
+                return b""      # stale local copy: let the router use its own
+            have = local_patches(ws, upd)
+            return apk + b"".join(have[p["from_sha256"]] for p in upd.get("patches") or [])
         log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
-        body = RouterClient(cfg).publish(envelope, apk, progress)
+        try:
+            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
+        except ReleaseError as e:
+            if not (cfg.get("app_update") or {}).get("patches") or \
+                    getattr(e, "code", "") not in ("apk_size_mismatch", "apk_required"):
+                raise
+            log("⚠ روتر وصله‌های به‌روزرسانی را نمی‌پذیرد یا ندارد؛ بدون وصله منتشر می‌شود.")
+            cfg, envelope = prepare_config_only(ws, public_github.repo if public_github else None,
+                                                with_patches=False)
+            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
     save_local(ws, cfg, envelope, None)

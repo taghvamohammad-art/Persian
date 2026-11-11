@@ -37,7 +37,7 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
           gomobile init
-          gomobile bind -v -target=android/arm64,android/arm -androidapi 21 -ldflags="-s -w -checklinkname=0" \
+          gomobile bind -v -target=android/arm64,android/arm -androidapi 21 -trimpath -ldflags="-s -w -checklinkname=0 -buildid=" \
             -javapkg=ir.persianvpn -o pvcore.aar ./pvcore
           ls -la pvcore.aar
 

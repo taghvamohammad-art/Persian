@@ -319,12 +319,15 @@ class Publish(unittest.TestCase):
         self.pub = u.Publisher(self.cfg)
         self.apk = b"PK" + os.urandom(200000)
 
-    def envelope(self, version, apk=None, key=None, tamper=False):
+    def envelope(self, version, apk=None, key=None, tamper=False, patches=None):
         import hashlib
         cfg = {"version": version, "servers": [{"host": "h", "port": 443}]}
         if apk is not None:
             cfg["app_update"] = {"version_code": version, "urls": ["https://h/v1/app.apk"],
                                  "sha256": hashlib.sha256(apk).hexdigest(), "size": len(apk)}
+            if patches:
+                cfg["app_update"]["patches"] = [{"from_sha256": f, "sha256": hashlib.sha256(b).hexdigest(),
+                                                 "size": len(b), "urls": []} for f, b in patches.items()]
         payload = json.dumps(cfg).encode()
         sig = self.sc.sign(key or self.key, payload)
         if tamper:
@@ -370,6 +373,23 @@ class Publish(unittest.TestCase):
             self.assertEqual(f.read(), self.apk)           # untouched
         self.assertEqual(self.pub._current()["version"], 2)
         self.assertFalse(os.path.exists(self.cfg["app_apk_file"] + ".part"))
+
+    def test_patches_stored_served_and_pruned(self):
+        import os
+        p1, p2 = {"a" * 64: b"patch-one"}, {"b" * 64: b"patch-two!"}
+        b64, _ = self.envelope(2, self.apk, patches=p1)
+        self.assertEqual(self.send(b64, self.apk)[1]["error"], "apk_size_mismatch")   # patch missing
+        self.assertEqual(self.send(b64, self.apk + b"patch-one")[0], 200)
+        pdir = self.pub.patch_dir()
+        with open(os.path.join(pdir, "a" * 16 + ".pvdl"), "rb") as f:
+            self.assertEqual(f.read(), b"patch-one")
+        # config-only with the same patches: nothing to upload
+        self.assertEqual(self.send(self.envelope(3, self.apk, patches=p1)[0], b"")[0], 200)
+        # a patch the router does not have: refused without upload
+        self.assertEqual(self.send(self.envelope(4, self.apk, patches=p2)[0], b"")[1]["error"], "apk_required")
+        newer = b"PK" + os.urandom(1000)
+        self.assertEqual(self.send(self.envelope(4, newer, patches=p2)[0], newer + b"patch-two!")[0], 200)
+        self.assertEqual(sorted(os.listdir(pdir)), ["b" * 16 + ".pvdl"])
 
     def test_size_mismatch_and_config_only(self):
         b64, _ = self.envelope(2, self.apk)

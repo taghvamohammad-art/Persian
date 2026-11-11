@@ -189,9 +189,14 @@ def main():
             problems.append("no %s in the server entry" % want)
     with open(path, "w") as f:
         json.dump(probe_entry, f)
-    out = sh("/tmp/pvprobe -entry %s -user %s -pass %s -timeout 10000" % (path, USER, PASS), check=False)
+    out = sh("/tmp/pvprobe -pool -entry %s -user %s -pass %s -timeout 10000" % (path, USER, PASS), check=False)
     print(out)
     res = probe_json(out)
+    pool_line = next((l for l in out.splitlines() if l.startswith("pool:")), "")
+    import re as _re
+    nums = [int(x) for x in _re.findall(r"(-?\d+) ", pool_line + " ")[:2]]
+    if len(nums) < 2 or min(nums) < 0:
+        problems.append("pvcore pool (all protocols, fastest picked) failed: %s" % pool_line)
     # the DNS tunnel is skipped when a faster protocol works: probe it alone
     tunnel_path = tempfile.mktemp(suffix=".json")
     with open(tunnel_path, "w") as f:

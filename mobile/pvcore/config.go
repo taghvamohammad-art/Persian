@@ -187,6 +187,19 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
 }
 
+func baseConfig(socksPort int, outs []any, rules []any) map[string]any {
+	return map[string]any{
+		"log": map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
+			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
+			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
+		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"}),
+		"routing": map[string]any{"domainStrategy": "AsIs", "rules": append([]any{
+			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
+				"outboundTag": "direct"}}, rules...)},
+	}
+}
+
 // XrayConfig is the client config for one protocol of a server, with a SOCKS
 // inbound on 127.0.0.1:socksPort that the TUN is forwarded to.
 func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, error) {
@@ -202,16 +215,48 @@ func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, err
 	if err != nil {
 		return "", err
 	}
-	cfg := map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
-		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
-			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
-			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
-		"outbounds": []any{out, map[string]any{"tag": "direct", "protocol": "freedom"}},
-		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{
-			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
-				"outboundTag": "direct"}}},
+	b, err := json.Marshal(baseConfig(socksPort, []any{out}, nil))
+	return string(b), err
+}
+
+type poolChoice struct {
+	Server json.RawMessage `json:"server"`
+	Kind   string          `json:"kind"`
+}
+
+// PoolConfig: every choice as its own outbound, the fastest working one
+// picked continuously (observatory + leastPing balancer); the first choice
+// is used until the first measurement is in.
+func PoolConfig(choicesJSON, user, pass string, socksPort int) (string, error) {
+	var choices []poolChoice
+	if err := json.Unmarshal([]byte(choicesJSON), &choices); err != nil {
+		return "", fmt.Errorf("pool: %w", err)
 	}
+	var outs []any
+	var errs []string
+	for _, c := range choices {
+		s, err := parseServer(string(c.Server))
+		if err == nil {
+			var p *Protocol
+			if p, err = s.protocol(c.Kind); err == nil {
+				var out map[string]any
+				if out, err = outbound(s, p, user, pass); err == nil {
+					out["tag"] = fmt.Sprintf("p-%d", len(outs))
+					outs = append(outs, out)
+					continue
+				}
+			}
+		}
+		errs = append(errs, c.Kind+": "+err.Error())
+	}
+	if len(outs) == 0 {
+		return "", fmt.Errorf("pool: nothing usable (%s)", strings.Join(errs, "; "))
+	}
+	cfg := baseConfig(socksPort, outs, []any{map[string]any{"network": "tcp,udp", "balancerTag": "best"}})
+	cfg["observatory"] = map[string]any{"subjectSelector": []string{"p-"}, "probeUrl": ProbeURL,
+		"probeInterval": "1m", "enableConcurrency": true}
+	cfg["routing"].(map[string]any)["balancers"] = []any{map[string]any{"tag": "best", "selector": []string{"p-"},
+		"strategy": map[string]any{"type": "leastPing"}, "fallbackTag": "p-0"}}
 	b, err := json.Marshal(cfg)
 	return string(b), err
 }

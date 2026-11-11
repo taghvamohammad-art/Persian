@@ -54,6 +54,16 @@ internal data class AppUpdate(
     val sha256: String,
     val size: Long,
     val notes: String = "",
+    // small updates: rebuild the new APK from the installed one
+    val patches: List<ApkPatch> = emptyList(),
+)
+
+@Serializable
+internal data class ApkPatch(
+    @SerialName("from_sha256") val fromSha256: String,
+    val sha256: String,
+    val size: Long,
+    val urls: List<String> = emptyList(),
 )
 
 @Serializable

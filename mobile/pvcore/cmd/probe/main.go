@@ -14,6 +14,7 @@ func main() {
 	user := flag.String("user", "", "username")
 	pass := flag.String("pass", "", "password")
 	timeout := flag.Int("timeout", 8000, "milliseconds")
+	pool := flag.Bool("pool", false, "also run all Xray protocols together, as the connected app does")
 	flag.Parse()
 	b, err := os.ReadFile(*entry)
 	if err != nil {
@@ -23,4 +24,7 @@ func main() {
 	res := pvcore.Probe(string(b), *user, *pass, *timeout)
 	fmt.Println(res)
 	fmt.Println("best:", pvcore.Best(res))
+	if *pool {
+		fmt.Println(pvcore.ProbePool(string(b), *user, *pass, *timeout))
+	}
 }

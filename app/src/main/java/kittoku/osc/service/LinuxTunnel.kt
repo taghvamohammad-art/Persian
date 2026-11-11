@@ -58,7 +58,8 @@ internal class LinuxTunnel(
     private val prefs: SharedPreferences,
     private val servers: List<String>,
 ) {
-    private data class Choice(val server: String, val name: String, val kind: String, val ms: Long)
+    private data class Choice(val server: String, val name: String, val kind: String, val ms: Long,
+                              val members: List<Choice> = emptyList())
 
     @Volatile private var closed = false
     private var watchdog: Job? = null
@@ -78,7 +79,7 @@ internal class LinuxTunnel(
             val dns = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
             Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
         }
-        val choices = probeAll().filter { "${it.name}/${it.kind}" != exclude }
+        val choices = plan(probeAll()).filter { "${it.name}/${it.kind}" != exclude }
         for (c in choices) {
             if (closed || !isActive) return@withContext false
             if (connect(c)) return@withContext true
@@ -103,6 +104,29 @@ internal class LinuxTunnel(
                 }.toList()
             }
         }.awaitAll().flatten().sortedBy { it.ms }
+    }
+
+    /**
+     * The Xray protocols that work go together into one "pool": Xray keeps
+     * measuring them and moves new connections to the fastest, so a slow or
+     * blocked protocol is left without the tunnel going down. AmneziaWG has
+     * its own tunnel and is used when it is clearly faster, or when nothing
+     * else works; the DNS tunnel only as the last resort.
+     */
+    private fun plan(all: List<Choice>): List<Choice> {
+        val members = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
+        val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
+        val awg = all.firstOrNull { it.kind == "amneziawg" }
+        val out = mutableListOf<Choice>()
+        if (pool != null && (awg == null || pool.ms <= awg.ms * 3 / 2)) {
+            out += pool
+            awg?.let { out += it }
+        } else {
+            awg?.let { out += it }
+            pool?.let { out += it }
+        }
+        out += all.filter { it.kind == "vless-dns" }
+        return out
     }
 
     private suspend fun connect(c: Choice): Boolean {
@@ -143,8 +167,17 @@ internal class LinuxTunnel(
                     android.os.ParcelFileDescriptor.adoptFd(fd.toInt()).close()
                     return false
                 }
-                if (awg) Pvcore.startAwg(c.server, user, pass, fd)
-                else Pvcore.startXray(c.server, c.kind, user, pass, fd, XRAY_MTU.toLong())
+                when {
+                    awg -> Pvcore.startAwg(c.server, user, pass, fd)
+                    c.kind == "pool" -> {
+                        val list = org.json.JSONArray()
+                        c.members.forEach {
+                            list.put(JSONObject().put("server", JSONObject(it.server)).put("kind", it.kind))
+                        }
+                        Pvcore.startXrayPool(list.toString(), user, pass, fd, XRAY_MTU.toLong())
+                    }
+                    else -> Pvcore.startXray(c.server, c.kind, user, pass, fd, XRAY_MTU.toLong())
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "start ${c.kind}: $e")
@@ -158,12 +191,14 @@ internal class LinuxTunnel(
 
     private suspend fun onConnected(c: Choice) {
         SessionTraffic.authFailures = 0
-        SessionTraffic.protocol = PROTOCOL_LABELS[c.kind] ?: c.kind
+        val kind = c.members.firstOrNull()?.kind ?: c.kind
+        SessionTraffic.protocol = PROTOCOL_LABELS[kind] ?: kind
         setStringPrefValue("connected", OscPrefKey.HOME_STATUS, prefs)   // only "connected or not"
         service.cancelNotification(NOTIFICATION_ERROR_ID)
         service.cancelNotification(NOTIFICATION_RECONNECT_ID)
         BrandSession.clearError(prefs)
-        service.logWriter?.report("connected: ${c.name}/${c.kind} (${c.ms} ms)")
+        service.logWriter?.report("connected: ${c.name}/${c.kind} (${c.ms} ms)" +
+            if (c.members.isEmpty()) "" else " " + c.members.joinToString(",") { "${it.name}/${it.kind}" })
 
         startTrafficCounter()
         startWatchdog()

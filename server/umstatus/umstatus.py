@@ -464,6 +464,9 @@ class Publisher:
         except (OSError, ValueError, KeyError):
             return None
 
+    def patch_dir(self):
+        return self.cfg.get("app_patch_dir") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "patches")
+
     def publish(self, envelope_b64, length, read, dry_run=False):
         """Returns (http_status, body). `read(n)` reads n body bytes.
         dry_run: check signature and version only (the release tool asks
@@ -502,35 +505,61 @@ class Publisher:
             upd = new.get("app_update")
             apk_path = self.cfg["app_apk_file"]
             part = apk_path + ".part"
+            pdir = self.patch_dir()
+            patches = []
+            if upd:
+                try:
+                    patches = [(str(p["from_sha256"]).lower(), int(p["size"]), str(p["sha256"]).lower())
+                               for p in upd.get("patches") or []]
+                except (KeyError, TypeError, ValueError):
+                    return 400, {"ok": False, "error": "bad_config"}
+                if any(not re.fullmatch(r"[0-9a-f]{64}", f) for f, _, _ in patches):
+                    return 400, {"ok": False, "error": "bad_config"}
             if upd:
                 size, want = int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()
                 if length == 0:
-                    # config-only release: the APK on the router must already match
+                    # config-only release: the APK (and patches) on the router must already match
                     if not (os.path.exists(apk_path) and os.path.getsize(apk_path) == size
                             and _sha256_file(apk_path) == want):
                         return 400, {"ok": False, "error": "apk_required"}
+                    for f, psize, psha in patches:
+                        pp = os.path.join(pdir, patch_name(f))
+                        if not (os.path.exists(pp) and os.path.getsize(pp) == psize and _sha256_file(pp) == psha):
+                            return 400, {"ok": False, "error": "apk_required"}
                 else:
-                    if length != size or size > self.cfg["max_apk_bytes"]:
+                    if length != size + sum(p[1] for p in patches) or size > self.cfg["max_apk_bytes"]:
                         return 400, {"ok": False, "error": "apk_size_mismatch"}
                     import hashlib
-                    h, left = hashlib.sha256(), length
-                    with open(part, "wb") as f:
-                        while left > 0:
-                            chunk = read(min(64 * 1024, left))
-                            if not chunk:
-                                break
-                            h.update(chunk)
-                            f.write(chunk)
-                            left -= len(chunk)
-                    if left != 0 or h.hexdigest() != want:
-                        os.remove(part)
-                        return 400, {"ok": False, "error": "apk_mismatch"}
+                    os.makedirs(pdir, exist_ok=True)
+                    parts = [(part, size, want)] + [(os.path.join(pdir, patch_name(f) + ".part"), ps, psha)
+                                                    for f, ps, psha in patches]
+                    for path, want_size, want_sha in parts:
+                        h, left = hashlib.sha256(), want_size
+                        with open(path, "wb") as f:
+                            while left > 0:
+                                chunk = read(min(64 * 1024, left))
+                                if not chunk:
+                                    break
+                                h.update(chunk)
+                                f.write(chunk)
+                                left -= len(chunk)
+                        if left != 0 or h.hexdigest() != want_sha:
+                            for p_, _, _ in parts:
+                                if os.path.exists(p_):
+                                    os.remove(p_)
+                            return 400, {"ok": False, "error": "apk_mismatch"}
             elif length != 0:
                 return 400, {"ok": False, "error": "unexpected_apk"}
 
-            # both files are swapped in only after everything checked out
+            # all files are swapped in only after everything checked out
             if upd and length:
                 os.replace(part, apk_path)
+                keep = {patch_name(f) for f, _, _ in patches}
+                for n in os.listdir(pdir):
+                    if n.endswith(".part") and n[:-5] in keep:
+                        os.replace(os.path.join(pdir, n), os.path.join(pdir, n[:-5]))
+                    elif n not in keep:
+                        os.remove(os.path.join(pdir, n))
             tmp = self.cfg["app_config_file"] + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(envelope_text)
@@ -540,6 +569,10 @@ class Publisher:
             return 200, {"ok": True, "version": version}
         finally:
             self.lock.release()
+
+
+def patch_name(from_sha):
+    return from_sha[:16] + ".pvdl"
 
 
 # ---------------------------------------------------------------- guards
@@ -665,6 +698,29 @@ def make_handler(service):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(data)
+                return
+            m = re.fullmatch(r"/v1/patch/([0-9a-f]{16}\.pvdl)", self.path)
+            if m:
+                path = os.path.join(service.publisher.patch_dir(), m.group(1))
+                try:
+                    f = open(path, "rb")
+                except OSError:
+                    return self._send(404, {"ok": False, "error": "no_patch"})
+                with f:
+                    size = os.fstat(f.fileno()).st_size
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    try:
+                        while True:
+                            chunk = f.read(64 * 1024)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+                        pass
                 return
             if self.path == "/v1/app.apk":
                 # The SHA-256 of this file is in the signed config; the app

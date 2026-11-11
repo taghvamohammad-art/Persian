@@ -94,6 +94,23 @@ func Running() string {
 // engine's connections to the server go out directly.
 // The descriptor belongs to the engine: it is closed on failure too.
 func StartXray(serverJSON, kind, user, pass string, tunFd, mtu int) error {
+	return startXrayWith(func(port int) (string, error) {
+		return XrayConfig(serverJSON, kind, user, pass, port)
+	}, kind, tunFd, mtu)
+}
+
+// StartXrayPool runs several protocols (of one or more servers) at once:
+// Xray measures them every minute and sends new connections over the
+// fastest working one, so a slower or blocked protocol is left without the
+// tunnel ever going down. choicesJSON: [{"server": {...}, "kind": "..."}],
+// best first.
+func StartXrayPool(choicesJSON, user, pass string, tunFd, mtu int) error {
+	return startXrayWith(func(port int) (string, error) {
+		return PoolConfig(choicesJSON, user, pass, port)
+	}, "pool", tunFd, mtu)
+}
+
+func startXrayWith(build func(port int) (string, error), kind string, tunFd, mtu int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	stopLocked()
@@ -105,7 +122,7 @@ func StartXray(serverJSON, kind, user, pass string, tunFd, mtu int) error {
 	if err != nil {
 		return fail(err)
 	}
-	cfg, err := XrayConfig(serverJSON, kind, user, pass, port)
+	cfg, err := build(port)
 	if err != nil {
 		return fail(err)
 	}
@@ -228,6 +245,41 @@ func probeXray(serverJSON, kind, user, pass string, timeout time.Duration) (int,
 	}
 	defer inst.Close()
 	return getThrough(port, timeout)
+}
+
+// ProbePool runs the pool of all Xray protocols of a server (as the app
+// does when connected) and fetches the test page through it twice: right
+// away and after Xray's first measurements. Tests and support.
+func ProbePool(serverJSON, user, pass string, timeoutMs int) string {
+	s, err := parseServer(serverJSON)
+	if err != nil {
+		return err.Error()
+	}
+	var choices []map[string]any
+	for _, p := range s.Protocols {
+		if p.Type != "amneziawg" && p.Type != "vless-dns" {
+			choices = append(choices, map[string]any{"server": json.RawMessage(serverJSON), "kind": p.Type})
+		}
+	}
+	cj, _ := json.Marshal(choices)
+	port, err := freePort()
+	if err != nil {
+		return err.Error()
+	}
+	cfg, err := PoolConfig(string(cj), user, pass, port)
+	if err != nil {
+		return err.Error()
+	}
+	inst, err := startXrayInstance(cfg)
+	if err != nil {
+		return err.Error()
+	}
+	defer inst.Close()
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	first, err1 := getThrough(port, timeout)
+	time.Sleep(5 * time.Second)
+	second, err2 := getThrough(port, timeout)
+	return fmt.Sprintf("pool: %d %v / %d %v", first, err1, second, err2)
 }
 
 // nullTun is a TUN that carries nothing: enough to see whether the

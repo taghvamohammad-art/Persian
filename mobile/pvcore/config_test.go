@@ -47,6 +47,26 @@ func TestXrayConfigs(t *testing.T) {
 	}
 }
 
+func TestPoolConfig(t *testing.T) {
+	choices := `[{"server":` + testServer + `,"kind":"hysteria2"},{"server":` + testServer + `,"kind":"shadowsocks-2022"},` +
+		`{"server":` + testServer + `,"kind":"nope"}]`
+	cfg, err := PoolConfig(choices, "25g00001", "abc123", 10808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"tag":"p-0"`, `"tag":"p-1"`, `"balancerTag":"best"`, `"leastPing"`, `"fallbackTag":"p-0"`} {
+		if !strings.Contains(cfg, want) {
+			t.Error("pool config lacks", want, cfg)
+		}
+	}
+	if strings.Contains(cfg, `"p-2"`) {
+		t.Error("unknown protocol made an outbound")
+	}
+	if _, err := PoolConfig(`[{"server":`+testServer+`,"kind":"nope"}]`, "a", "b", 1); err == nil {
+		t.Error("empty pool accepted")
+	}
+}
+
 func TestAwgUAPI(t *testing.T) {
 	u, err := AwgUAPI(testServer, "25g00001", "abc123")
 	if err != nil {

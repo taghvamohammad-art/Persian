@@ -62,6 +62,9 @@ internal object UpdateManager {
         val part = File(dest.parentFile, "$FILE.part")
         var lastError = Reason.NETWORK
 
+        // a few MB instead of the whole app, when this phone has a version we have a patch from
+        if (tryPatch(context, update, pins, dest, progress)) return dest
+
         for (url in update.urls) {
             try {
                 fetch(url, pins, part, update.size, progress)
@@ -120,6 +123,42 @@ internal object UpdateManager {
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun tryPatch(context: Context, update: AppUpdate, pins: List<String>, dest: File,
+                         progress: (Int) -> Unit): Boolean {
+        if (update.patches.isEmpty()) return false
+        val installed = File(context.applicationInfo.sourceDir)
+        val mine = try { sha256File(installed) } catch (e: IOException) { return false }
+        val patch = update.patches.firstOrNull { it.fromSha256.equals(mine, ignoreCase = true) } ?: return false
+        if (patch.size <= 0 || patch.size > MAX_SIZE) return false
+        val pfile = File(dest.parentFile, "update.pvdl")
+        val part = File(dest.parentFile, "$FILE.part")
+        for (url in patch.urls) {
+            try {
+                fetch(url, pins, pfile, patch.size, progress)
+                if (pfile.length() != patch.size || sha256File(pfile) != patch.sha256.lowercase()) continue
+                ApkPatcher.apply(installed, pfile, part)
+                if (part.length() != update.size || sha256File(part) != update.sha256.lowercase()) {
+                    Log.w(BRAND_TAG, "patched APK does not match the signed hash")
+                    return false
+                }
+                dest.delete()
+                if (!part.renameTo(dest)) return false
+                if (!isNewerBuildOfThisApp(context, dest, update)) {
+                    dest.delete()
+                    return false
+                }
+                Log.i(BRAND_TAG, "updated with a ${patch.size} byte patch")
+                return true
+            } catch (e: IOException) {
+                Log.w(BRAND_TAG, "patch from $url failed: $e")
+            } finally {
+                pfile.delete()
+                part.delete()
+            }
+        }
+        return false
     }
 
     private fun sha256File(f: File): String {
