@@ -1071,6 +1071,21 @@ class ServicesPage(RouterPage):
         l2.addWidget(self.button("نصب بات روی روتر / انتقال از سرور ویندوز", self.bot_install, primary=True))
         lay.addWidget(c2)
 
+        c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
+        r4 = QHBoxLayout()
+        r4.addWidget(QLabel("روتر دوم:"))
+        self.um2_combo = self.router_combo(("um2",))
+        r4.addWidget(self.um2_combo, 1)
+        l4.addLayout(r4)
+        hint4 = QLabel("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود (یوزرها، شارژها، حجم مصرفی). "
+                       "اگر پکیج user-manager رویش نیست نصب می‌شود (یک ریستارت). نقش «یوزر منیجر دوم» را در تب "
+                       "«سرورها و بکاپ» برایش انتخاب کنید.")
+        hint4.setObjectName("Hint")
+        hint4.setWordWrap(True)
+        l4.addWidget(hint4)
+        l4.addWidget(self.button("راه‌اندازی / تازه کردن همگام‌سازی", self.setup_um2))
+        lay.addWidget(c4)
+
         c3, l3 = card("گزارش")
         l3.addWidget(self.bar)
         l3.addWidget(self.log)
@@ -1079,6 +1094,30 @@ class ServicesPage(RouterPage):
 
     def reload(self):
         self.fill_routers(self.combo)
+        self.fill_routers(self.um2_combo)
+
+    def setup_um2(self):
+        import um2
+        main = self.target()
+        if not main:
+            return
+        sec = self.chosen(self.um2_combo)
+        if not sec:
+            return self.fail("در تب «سرورها و بکاپ» روتر دوم را با نقش «یوزر منیجر دوم» تعریف کنید.")
+        if QMessageBox.question(self, "یوزر منیجر دوم",
+                "دیتابیس یوزر منیجر %s هر ۵ دقیقه روی %s کپی می‌شود و هرچه روی %s هست جایگزین می‌شود.\n"
+                "اگر پکیج user-manager روی آن نیست، نصب می‌شود و روتر یک بار ری‌استارت می‌شود.\nادامه؟"
+                % (main["host"], sec["host"], sec["host"])) != QMessageBox.Yes:
+            return
+
+        def job(log, progress):
+            return um2.setup_um2(router_connector(main), router_connector(sec), main["host"], log=log)
+
+        def done(res):
+            QMessageBox.information(self, "انجام شد",
+                "یوزر منیجر دوم همگام شد (%d یوزر).\n\nحالا سرور لینوکس را یک بار دیگر از تب «سرور جدید» اجرا "
+                "کنید تا اگر روتر اصلی جواب نداد، سراغ این یکی برود." % res["users"])
+        self.run(job, done)
 
     def target(self):
         r = self.chosen(self.combo)

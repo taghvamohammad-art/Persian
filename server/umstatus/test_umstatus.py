@@ -265,6 +265,20 @@ class HttpsEndToEnd(unittest.TestCase):
         with urllib.request.urlopen(apkurl, context=cctx) as r:
             self.assertEqual(r.headers["Content-Length"], str(len(blob)))
             self.assertEqual(r.read(), blob)
+        # the main User Manager database for the second router, only with the token
+        sync = "https://127.0.0.1:%d/v1/umsync/" % port
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(sync + "x" * 20, context=cctx)
+        self.assertEqual(ctx.exception.code, 404)
+        with open(os.path.join(d, "umsync.token"), "w") as f:
+            f.write("tok-" + "a" * 20 + "\n")
+        with open(os.path.join(d, "umsync-db.umb"), "wb") as f:
+            f.write(b"UMDB" * 500)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(sync + "tok-" + "b" * 20, context=cctx)
+        self.assertEqual(ctx.exception.code, 404)
+        with urllib.request.urlopen(sync + "tok-" + "a" * 20, context=cctx) as r:
+            self.assertEqual(r.read(), b"UMDB" * 500)
         httpd.shutdown()
 
 

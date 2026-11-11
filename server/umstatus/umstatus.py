@@ -672,6 +672,32 @@ def make_handler(service):
         sys_version = ""
         timeout = 60
 
+        def _send_umsync(self, token):
+            """The main User Manager database for the second router (tools/release_tool/um2.py)."""
+            import hmac
+            d = os.path.dirname(service.cfg["app_apk_file"])
+            try:
+                with open(os.path.join(d, "umsync.token")) as f:
+                    want = f.read().strip()
+            except OSError:
+                want = ""
+            if not want or not hmac.compare_digest(want, token):
+                return self._send(404, {"ok": False, "error": "not_found"})
+            names = sorted(n for n in os.listdir(d) if n.startswith("umsync-db"))
+            if not names:
+                return self._send(503, {"ok": False, "error": "not_ready"})
+            with open(os.path.join(d, names[0]), "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+                pass
+
         def _send(self, code, body):
             data = json.dumps(body, ensure_ascii=False).encode()
             self.send_response(code)
@@ -699,6 +725,9 @@ def make_handler(service):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            m = re.fullmatch(r"/v1/umsync/([A-Za-z0-9_-]{16,})", self.path)
+            if m:
+                return self._send_umsync(m.group(1))
             m = re.fullmatch(r"/v1/patch/([0-9a-f]{16}\.pvdl)", self.path)
             if m:
                 path = os.path.join(service.publisher.patch_dir(), m.group(1))

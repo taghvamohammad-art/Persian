@@ -310,6 +310,18 @@ def run_all():
                              main_ip=SLIRP_HOST, name="sec1", log=print, sec_ip_seen_by_main=SLIRP_HOST)
     report(out)
     sstp_login("C")          # authenticated by A's User Manager over RADIUS
+
+    step("C becomes the second User Manager (copy of A every 5 minutes)")
+    import um2
+    res = um2.setup_um2(connector("A"), connector("C"), GUEST_IP, log=print,
+                        main_url="https://%s:%d" % (SLIRP_HOST, VM["A"]["https"]), verify=False)
+    print(res)
+    with connector("C")() as r:
+        pw = r.run(':put [/user-manager user get [find name="%s"] password]' % UM_USER).strip()
+        assert pw == UM_PASS, pw
+        assert "pv-umsync-load" in r.run("/system scheduler print terse")
+    with connector("A")() as r:
+        assert "pv-umsync-save" in r.run("/system scheduler print terse")
     print("\nALL OK")
 
 

@@ -124,7 +124,8 @@ def device_mode_container(r):
 
 
 def has_package(r, name):
-    return count(r, "/system package", "name=%s" % q(name)) > 0
+    # newer RouterOS also lists packages that are only available (flags X A)
+    return count(r, "/system package", "name=%s and disabled=no" % q(name)) > 0
 
 
 def ensure_network(r, svc, log=print):
