@@ -1239,8 +1239,11 @@ class NewServerPage(RouterPage):
         if r:
             self.ip.setText(r["host"])
             p = st.decrypt_blob(r.get("params")) if r.get("role") == "linux" and r.get("params") else {}
-            self.domain.setText((p or {}).get("domain", ""))
-            self.cf_token.setText((p or {}).get("cf_token", ""))
+            # a saved value fills the field; what was typed is kept otherwise
+            if (p or {}).get("domain"):
+                self.domain.setText(p["domain"])
+            if (p or {}).get("cf_token"):
+                self.cf_token.setText(p["cf_token"])
 
     def fill_backups(self):
         self.backup.clear()
@@ -1298,6 +1301,10 @@ class NewServerPage(RouterPage):
         else:
             params.pop("domain", None)
         params["cf_token"] = self.cf_token.text().strip()
+        if domain and not params["cf_token"] and QMessageBox.question(
+                self, "توکن Cloudflare", "توکن Cloudflare خالی است؛ رکوردهای دامنه را باید خودتان بسازید.\n"
+                "بدون توکن ادامه می‌دهید؟") != QMessageBox.Yes:
+            return
 
         def job(log, progress):
             return linux.setup_linux(linux_connector(tgt), [(router_connector(r), r["host"]) for r in ums],
