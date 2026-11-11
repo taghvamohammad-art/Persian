@@ -662,9 +662,13 @@ WantedBy=multi-user.target
         h.run("systemctl daemon-reload && systemctl enable pv-agent >/dev/null 2>&1 && systemctl restart pv-agent")
         if p.get("domain"):
             p["domain_info"] = domain_lookup(h, p["domain"])
-        status = {s: h.run("systemctl is-active %s" % s, check=False).strip()
-                  for s in ("xray", "pv-agent") + (("awg-quick@awg0",) if awg else ())
-                  + (("nginx",) if p.get("domain") else ())}
+        names = ("xray", "pv-agent") + (("awg-quick@awg0",) if awg else ()) + (("nginx",) if p.get("domain") else ())
+        # pv-agent restarts Xray with the users as it starts: give it a moment
+        for _ in range(15):
+            status = {s: h.run("systemctl is-active %s" % s, check=False).strip() for s in names}
+            if all(v == "active" for v in status.values()):
+                break
+            time.sleep(2)
         log("وضعیت سرویس‌ها: %s" % ", ".join("%s=%s" % kv for kv in status.items()))
         bad = [s for s, v in status.items() if v != "active"]
         if bad:
