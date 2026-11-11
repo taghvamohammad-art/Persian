@@ -1837,6 +1837,11 @@ class MainWindow(QMainWindow):
         self.btn_cfg.setToolTip("بعد از تغییر سرورها در config.json پوشه‌ی کاری")
         self.btn_cfg.clicked.connect(self.publish_config_only)
         l3.addWidget(self.btn_cfg)
+        self.btn_win = QPushButton("🖥  انتشار نسخه‌ی ویندوز…")
+        self.btn_win.setCursor(Qt.PointingHandCursor)
+        self.btn_win.setToolTip("فایل «PersianVPN-Windows» از GitHub (بخش Actions ← Windows client)")
+        self.btn_win.clicked.connect(self.publish_windows)
+        l3.addWidget(self.btn_win)
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setMaximumHeight(8)
@@ -1996,6 +2001,47 @@ class MainWindow(QMainWindow):
             self.drop.sub.setText("فایل zip دانلودشده از GitHub یا فایل APK")
             self.drop._restyle(loaded="false")
             self.notes.clear()
+            self.refresh_state()
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
+
+    def publish_windows(self):
+        from PySide6.QtWidgets import QInputDialog
+        ws = self.workspace()
+        try:
+            ws.check()
+        except (pb.ReleaseError, OSError) as e:
+            return self.fail(str(e))
+        path, _ = QFileDialog.getOpenFileName(self, "فایل PersianVPN-Windows از GitHub", "", "zip (*.zip)")
+        if not path:
+            return
+        try:
+            win = pb.read_windows_build(path)
+        except pb.ReleaseError as e:
+            return self.fail(str(e))
+        notes, ok = QInputDialog.getMultiLineText(self, "نسخه‌ی ویندوز %d" % win.version_code,
+                                                  "توضیح تغییرات (اختیاری؛ به کاربر نشان داده می‌شود):")
+        if not ok:
+            return
+        github = public = None
+        if self.chk_github.isChecked():
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+        send_router = self.chk_router.isChecked()
+
+        def job(log, progress):
+            return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
+                                          log=log, progress=progress, win=win, win_notes=notes)
+
+        def done(cfg):
+            self.set_busy(False)
+            self.say("✓ نسخه‌ی ویندوز %d منتشر شد (تنظیمات %s)." % (win.version_code, fa(cfg["version"])))
+            QMessageBox.information(self, "انجام شد",
+                "نسخه‌ی ویندوز منتشر شد.\nبرنامه‌های ویندوز موقع باز شدن پیشنهاد به‌روزرسانی می‌دهند.\n\n"
+                "برای نصب اول، فایل PersianVPN.exe داخل همان zip را به کاربران بدهید.")
             self.refresh_state()
 
         self.log.clear()

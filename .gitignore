@@ -32,3 +32,4 @@ windows/wintun.dll
 windows/app_config.signed.json
 windows/config_key.public.txt
 windows/icon-512.png
+windows/_build.py

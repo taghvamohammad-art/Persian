@@ -464,6 +464,9 @@ class Publisher:
         except (OSError, ValueError, KeyError):
             return None
 
+    def win_file(self):
+        return self.cfg.get("app_win_file") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "win.exe")
+
     def patch_dir(self):
         return self.cfg.get("app_patch_dir") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "patches")
 
@@ -503,63 +506,63 @@ class Publisher:
                 return 200, {"ok": True, "dry_run": True, "version": version}
 
             upd = new.get("app_update")
+            wupd = new.get("windows_update")
             apk_path = self.cfg["app_apk_file"]
-            part = apk_path + ".part"
+            win_path = self.win_file()
             pdir = self.patch_dir()
             patches = []
-            if upd:
-                try:
+            try:
+                if upd:
                     patches = [(str(p["from_sha256"]).lower(), int(p["size"]), str(p["sha256"]).lower())
                                for p in upd.get("patches") or []]
-                except (KeyError, TypeError, ValueError):
-                    return 400, {"ok": False, "error": "bad_config"}
-                if any(not re.fullmatch(r"[0-9a-f]{64}", f) for f, _, _ in patches):
-                    return 400, {"ok": False, "error": "bad_config"}
-            if upd:
-                size, want = int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()
-                if length == 0:
-                    # config-only release: the APK (and patches) on the router must already match
-                    if not (os.path.exists(apk_path) and os.path.getsize(apk_path) == size
-                            and _sha256_file(apk_path) == want):
-                        return 400, {"ok": False, "error": "apk_required"}
-                    for f, psize, psha in patches:
-                        pp = os.path.join(pdir, patch_name(f))
-                        if not (os.path.exists(pp) and os.path.getsize(pp) == psize and _sha256_file(pp) == psha):
-                            return 400, {"ok": False, "error": "apk_required"}
-                else:
-                    if length != size + sum(p[1] for p in patches) or size > self.cfg["max_apk_bytes"]:
-                        return 400, {"ok": False, "error": "apk_size_mismatch"}
-                    import hashlib
-                    os.makedirs(pdir, exist_ok=True)
-                    parts = [(part, size, want)] + [(os.path.join(pdir, patch_name(f) + ".part"), ps, psha)
-                                                    for f, ps, psha in patches]
-                    for path, want_size, want_sha in parts:
-                        h, left = hashlib.sha256(), want_size
-                        with open(path, "wb") as f:
-                            while left > 0:
-                                chunk = read(min(64 * 1024, left))
-                                if not chunk:
-                                    break
-                                h.update(chunk)
-                                f.write(chunk)
-                                left -= len(chunk)
-                        if left != 0 or h.hexdigest() != want_sha:
-                            for p_, _, _ in parts:
-                                if os.path.exists(p_):
-                                    os.remove(p_)
-                            return 400, {"ok": False, "error": "apk_mismatch"}
-            elif length != 0:
+                    if any(not re.fullmatch(r"[0-9a-f]{64}", f) for f, _, _ in patches):
+                        raise ValueError
+                # the files this config names, in the order they arrive: (path, size, sha256)
+                files = []
+                if upd:
+                    files.append((apk_path, int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()))
+                    files += [(os.path.join(pdir, patch_name(f)), ps, psha) for f, ps, psha in patches]
+                if wupd:
+                    files.append((win_path, int(wupd.get("size", 0)), str(wupd.get("sha256", "")).lower()))
+            except (KeyError, TypeError, ValueError):
+                return 400, {"ok": False, "error": "bad_config"}
+            if not files and length != 0:
                 return 400, {"ok": False, "error": "unexpected_apk"}
+            if length == 0:
+                # config-only release: the files on the router must already match
+                for path, size, sha in files:
+                    if not (os.path.exists(path) and os.path.getsize(path) == size and _sha256_file(path) == sha):
+                        return 400, {"ok": False, "error": "apk_required"}
+            else:
+                if length != sum(f[1] for f in files) or any(f[1] > self.cfg["max_apk_bytes"] for f in files):
+                    return 400, {"ok": False, "error": "apk_size_mismatch"}
+                import hashlib
+                os.makedirs(pdir, exist_ok=True)
+                for path, want_size, want_sha in files:
+                    h, left = hashlib.sha256(), want_size
+                    with open(path + ".part", "wb") as f:
+                        while left > 0:
+                            chunk = read(min(64 * 1024, left))
+                            if not chunk:
+                                break
+                            h.update(chunk)
+                            f.write(chunk)
+                            left -= len(chunk)
+                    if left != 0 or h.hexdigest() != want_sha:
+                        for p_, _, _ in files:
+                            if os.path.exists(p_ + ".part"):
+                                os.remove(p_ + ".part")
+                        return 400, {"ok": False, "error": "apk_mismatch"}
 
             # all files are swapped in only after everything checked out
-            if upd and length:
-                os.replace(part, apk_path)
-                keep = {patch_name(f) for f, _, _ in patches}
-                for n in os.listdir(pdir):
-                    if n.endswith(".part") and n[:-5] in keep:
-                        os.replace(os.path.join(pdir, n), os.path.join(pdir, n[:-5]))
-                    elif n not in keep:
-                        os.remove(os.path.join(pdir, n))
+            if length:
+                for path, _, _ in files:
+                    os.replace(path + ".part", path)
+                if upd:
+                    keep = {patch_name(f) for f, _, _ in patches}
+                    for n in os.listdir(pdir):
+                        if n not in keep:
+                            os.remove(os.path.join(pdir, n))
             tmp = self.cfg["app_config_file"] + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(envelope_text)
@@ -672,6 +675,27 @@ def make_handler(service):
         sys_version = ""
         timeout = 60
 
+        def _send_file(self, path):
+            try:
+                f = open(path, "rb")
+            except OSError:
+                return self._send(404, {"ok": False, "error": "not_found"})
+            with f:
+                size = os.fstat(f.fileno()).st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+                    pass
+
         def _send_umsync(self, token):
             """The main User Manager database for the second router (tools/release_tool/um2.py)."""
             import hmac
@@ -751,6 +775,8 @@ def make_handler(service):
                     except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
                         pass
                 return
+            if self.path == "/v1/win.exe":
+                return self._send_file(service.publisher.win_file())
             if self.path == "/v1/app.apk":
                 # The SHA-256 of this file is in the signed config; the app
                 # refuses a download that does not match it.

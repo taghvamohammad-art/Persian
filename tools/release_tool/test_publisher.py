@@ -290,6 +290,32 @@ class ReleaseFlow(unittest.TestCase):
         finally:
             httpd2.shutdown()
 
+    def test_windows_build_release_then_android_release(self):
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=lambda *_: None)
+        win_exe, engine = b"MZ" + os.urandom(5000), b"MZengine" + os.urandom(100)
+        zp = os.path.join(self.ws_dir, "PersianVPN-Windows.zip")
+        with zipfile.ZipFile(zp, "w") as z:
+            z.writestr("PersianVPN.exe", win_exe)
+            z.writestr("pvwin.exe", engine)
+            z.writestr("version.txt", "7\n")
+        win = pb.read_windows_build(zp)
+        cfg = pb.release_config_only(self.ws, win=win, win_notes="ویندوز", log=lambda *_: None)
+        wu = cfg["windows_update"]
+        self.assertEqual((wu["version_code"], wu["sha256"], wu["engine_sha256"]),
+                         (7, hashlib.sha256(win_exe).hexdigest(), hashlib.sha256(engine).hexdigest()))
+        self.assertTrue(wu["urls"][0].endswith("/v1/win.exe"))
+        srv_dir = os.path.dirname(self.srv_cfg["app_apk_file"])
+        with open(os.path.join(srv_dir, "win.exe"), "rb") as f:
+            self.assertEqual(f.read(), win_exe)
+        with self.assertRaises(pb.ReleaseError):                # not newer
+            pb.release_config_only(self.ws, win=win, log=lambda *_: None)
+        # a later Android release keeps the Windows build listed and on the router
+        build2 = pb.Build(b"PK" + os.urandom(1000), 17, "x")
+        cfg = pb.release(self.ws, build2, 17, "", "", log=lambda *_: None)
+        self.assertEqual(cfg["windows_update"]["version_code"], 7)
+        cfg = pb.release_config_only(self.ws, log=lambda *_: None)    # and a plain config-only one too
+        self.assertEqual(cfg["windows_update"]["version_code"], 7)
+
     def test_bad_token(self):
         with self.assertRaises(pb.ReleaseError) as ctx:
             self.gh.client("wrong").check()

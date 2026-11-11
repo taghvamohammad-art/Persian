@@ -22,8 +22,9 @@ jobs:
         working-directory: mobile
         run: |
           go mod tidy
+          go test ./pvcore
           GOOS=windows GOARCH=amd64 go vet ./pvcore ./cmd/pvwin
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o ../pvwin.exe ./cmd/pvwin
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${{ github.run_number }}" -o ../pvwin.exe ./cmd/pvwin
           ls -la ../pvwin.exe
       - name: Wintun driver DLL
         run: |
@@ -59,39 +60,60 @@ jobs:
           Copy-Item tools/icon/icon-512.png windows/
       - name: Tests
         run: python -m pytest -q windows/test_pvclient.py
-      - name: Engine smoke test (a server that does not answer)
+      - name: Engine smoke test (service protocol, a server that does not answer)
         shell: pwsh
         run: |
-          '[{"name":"x","host":"192.0.2.1","protocols":[{"type":"shadowsocks-2022","port":9,"method":"2022-blake3-aes-128-gcm","server_key":"AAAAAAAAAAAAAAAAAAAAAA=="}]}]' | Set-Content -Encoding ascii servers.json
-          $env:PV_PASS = "x"
+          Copy-Item app/src/main/assets/config_key.public.txt windows/
           $p = New-Object System.Diagnostics.Process
-          $p.StartInfo.FileName = "windows/pvwin.exe"
-          $p.StartInfo.Arguments = "-servers servers.json -user test"
+          $p.StartInfo.FileName = (Resolve-Path windows/pvwin.exe).Path
+          $p.StartInfo.Arguments = "console"
           $p.StartInfo.RedirectStandardInput = $true
           $p.StartInfo.RedirectStandardOutput = $true
           $p.StartInfo.UseShellExecute = $false
           $p.Start() | Out-Null
-          Start-Sleep -Seconds 20
+          Start-Sleep -Seconds 3
+          python windows/svc_smoke.py ${{ github.run_number }}
           $p.StandardInput.Close()
-          $p.WaitForExit(20000) | Out-Null
-          $out = $p.StandardOutput.ReadToEnd()
-          Write-Output $out
-          if ($out -notmatch '"probing"' -or $out -notmatch '"stopped"') { exit 1 }
+          if (-not $p.WaitForExit(20000)) { $p.Kill(); exit 1 }
+      - name: Service install, talk, uninstall
+        shell: pwsh
+        run: |
+          windows/pvwin.exe install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Start-Sleep -Seconds 5
+          Get-Service PersianVPN
+          python windows/svc_smoke.py ${{ github.run_number }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          windows/pvwin.exe uninstall
+      - name: Build number
+        shell: pwsh
+        run: |
+          "BUILD = ${{ github.run_number }}" | Set-Content -Encoding ascii windows/_build.py
+          "${{ github.run_number }}" | Set-Content -Encoding ascii version.txt
       - name: GUI smoke test (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
         run: python windows/pvclient.py --smoke
       - name: Build exe
         run: >
-          pyinstaller --noconfirm --onefile --windowed --uac-admin
+          pyinstaller --noconfirm --onefile --windowed
           --name PersianVPN
           --icon tools/icon/app.ico
           --add-binary "windows/pvwin.exe;." --add-binary "windows/wintun.dll;."
           --add-data "windows/app_config.signed.json;." --add-data "windows/config_key.public.txt;."
           --add-data "windows/icon-512.png;."
+          --paths windows
           windows/pvclient.py
+      - name: Package (app, engine, build number)
+        shell: pwsh
+        run: |
+          Copy-Item windows/pvwin.exe dist/
+          Copy-Item version.txt dist/
       - uses: actions/upload-artifact@v4
         with:
           name: PersianVPN-Windows
-          path: dist/PersianVPN.exe
+          path: |
+            dist/PersianVPN.exe
+            dist/pvwin.exe
+            dist/version.txt
           if-no-files-found: error

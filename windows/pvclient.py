@@ -2,10 +2,11 @@
 
 The window: sign in with the User Manager username and password, connect,
 see the remaining volume and days. The tunnel itself is pvwin.exe (Go:
-Xray with a Wintun adapter, every working protocol of the Linux servers
-at once, the fastest picked continuously); this app starts it, shows its
-events and stops it. Needs administrator rights (the adapter, routes and
-leak filters), asked for when the app starts.
+Xray or AmneziaWG on a Wintun adapter, every working protocol of the
+Linux servers, the fastest picked continuously), a Windows service this
+app installs once (the only time administrator rights are asked for) and
+then talks to on a local port. Updates come from the signed config: the
+app replaces itself and hands the service its new engine.
 
 Server settings come from the same signed config as the Android app: the
 copy built in, replaced by a newer validly signed one from the config URLs.
@@ -19,8 +20,8 @@ import socket
 import ssl
 import subprocess
 import sys
-import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 
@@ -31,7 +32,11 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QHBoxLayout, QLa
                                QVBoxLayout, QWidget)
 
 APP_NAME = "Persian VPN"
-VERSION = "1.0"
+try:
+    from _build import BUILD            # the GitHub build number, written when building
+except ImportError:
+    BUILD = 0
+SERVICE = ("127.0.0.1", 47811)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PersianVPN")
 STATE = os.path.join(DATA, "state.json")
@@ -128,14 +133,16 @@ def bundled(name):
 class Config:
     def __init__(self):
         self.pub = bundled("config_key.public.txt")
-        self.cfg = verify(bundled("app_config.signed.json"), self.pub)
+        self.raw = bundled("app_config.signed.json")       # the signed envelope, for the service
+        self.cfg = verify(self.raw, self.pub)
         if self.cfg is None:
             raise SystemExit("built-in config is not signed with the built-in key")
         try:
             with open(CONFIG_CACHE, encoding="utf-8") as f:
-                cached = verify(f.read(), self.pub)
+                text = f.read()
+            cached = verify(text, self.pub)
             if cached and cached.get("version", 0) > self.cfg.get("version", 0):
-                self.cfg = cached
+                self.cfg, self.raw = cached, text
         except OSError:
             pass
 
@@ -144,9 +151,10 @@ class Config:
         if not cfg or cfg.get("version", 0) <= self.cfg.get("version", 0):
             return False
         os.makedirs(DATA, exist_ok=True)
+        plain = decode_public(text)
         with open(CONFIG_CACHE, "w", encoding="utf-8") as f:
-            f.write(decode_public(text))
-        self.cfg = cfg
+            f.write(plain)
+        self.cfg, self.raw = cfg, plain
         return True
 
     def refresh(self):
@@ -220,49 +228,130 @@ def gib(n):
     return "%.1f GB" % (n / 1024 ** 3) if n is not None else "نامحدود"
 
 
-# ---------------------------------------------------------------- engine
+# ---------------------------------------------------------------- service
 
-class Engine(QObject):
-    event = Signal(dict)
+def service(cmd, timeout=6, **kw):
+    """One request to the pvwin service; OSError when it is not there."""
+    with socket.create_connection(SERVICE, timeout=timeout) as c:
+        c.sendall(json.dumps(dict(kw, cmd=cmd)).encode() + b"\n")
+        f = c.makefile("rb")
+        line = f.readline()
+    if not line:
+        raise OSError("service closed the connection")
+    return json.loads(line)
 
-    def __init__(self):
-        super().__init__()
-        self.proc = None
 
-    def start(self, servers, user, password):
-        self.stop()
-        fd, path = tempfile.mkstemp(suffix=".json", prefix="pv-")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(servers, f)
-        env = dict(os.environ, PV_PASS=password)
-        flags = 0x08000000 if sys.platform == "win32" else 0      # no console window
-        self.proc = subprocess.Popen([os.path.join(HERE, "pvwin.exe"), "-servers", path, "-user", user],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                     env=env, creationflags=flags, cwd=HERE)
-        proc = self.proc
+def service_version():
+    try:
+        return int(service("status").get("version", 0))
+    except (OSError, ValueError):
+        return None
 
-        def read():
-            for line in proc.stdout:
-                try:
-                    self.event.emit(json.loads(line))
-                except ValueError:
-                    pass
-            try:
-                os.remove(path)
-            except OSError:
+
+def install_service():
+    """Runs "pvwin install" with administrator rights (one Windows prompt)."""
+    import ctypes
+    exe = os.path.join(HERE, "pvwin.exe")
+    return ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, "install", HERE, 0) > 32
+
+
+def ensure_service(raw_envelope, wait=time.sleep):
+    """The service running, at this app's version or newer. Returns None when
+    fine, or a message for the user."""
+    have = service_version()
+    if have is not None and have >= BUILD:
+        return None
+    if have is not None:
+        # an older engine takes the newer one itself when the signed config names it
+        try:
+            service("upgrade", envelope=raw_envelope, path=os.path.join(HERE, "pvwin.exe"))
+        except OSError:
+            pass
+        for _ in range(20):
+            wait(0.5)
+            v = service_version()
+            if v is not None and v >= BUILD:
+                return None
+    if sys.platform != "win32":
+        return "service not available"
+    if not install_service():
+        return "برای نصب سرویس VPN باید یک بار اجازه‌ی Administrator بدهید."
+    for _ in range(60):
+        wait(0.5)
+        v = service_version()
+        if v is not None and v >= BUILD:
+            return None
+    return "سرویس VPN نصب نشد. برنامه را یک بار با «Run as administrator» باز کنید."
+
+
+# ---------------------------------------------------------------- updates
+
+def download(url, pins, dest, size, progress):
+    """A big file over HTTPS with the config's pins (its hash is checked by the caller)."""
+    pins = {p.replace(":", "").lower() for p in pins}
+    u = urllib.parse.urlsplit(url)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((u.hostname, u.port or 443), timeout=20) as raw:
+        with ctx.wrap_socket(raw, server_hostname=u.hostname) as s:
+            if pins and hashlib.sha256(s.getpeercert(binary_form=True)).hexdigest() not in pins:
+                raise OSError("certificate pin mismatch")
+            s.sendall(("GET %s HTTP/1.0\r\nHost: %s\r\n\r\n" % (u.path, u.hostname)).encode())
+            f = s.makefile("rb")
+            status = f.readline().split()
+            if len(status) < 2 or status[1] != b"200":
+                raise OSError("HTTP %s" % (status[1].decode() if len(status) > 1 else "?"))
+            while f.readline() not in (b"\r\n", b"\n", b""):
                 pass
-            if proc is self.proc:
-                self.event.emit({"event": "exited"})
-        threading.Thread(target=read, daemon=True).start()
+            got, h = 0, hashlib.sha256()
+            with open(dest, "wb") as out:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+                    if got > size:
+                        raise OSError("too big")
+                    progress(int(got * 100 / size) if size else 0)
+    return h.hexdigest()
 
-    def stop(self):
-        p, self.proc = self.proc, None
-        if p and p.poll() is None:
-            try:
-                p.stdin.close()            # pvwin stops cleanly (routes, filters) on this
-                p.wait(10)
-            except (OSError, subprocess.TimeoutExpired):
-                p.kill()
+
+def fetch_update(cfg, progress):
+    """Downloads the Windows build named in the signed config; path or None."""
+    upd = cfg.get("windows_update") or {}
+    os.makedirs(DATA, exist_ok=True)
+    dest = os.path.join(DATA, "PersianVPN-new.exe")
+    for url in upd.get("urls", []):
+        try:
+            if download(url, cfg.get("config_pins", []), dest, int(upd["size"]), progress) == upd["sha256"].lower():
+                return dest
+        except (OSError, KeyError, ValueError):
+            continue
+    try:
+        os.remove(dest)
+    except OSError:
+        pass
+    return None
+
+
+def replace_self(new):
+    """Puts the downloaded exe in place of the running one and starts it."""
+    me = sys.executable
+    old = me + ".old"
+    try:
+        if os.path.exists(old):
+            os.remove(old)
+        os.rename(me, old)              # Windows lets a running program be renamed
+        os.replace(new, me)
+    except OSError:
+        if not os.path.exists(me) and os.path.exists(old):
+            os.rename(old, me)
+        return False
+    subprocess.Popen([me], close_fds=True)
+    return True
 
 
 # ---------------------------------------------------------------- window
@@ -299,9 +388,10 @@ class Window(QWidget):
         self.resize(380, 560)
         self.config = Config()
         self.state = load_state()
-        self.engine = Engine()
-        self.engine.event.connect(self.on_event)
         self.status_ready.connect(self.show_status)
+        self.poller = QTimer(self)
+        self.poller.setInterval(2000)
+        self.poller.timeout.connect(self.poll)
         self.connected = False
         self.wanted = False
 
@@ -325,7 +415,15 @@ class Window(QWidget):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda *_: self.showNormal())
         self.tray.show()
-        threading.Thread(target=self.config.refresh, daemon=True).start()
+        self.poller.start()
+        threading.Thread(target=self.background_start, daemon=True).start()
+
+    def background_start(self):
+        """Newer signed config, then a newer Windows build if it names one."""
+        self.config.refresh()
+        upd = self.config.cfg.get("windows_update") or {}
+        if int(upd.get("version_code", 0)) > BUILD and getattr(sys, "frozen", False):
+            self.status_ready.emit(("update", upd))
 
     # pages
     def login_page(self):
@@ -427,6 +525,18 @@ class Window(QWidget):
                                    .get(msg[1], "سرور در دسترس نیست. اینترنت را بررسی کنید."))
         elif kind == "status":
             self.render_account(msg[1])
+        elif kind == "engine":
+            self.on_engine(msg[1])
+        elif kind == "connect_failed":
+            self.wanted = self.connected = False
+            self.set_look("off", msg[1])
+        elif kind == "update":
+            self.offer_update(msg[1])
+        elif kind == "update_ready":
+            if msg[1] and replace_self(msg[1]):
+                QApplication.quit()       # the new version starts and updates the service
+            else:
+                self.set_look("off", "دریافت نسخه‌ی جدید ناموفق بود.")
 
     def enter(self, st=None):
         self.pages.setCurrentIndex(1)
@@ -466,7 +576,7 @@ class Window(QWidget):
         save_state(self.state)
         self.pages.setCurrentIndex(0)
 
-    # VPN
+    # VPN (the pvwin service does the work; this window asks and shows)
     def toggle(self):
         if self.wanted:
             self.disconnect_vpn()
@@ -474,39 +584,76 @@ class Window(QWidget):
             self.connect_vpn()
 
     def connect_vpn(self):
-        servers = self.config.cfg.get("linux_servers") or []
-        if not servers:
+        if not (self.config.cfg.get("linux_servers") or self.config.cfg.get("servers")):
             QMessageBox.warning(self, APP_NAME, "سروری برای این نسخه تعریف نشده است.")
             return
         user, pw = self.creds()
         self.wanted = True
-        self.set_look("busy", "در حال انتخاب بهترین سرور…")
-        self.engine.start(servers, user, pw)
+        self.set_look("busy", "در حال آماده‌سازی…")
+        raw = self.config.raw
+
+        def job():
+            problem = ensure_service(raw)
+            if problem is None:
+                try:
+                    r = service("connect", timeout=15, envelope=raw, user=user, **{"pass": pw})
+                    problem = None if r.get("ok") else r.get("error", "خطا")
+                except OSError as e:
+                    problem = "سرویس VPN جواب نداد: %s" % e
+            if problem:
+                self.status_ready.emit(("connect_failed", problem))
+        threading.Thread(target=job, daemon=True).start()
 
     def disconnect_vpn(self):
         self.wanted = False
         self.connected = False
-        self.engine.stop()
         self.set_look("off", "قطع")
+        threading.Thread(target=lambda: self.safe_service("disconnect"), daemon=True).start()
 
-    def on_event(self, ev):
-        e = ev.get("event")
-        if not self.wanted:
-            return
-        if e == "probing":
-            self.set_look("busy", "در حال انتخاب بهترین سرور…")
-        elif e == "connected":
-            self.connected = True
+    @staticmethod
+    def safe_service(cmd):
+        try:
+            return service(cmd)
+        except OSError:
+            return None
+
+    def poll(self):
+        def job():
+            r = self.safe_service("status")
+            if r is not None:
+                self.status_ready.emit(("engine", r))
+        threading.Thread(target=job, daemon=True).start()
+
+    def on_engine(self, r):
+        st = r.get("state", "off")
+        if st == "connected":
+            if not self.connected:
+                self.connected = True
+                self.refresh_account()
+            self.wanted = True
             self.set_look("on", "متصل")
-            self.refresh_account()
-        elif e == "retry":
+        elif st == "probing" and self.wanted:
+            self.connected = False
+            self.set_look("busy", "در حال انتخاب بهترین سرور…")
+        elif st == "retry" and self.wanted:
             self.connected = False
             self.set_look("busy", "در حال اتصال دوباره…")
-        elif e in ("exited", "error"):
-            self.connected = False
-            self.wanted = False
-            self.set_look("off", "اتصال برقرار نشد. برنامه باید با دسترسی Administrator اجرا شود."
-                          if e == "exited" else "اتصال برقرار نشد.")
+        elif st == "off" and self.wanted and self.l_state.text() != "در حال آماده‌سازی…":
+            self.wanted = self.connected = False
+            self.set_look("off", "قطع")
+
+    def offer_update(self, upd):
+        if QMessageBox.question(self, APP_NAME, "نسخه‌ی جدید برنامه آماده است (%s).\nالان به‌روز شود؟\n\n%s"
+                                % (upd.get("version_name", upd.get("version_code")), upd.get("notes", ""))) \
+                != QMessageBox.Yes:
+            return
+        self.set_look("busy", "در حال دریافت نسخه‌ی جدید…")
+        cfg = self.config.cfg
+
+        def job():
+            path = fetch_update(cfg, lambda pct: None)
+            self.status_ready.emit(("update_ready", path))
+        threading.Thread(target=job, daemon=True).start()
 
     def set_look(self, state, text):
         self.big.setProperty("state", state)
@@ -517,7 +664,7 @@ class Window(QWidget):
         self.tray.setToolTip("%s — %s" % (APP_NAME, text)) if hasattr(self, "tray") else None
 
     def closeEvent(self, e):
-        if self.wanted and self.tray.isVisible():
+        if self.tray.isVisible():
             e.ignore()
             self.hide()
             self.tray.showMessage(APP_NAME, "برنامه در کنار ساعت ویندوز فعال است.")
@@ -525,11 +672,17 @@ class Window(QWidget):
             self.quit()
 
     def quit(self):
-        self.engine.stop()
+        if self.wanted:
+            self.safe_service("disconnect")
         QApplication.quit()
 
 
 def main():
+    if getattr(sys, "frozen", False):
+        try:
+            os.remove(sys.executable + ".old")       # left by the last update
+        except OSError:
+            pass
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLE)
     icon = os.path.join(HERE, "icon-512.png")
@@ -540,7 +693,6 @@ def main():
     w.show()
     if "--smoke" in sys.argv:          # CI: the window builds with the bundled config
         app.processEvents()
-        w.engine.stop()
         print("smoke ok, config version", w.config.cfg.get("version"))
         sys.exit(0)
     sys.exit(app.exec())

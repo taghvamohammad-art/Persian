@@ -30,6 +30,8 @@ var (
 	awgDev   *device.Device
 	running  string
 	socksAt  int
+
+	extraStop func()
 )
 
 func freePort() (int, error) {
@@ -69,6 +71,10 @@ func stopLocked() {
 	if awgDev != nil {
 		awgDev.Close()
 		awgDev = nil
+	}
+	if extraStop != nil { // system routes of the Windows AmneziaWG tunnel
+		extraStop()
+		extraStop = nil
 	}
 	running = ""
 	socksAt = 0
@@ -158,6 +164,11 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 		closeFd(tunFd)
 		return fmt.Errorf("awg tun: %w", err)
 	}
+	return awgOnLocked(tdev, uapi)
+}
+
+// awgOnLocked runs AmneziaWG on a TUN (which it closes on failure).
+func awgOnLocked(tdev tun.Device, uapi string) error {
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()

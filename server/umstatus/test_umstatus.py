@@ -333,9 +333,12 @@ class Publish(unittest.TestCase):
         self.pub = u.Publisher(self.cfg)
         self.apk = b"PK" + os.urandom(200000)
 
-    def envelope(self, version, apk=None, key=None, tamper=False, patches=None):
+    def envelope(self, version, apk=None, key=None, tamper=False, patches=None, win=None):
         import hashlib
         cfg = {"version": version, "servers": [{"host": "h", "port": 443}]}
+        if win is not None:
+            cfg["windows_update"] = {"version_code": version, "sha256": hashlib.sha256(win).hexdigest(),
+                                     "size": len(win), "urls": []}
         if apk is not None:
             cfg["app_update"] = {"version_code": version, "urls": ["https://h/v1/app.apk"],
                                  "sha256": hashlib.sha256(apk).hexdigest(), "size": len(apk)}
@@ -404,6 +407,19 @@ class Publish(unittest.TestCase):
         newer = b"PK" + os.urandom(1000)
         self.assertEqual(self.send(self.envelope(4, newer, patches=p2)[0], newer + b"patch-two!")[0], 200)
         self.assertEqual(sorted(os.listdir(pdir)), ["b" * 16 + ".pvdl"])
+
+    def test_windows_build_with_and_without_apk(self):
+        import os
+        win = b"MZ" + os.urandom(500)
+        self.assertEqual(self.send(self.envelope(2, self.apk, win=win)[0], self.apk + win)[0], 200)
+        with open(self.pub.win_file(), "rb") as f:
+            self.assertEqual(f.read(), win)
+        # config-only keeps both
+        self.assertEqual(self.send(self.envelope(3, self.apk, win=win)[0], b"")[0], 200)
+        # a new Windows build alone (no app_update in this config)
+        win2 = b"MZ" + os.urandom(600)
+        self.assertEqual(self.send(self.envelope(4, win=win2)[0], win2)[0], 200)
+        self.assertEqual(self.send(self.envelope(5, win=win)[0], b"")[1]["error"], "apk_required")
 
     def test_size_mismatch_and_config_only(self):
         b64, _ = self.envelope(2, self.apk)

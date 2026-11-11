@@ -215,6 +215,13 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     }
     if patches:
         cfg["app_update"]["patches"] = patch_entries(cfg, patches)
+    if cfg.get("windows_update"):
+        # the Windows build goes to the router with the APK; without our copy it cannot stay listed
+        if local_win(ws, cfg["windows_update"]) is None:
+            cfg.pop("windows_update")
+        else:
+            cfg["windows_update"]["urls"] = [u.replace("/v1/config", "/v1/win.exe")
+                                             for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
     cfg["version"] = int(cfg.get("version", 0)) + 1
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
@@ -245,7 +252,67 @@ def local_patches(ws, upd):
     return out
 
 
-def prepare_config_only(ws, public_repo=None, with_patches=True):
+class WinBuild:
+    """The Windows app from GitHub (artifact PersianVPN-Windows): the app,
+    its engine (the service checks it against engine_sha256) and the build number."""
+
+    def __init__(self, exe, engine, version_code, name=""):
+        self.exe, self.engine, self.version_code, self.name = exe, engine, version_code, name
+        self.sha256 = hashlib.sha256(exe).hexdigest()
+        self.engine_sha256 = hashlib.sha256(engine).hexdigest()
+
+
+def read_windows_build(path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = {os.path.basename(n): n for n in z.namelist()}
+            if not {"PersianVPN.exe", "pvwin.exe", "version.txt"} <= set(names):
+                raise ReleaseError("این فایل، خروجی «PersianVPN-Windows» از GitHub نیست.")
+            code = int(z.read(names["version.txt"]).decode().strip())
+            return WinBuild(z.read(names["PersianVPN.exe"]), z.read(names["pvwin.exe"]), code,
+                            os.path.basename(path))
+    except (zipfile.BadZipFile, ValueError, OSError) as e:
+        raise ReleaseError("فایل نسخه‌ی ویندوز خوانده نشد: %s" % e)
+
+
+def local_win(ws, wupd):
+    for name in ("win.exe.new", "win.exe"):     # .new: being published right now
+        try:
+            with open(ws.path(name), "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        if hashlib.sha256(data).hexdigest() == wupd.get("sha256"):
+            return data
+    return None
+
+
+def local_files(ws, cfg):
+    """Every file the config names (APK, patches, Windows build), from the
+    workspace, as one body for the router; b"" when any is missing (the
+    router then has to have them all)."""
+    parts = []
+    upd, wupd = cfg.get("app_update"), cfg.get("windows_update")
+    try:
+        if upd:
+            with open(ws.path("app.apk"), "rb") as f:
+                apk = f.read()
+            if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
+                return b""
+            parts.append(apk)
+            have = local_patches(ws, upd)
+            parts += [have[p["from_sha256"]] for p in upd.get("patches") or []]
+        if wupd:
+            win = local_win(ws, wupd)
+            if win is None:
+                return b""
+            parts.append(win)
+    except (OSError, KeyError):
+        return b""
+    return b"".join(parts)
+
+
+def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes=""):
     """New signed config with the same app version: for a server change."""
     cfg = ws.load_config()
     if public_repo:
@@ -264,6 +331,13 @@ def prepare_config_only(ws, public_repo=None, with_patches=True):
                 upd["patches"] = patch_entries(cfg, have)
             else:
                 upd.pop("patches")
+    if win is not None:
+        cfg["windows_update"] = {"version_code": win.version_code, "version_name": "1.0.%d" % win.version_code,
+                                 "sha256": win.sha256, "size": len(win.exe),
+                                 "engine_sha256": win.engine_sha256, "notes": win_notes.strip()}
+    if cfg.get("windows_update"):
+        cfg["windows_update"]["urls"] = [u.replace("/v1/config", "/v1/win.exe") for u in cfg.get("config_urls", [])
+                                         if u.endswith("/v1/config")]
     cfg["version"] = int(cfg.get("version", 0)) + 1
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
@@ -513,7 +587,8 @@ def release(ws, build, version_code, version_name, notes,
     if send_router:
         log("ارسال به روتر…")
         try:
-            body = RouterClient(cfg).publish(envelope, build.apk + b"".join(patches.values()), progress)
+            win = local_win(ws, cfg["windows_update"]) if cfg.get("windows_update") else b""
+            body = RouterClient(cfg).publish(envelope, build.apk + b"".join(patches.values()) + win, progress)
         except ReleaseError as e:
             if not patches or getattr(e, "code", "") != "apk_size_mismatch":
                 raise
@@ -523,7 +598,8 @@ def release(ws, build, version_code, version_name, notes,
             patches = {}
             cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
                                             public_github.repo if public_github else None)
-            body = RouterClient(cfg).publish(envelope, build.apk, progress)
+            win = local_win(ws, cfg["windows_update"]) if cfg.get("windows_update") else b""
+            body = RouterClient(cfg).publish(envelope, build.apk + win, progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
     save_local(ws, cfg, envelope, build, patches)
@@ -550,29 +626,29 @@ def release(ws, build, version_code, version_name, notes,
 
 
 def release_config_only(ws, send_router=True, github=None, public_github=None,
-                        log=print, progress=None):
-    """Publish changed server settings (config.json) without a new app version.
+                        log=print, progress=None, win=None, win_notes=""):
+    """Publish changed server settings (config.json) without a new app version,
+    or with a new Windows build (win).
 
     Sent to the router named in the NEW config (the new server), together
-    with the current APK from the workspace, so a freshly set-up router can
-    serve updates too.
+    with the current APK (and Windows build) from the workspace, so a
+    freshly set-up router can serve updates too.
     """
     ws.check()
+    if win is not None:
+        cur = (ws.load_config().get("windows_update") or {}).get("version_code", 0)
+        if win.version_code <= int(cur):
+            raise ReleaseError("نسخه‌ی ویندوز %d از نسخه‌ی منتشرشده (%d) جدیدتر نیست." % (win.version_code, cur))
+        with open(ws.path("win.exe.new"), "wb") as f:
+            f.write(win.exe)
     log("امضای تنظیمات سرور…")
-    cfg, envelope = prepare_config_only(ws, public_github.repo if public_github else None)
+    pub = public_github.repo if public_github else None
+    cfg, envelope = prepare_config_only(ws, pub, win=win, win_notes=win_notes)
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
 
     if send_router:
         def body_for(cfg):
-            upd = cfg.get("app_update")
-            if not upd or not os.path.isfile(ws.path("app.apk")):
-                return b""
-            with open(ws.path("app.apk"), "rb") as f:
-                apk = f.read()
-            if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
-                return b""      # stale local copy: let the router use its own
-            have = local_patches(ws, upd)
-            return apk + b"".join(have[p["from_sha256"]] for p in upd.get("patches") or [])
+            return local_files(ws, cfg)
         log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
         try:
             body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
@@ -581,11 +657,12 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
                     getattr(e, "code", "") not in ("apk_size_mismatch", "apk_required"):
                 raise
             log("⚠ روتر وصله‌های به‌روزرسانی را نمی‌پذیرد یا ندارد؛ بدون وصله منتشر می‌شود.")
-            cfg, envelope = prepare_config_only(ws, public_github.repo if public_github else None,
-                                                with_patches=False)
+            cfg, envelope = prepare_config_only(ws, pub, with_patches=False, win=win, win_notes=win_notes)
             body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
+    if win is not None:
+        os.replace(ws.path("win.exe.new"), ws.path("win.exe"))
     save_local(ws, cfg, envelope, None)
     log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
 
