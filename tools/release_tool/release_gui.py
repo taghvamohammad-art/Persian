@@ -577,6 +577,14 @@ class ServersPage(QWidget):
         frow.addWidget(self.btn_folder)
         frow.addWidget(self.btn_verify)
         frow.addStretch()
+        self.btn_export = QPushButton("خروجی تنظیمات برنامه…")
+        self.btn_export.setToolTip("همه‌ی تنظیمات، رمزها، کلیدهای سرور لینوکس، config.json و کلید امضا در یک فایل رمزدار؛\n"
+                                   "برای اجرای برنامه روی کامپیوتر دیگر.")
+        self.btn_export.clicked.connect(self.export_tool)
+        self.btn_import = QPushButton("وارد کردن تنظیمات…")
+        self.btn_import.clicked.connect(self.import_tool)
+        frow.addWidget(self.btn_export)
+        frow.addWidget(self.btn_import)
         l2.addLayout(frow)
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
@@ -594,6 +602,79 @@ class ServersPage(QWidget):
     @property
     def settings(self):
         return self.main.settings
+
+    def ask_password(self, title, text, twice=False):
+        from PySide6.QtWidgets import QInputDialog
+        pw, ok = QInputDialog.getText(self, title, text, QLineEdit.Password, self.settings.backup_password)
+        if not ok or not pw:
+            return None
+        if twice and pw != self.settings.backup_password:
+            again, ok = QInputDialog.getText(self, title, "تکرار رمز:", QLineEdit.Password)
+            if not ok or again != pw:
+                self.fail("دو رمز یکی نیستند.")
+                return None
+        return pw
+
+    def export_tool(self):
+        import toolbackup
+        pw = self.ask_password("خروجی تنظیمات برنامه",
+                               "رمز فایل (پیش‌فرض: همان رمز بکاپ). بدون این رمز فایل باز نمی‌شود:", twice=True)
+        if not pw:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "ذخیره‌ی خروجی تنظیمات",
+                                              "persian-vpn-tool-%s%s" % (bk.stamp(), bk.EXT),
+                                              "Persian VPN (*%s)" % bk.EXT)
+        if not path:
+            return
+        try:
+            blob = toolbackup.export_bytes(self.settings, pw)
+            with open(path, "wb") as f:
+                f.write(blob)
+        except (pb.ReleaseError, OSError) as e:
+            return self.fail(str(e))
+        QMessageBox.information(self, "انجام شد",
+            "خروجی ذخیره شد:\n%s\n\nاین فایل کلید امضا و همه‌ی رمزها را دارد؛ فقط با فلش یا انتقال مستقیم "
+            "جابه‌جایش کنید و رمزش را جایی جدا نگه دارید." % path)
+
+    def import_tool(self):
+        import toolbackup
+        path, _ = QFileDialog.getOpenFileName(self, "فایل خروجی تنظیمات برنامه", "",
+                                              "Persian VPN (*%s);;All files (*)" % bk.EXT)
+        if not path:
+            return
+        pw = self.ask_password("وارد کردن تنظیمات", "رمز این فایل:")
+        if not pw:
+            return
+        try:
+            with open(path, "rb") as f:
+                data = toolbackup.read(f.read(), pw)
+        except (pb.ReleaseError, OSError) as e:
+            return self.fail(str(e))
+        default = self.settings.workspace or data["settings"].get("workspace") or st.DEFAULT_WORKSPACES[0]
+        ws = QFileDialog.getExistingDirectory(self, "پوشه‌ی کاری (جای config.json و کلید امضا)", default)
+        if not ws:
+            return
+        n = len(data["settings"].get("routers", []))
+        if QMessageBox.question(self, "تأیید",
+                "تنظیمات فعلی این برنامه با محتوای فایل (ساخته‌شده در %s، %d سرور) جایگزین می‌شود و "
+                "config.json و کلید امضا در «%s» نوشته می‌شوند (نسخه‌ی قبلی با پسوند .bak می‌ماند).\nادامه؟"
+                % (data.get("created", "?"), n, ws)) != QMessageBox.Yes:
+            return
+        try:
+            written = toolbackup.apply(data, self.settings, ws)
+        except (pb.ReleaseError, OSError) as e:
+            return self.fail(str(e))
+        if self.settings.auto_backup:
+            try:
+                bk.set_schedule(True, self.settings.backup_hours)
+            except Exception:
+                pass
+        self.reload()
+        QMessageBox.information(self, "انجام شد",
+            "تنظیمات وارد شد (%s).\nبرنامه را یک بار ببندید و دوباره باز کنید.%s"
+            % ("، ".join(written) or "بدون فایل پوشه‌ی کاری",
+               "\n\nبکاپ خودکار روی این کامپیوتر روشن شد؛ روی کامپیوتر قبلی خاموشش کنید."
+               if self.settings.auto_backup else ""))
 
     def current(self):
         i = self.list.currentRow()

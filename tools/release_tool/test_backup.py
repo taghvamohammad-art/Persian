@@ -278,9 +278,10 @@ class Storage(unittest.TestCase):
         m, parts = bk.open_backup(r["file"], "pass word")
         self.assertEqual(m["router_id"], "r1")
         self.assertEqual(m["ssh_port"], 2200)
-        self.assertEqual(len(self.gh.releases), 1)
-        rel = list(self.gh.releases.values())[0]
-        self.assertTrue(rel["tag_name"].startswith("bk-r1-"))
+        # the router's backup and the tool's own settings
+        tags = sorted(rel["tag_name"] for rel in self.gh.releases.values())
+        self.assertEqual(len(tags), 2)
+        self.assertTrue(tags[0].startswith("bk-r1-") and tags[1].startswith("bk-tool-"), tags)
         store = bk.GitHubStore(self.gh.client())
         m2, _ = bk.open_backup(store.download(store.releases("r1")[0]), "pass word")
         self.assertEqual(m2["created"], m["created"])

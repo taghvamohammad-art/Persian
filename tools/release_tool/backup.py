@@ -450,6 +450,14 @@ def backup_all(settings, log=print, progress=None, only=None, connect=None, gith
         results[rc["id"]] = res
     if changed:
         settings.save()
+    if not only and settings.backup_password:
+        import toolbackup
+        try:
+            gh = (github_factory or GitHubClient)(settings.token, settings.backup_repo) \
+                if settings.token and settings.backup_repo else None
+            toolbackup.auto_backup(settings, log, gh)
+        except Exception as e:      # never spoils the routers' result
+            log("⚠ بکاپ تنظیمات خود برنامه ناموفق بود: %s" % e)
     st.save_status(status)
     return results
 
