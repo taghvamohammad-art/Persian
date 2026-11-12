@@ -109,7 +109,10 @@ def install_xray(h, log):
     arch = "64" if "x86_64" in h.run("uname -m") else "arm64-v8a"
     script = r"""set -e
 cd /tmp
-tag=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])')
+# the API has a small hourly limit per IP; the release page redirect has none
+tag=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)
+[ -n "$tag" ] || tag=$(curl -fsS -o /dev/null -w '%%{redirect_url}' https://github.com/XTLS/Xray-core/releases/latest | sed 's#.*/tag/##')
+[ -n "$tag" ] || { echo "Xray version not found"; exit 1; }
 curl -fsSLo xray.zip https://github.com/XTLS/Xray-core/releases/download/$tag/Xray-linux-%(arch)s.zip
 curl -fsSLo xray.zip.dgst https://github.com/XTLS/Xray-core/releases/download/$tag/Xray-linux-%(arch)s.zip.dgst
 want=$(grep -i 'SHA2-256' xray.zip.dgst | head -1 | awk -F'= ' '{print $2}')
