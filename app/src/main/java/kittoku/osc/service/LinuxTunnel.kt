@@ -25,9 +25,14 @@ import org.json.JSONObject
 
 private const val TAG = "LinuxTunnel"
 private const val PROBE_TIMEOUT_MS = 7_000L
-private const val CHECK_EVERY_MS = 25_000L
-private const val CHECK_TIMEOUT_MS = 10_000L
+private const val CHECK_EVERY_MS = 15_000L
+private const val CHECK_RETRY_MS = 3_000L     // a failed check is repeated this soon
+private const val CHECK_TIMEOUT_MS = 8_000L
 private const val CHECK_FAILURES = 2          // in a row before switching
+private const val QUICK_CHECK_MS = 6_000L     // the remembered protocol must answer this fast
+private const val OPTIMIZE_FIRST_MS = 4_000L
+private const val OPTIMIZE_EVERY_MS = 15 * 60_000L
+private const val LAST_CHOICE_KEY = "pv_last_choice"
 private const val XRAY_MTU = 1500
 private const val AWG_MTU = 1280
 private const val XRAY_ADDRESS = "172.19.0.1"
@@ -50,6 +55,10 @@ internal val PROTOCOL_LABELS = mapOf(
  * watchdog checks the tunnel and moves to the next best protocol when it
  * stops working (for example when one protocol gets filtered).
  *
+ * The protocol that worked last time is tried first, without probing, so
+ * connecting is quick; then everything is probed in the background and the
+ * tunnel moves to a clearly better choice without going down.
+ *
  * The app's own package is outside the VPN, so the engine's connections to
  * the servers go out on the real network.
  */
@@ -65,6 +74,8 @@ internal class LinuxTunnel(
     private var watchdog: Job? = null
     private var trafficJob: Job? = null
     private var networkWatcher: UnderlyingNetworkWatcher? = null
+    private var optimizer: Job? = null
+    @Volatile private var currentChoice: Choice? = null
     @Volatile internal var current: String = ""
         private set
 
@@ -79,12 +90,100 @@ internal class LinuxTunnel(
             val dns = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
             Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
         }
+        if (exclude == null) {
+            remembered()?.let { last ->
+                if (connect(last, quick = true)) {
+                    startOptimizer(OPTIMIZE_FIRST_MS)
+                    return@withContext true
+                }
+                service.logWriter?.report("remembered ${sig(last)} did not answer, probing all")
+            }
+        }
         val choices = plan(probeAll()).filter { "${it.name}/${it.kind}" != exclude }
         for (c in choices) {
             if (closed || !isActive) return@withContext false
-            if (connect(c)) return@withContext true
+            if (connect(c)) {
+                startOptimizer(OPTIMIZE_EVERY_MS)
+                return@withContext true
+            }
         }
         false
+    }
+
+    private fun sig(c: Choice): String =
+        if (c.kind == "pool") "pool:" + c.members.map { "${it.name}/${it.kind}" }.sorted().joinToString(",")
+        else "${c.name}/${c.kind}"
+
+    private fun serverByName(): Map<String, String> = servers.associateBy {
+        runCatching { JSONObject(it).optString("name", "") }.getOrDefault("")
+    }
+
+    /** The choice that worked last time, with today's server details. */
+    private fun remembered(): Choice? = runCatching {
+        val o = JSONObject(prefs.getString(LAST_CHOICE_KEY, null) ?: return null)
+        val byName = serverByName()
+        fun one(j: JSONObject): Choice? {
+            val name = j.getString("name")
+            val server = byName[name] ?: return null
+            val kind = j.getString("kind")
+            val kinds = runCatching { JSONObject(server).getJSONArray("protocols") }.getOrNull()
+            if (kinds != null && (0 until kinds.length()).none { kinds.optJSONObject(it)?.optString("type") == kind })
+                return null                                   // that protocol is gone from the server
+            return Choice(server, name, kind, 0)
+        }
+        if (o.getString("kind") == "pool") {
+            val arr = o.getJSONArray("members")
+            val members = (0 until arr.length()).mapNotNull { one(arr.getJSONObject(it)) }
+            if (members.isEmpty()) null else Choice("", members[0].name, "pool", 0, members)
+        } else one(o)
+    }.getOrNull()
+
+    private fun remember(c: Choice) {
+        val o = JSONObject().put("name", c.name).put("kind", c.kind)
+        if (c.kind == "pool") {
+            val arr = org.json.JSONArray()
+            c.members.forEach { arr.put(JSONObject().put("name", it.name).put("kind", it.kind)) }
+            o.put("members", arr)
+        }
+        prefs.edit().putString(LAST_CHOICE_KEY, o.toString()).apply()
+    }
+
+    /**
+     * While connected: probe everything now and then (the probes run outside
+     * the tunnel) and move to a clearly faster choice. The engine replaces
+     * its tunnel in place, so apps keep their connection.
+     */
+    private fun startOptimizer(firstDelay: Long) {
+        optimizer?.cancel()
+        optimizer = service.scope.launch {
+            delay(firstDelay)
+            while (isActive && !closed) {
+                runCatching { optimizeOnce() }.onFailure { Log.w(TAG, "optimize: $it") }
+                delay(OPTIMIZE_EVERY_MS)
+            }
+        }
+    }
+
+    private suspend fun optimizeOnce() {
+        val cur = currentChoice ?: return
+        if (closed || switching) return
+        val all = probeAll()
+        val best = plan(all).firstOrNull() ?: return
+        if (closed || switching || currentChoice !== cur) return
+        if (sig(best) == sig(cur)) {
+            remember(best)
+            return
+        }
+        val mine = if (cur.kind == "pool") cur.members else listOf(cur)
+        val curMs = all.filter { a -> mine.any { it.name == a.name && it.kind == a.kind } }
+            .minOfOrNull { it.ms } ?: -1L
+        val better = curMs < 0 || (best.ms * 10 < curMs * 7 && curMs - best.ms > 40)
+        service.logWriter?.report("optimize: now ${sig(cur)} ${curMs}ms, best ${sig(best)} ${best.ms}ms" +
+            if (better) " -> switching" else "")
+        if (!better) return
+        switching = true
+        val ok = try { connect(best) } finally { switching = false }
+        if (!ok) failover("switch to ${sig(best)} failed")
     }
 
     private suspend fun probeAll(): List<Choice> = coroutineScope {
@@ -129,7 +228,7 @@ internal class LinuxTunnel(
         return out
     }
 
-    private suspend fun connect(c: Choice): Boolean {
+    private suspend fun connect(c: Choice, quick: Boolean = false): Boolean {
         val awg = c.kind == "amneziawg"
         val builder = service.Builder()
         try {
@@ -184,9 +283,26 @@ internal class LinuxTunnel(
             service.logWriter?.report("start ${c.name}/${c.kind} failed: $e")
             return false        // pvcore has closed the descriptor
         }
+        if (quick && !answers(c)) {
+            synchronized(this) { runCatching { Pvcore.stop() } }
+            return false
+        }
         current = "${c.name}/${c.kind}"
+        currentChoice = c
         onConnected(c)
+        remember(c)
         return true
+    }
+
+    /** The remembered choice must really carry traffic before it counts as connected. */
+    private suspend fun answers(c: Choice): Boolean = withContext(Dispatchers.IO) {
+        if (c.kind != "amneziawg") return@withContext Pvcore.check(QUICK_CHECK_MS) >= 0
+        val end = System.currentTimeMillis() + QUICK_CHECK_MS        // wait for the first handshake
+        while (System.currentTimeMillis() < end) {
+            if (Pvcore.check(0) >= 0) return@withContext true
+            delay(300)
+        }
+        false
     }
 
     private suspend fun onConnected(c: Choice) {
@@ -234,7 +350,8 @@ internal class LinuxTunnel(
         watchdog = service.scope.launch {
             var failures = 0
             while (isActive && !closed) {
-                delay(CHECK_EVERY_MS)
+                delay(if (failures > 0) CHECK_RETRY_MS else CHECK_EVERY_MS)
+                if (switching) continue
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
                 failures = if (ms < 0) failures + 1 else 0
                 if (failures >= CHECK_FAILURES) {
@@ -270,6 +387,9 @@ internal class LinuxTunnel(
     private fun stopEngine() {
         watchdog?.cancel()
         watchdog = null
+        optimizer?.cancel()
+        optimizer = null
+        currentChoice = null
         trafficJob?.cancel()
         trafficJob = null
         synchronized(this) {

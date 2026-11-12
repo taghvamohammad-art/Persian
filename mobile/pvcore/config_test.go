@@ -92,3 +92,18 @@ func TestWindowsConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestTunnelDNSOverTCP(t *testing.T) {
+	cfg := baseConfig(1080, []any{map[string]any{"tag": "proxy"}}, nil)
+	rules := cfg["routing"].(map[string]any)["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["outboundTag"] != "dns-out" || first["port"] != "53" || first["network"] != "udp" {
+		t.Fatalf("first rule should send DNS to Xray's resolver: %v", first)
+	}
+	servers := cfg["dns"].(map[string]any)["servers"].([]any)
+	for _, s := range servers {
+		if !strings.HasPrefix(s.(string), "tcp://") {
+			t.Fatalf("resolver must go over TCP through the tunnel: %v", s)
+		}
+	}
+}

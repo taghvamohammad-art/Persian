@@ -30,6 +30,9 @@ var (
 	awgDev   *device.Device
 	running  string
 	socksAt  int
+	// AmneziaWG byte counters at the last Check: sending without receiving
+	// anything back means the tunnel is up on paper only
+	awgRx, awgTx int64
 
 	extraStop func()
 )
@@ -78,6 +81,7 @@ func stopLocked() {
 	}
 	running = ""
 	socksAt = 0
+	awgRx, awgTx = -1, -1
 }
 
 // Stop ends whatever engine is running.
@@ -199,21 +203,7 @@ func Check(timeoutMs int) int {
 		if err != nil {
 			return -1
 		}
-		for _, line := range strings.Split(state, "\n") {
-			if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
-				var sec int64
-				fmt.Sscan(v, &sec)
-				if sec == 0 {
-					return -1
-				}
-				age := time.Since(time.Unix(sec, 0))
-				if age > 200*time.Second {
-					return -1
-				}
-				return int(age.Milliseconds())
-			}
-		}
-		return -1
+		return awgHealth(state)
 	default:
 		ms, err := getThrough(port, time.Duration(timeoutMs)*time.Millisecond)
 		if err != nil {
@@ -221,6 +211,36 @@ func Check(timeoutMs int) int {
 		}
 		return ms
 	}
+}
+
+// awgHealth: a recent handshake, and replies to what was sent since the
+// last check (a filtered path can keep handshakes alive while data is lost).
+func awgHealth(state string) int {
+	var sec, rx, tx int64 = -1, 0, 0
+	for _, line := range strings.Split(state, "\n") {
+		if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
+			fmt.Sscan(v, &sec)
+		} else if v, ok := strings.CutPrefix(line, "rx_bytes="); ok {
+			fmt.Sscan(v, &rx)
+		} else if v, ok := strings.CutPrefix(line, "tx_bytes="); ok {
+			fmt.Sscan(v, &tx)
+		}
+	}
+	mu.Lock()
+	lastRx, lastTx := awgRx, awgTx
+	awgRx, awgTx = rx, tx
+	mu.Unlock()
+	if sec <= 0 {
+		return -1
+	}
+	age := time.Since(time.Unix(sec, 0))
+	if age > 200*time.Second {
+		return -1
+	}
+	if lastTx >= 0 && tx-lastTx > 8192 && rx == lastRx {
+		return -1
+	}
+	return int(age.Milliseconds())
 }
 
 func getThrough(port int, timeout time.Duration) (int, error) {
