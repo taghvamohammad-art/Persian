@@ -71,7 +71,8 @@ class LinuxHost(SSHRouter):
 def source(name):
     """A file shipped with the tool (bundled in the .exe) or from the repo."""
     import sys
-    for d in (getattr(sys, "_MEIPASS", None), HERE, os.path.join(HERE, "..", "..", "server", "linux")):
+    # HERE first: the code folder of "get new features" when that is in use
+    for d in (HERE, getattr(sys, "_MEIPASS", None), os.path.join(HERE, "..", "..", "server", "linux")):
         if d and os.path.isfile(os.path.join(d, name)):
             with open(os.path.join(d, name), "rb") as f:
                 return f.read()

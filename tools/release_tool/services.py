@@ -323,7 +323,7 @@ def umstatus_source():
     """umstatus.py shipped with the tool (bundled in the .exe)."""
     import sys
     here = os.path.dirname(os.path.abspath(__file__))
-    for d in (getattr(sys, "_MEIPASS", None), here, os.path.join(here, "..", "..", "server", "umstatus")):
+    for d in (here, getattr(sys, "_MEIPASS", None), os.path.join(here, "..", "..", "server", "umstatus")):
         if d and os.path.isfile(os.path.join(d, "umstatus.py")):
             with open(os.path.join(d, "umstatus.py"), "rb") as f:
                 return f.read()

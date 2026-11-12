@@ -30,6 +30,7 @@ import linux                # noqa: E402
 import monitor              # noqa: E402
 import provision as pv      # noqa: E402
 import publisher as pb       # noqa: E402
+import selfupdate as su      # noqa: E402
 import services as sv        # noqa: E402
 import settings as st        # noqa: E402
 from routeros import SSHRouter  # noqa: E402
@@ -1715,9 +1716,95 @@ class MonitorPage(RouterPage):
                 self.users.setItem(k, c, item(text))
 
 
+def _features_job(settings):
+    def job(log, progress):
+        try:
+            up = su.Updater(settings.token, settings.repo)
+            return up, up.check()
+        except su.UpdateError as e:
+            raise pb.ReleaseError(str(e))
+    return job
+
+
+def _restart():
+    """Start the tool again (with the new code) and close this one."""
+    from PySide6.QtCore import QProcess
+    args = sys.argv[1:] if getattr(sys, "frozen", False) else [os.path.abspath(sys.argv[0])] + sys.argv[1:]
+    QProcess.startDetached(sys.executable, args)
+    QApplication.instance().quit()
+
+
+class FeaturesMixin:
+    """"Get new features": only the changed source files (selfupdate.py)."""
+
+    def check_features(self, silent):
+        if getattr(self, "_checking_features", False):
+            return
+        if silent and not (self.settings.token and self.settings.repo):
+            return
+        self._checking_features = True
+        if not silent:
+            self.btn_new.setText("⏳ بررسی…")
+
+        def done(result):
+            self._checking_features = False
+            up, plan = result
+            if silent:
+                if not plan.up_to_date and not plan.needs_new_exe:
+                    self.btn_new.setText("⬇ امکانات جدید آماده است")
+                    self.btn_new.setStyleSheet("background:#16a34a;")
+                return
+            self.btn_new.setText("⬇ امکانات جدید")
+            self.offer_features(up, plan)
+
+        def failed(err):
+            self._checking_features = False
+            self.btn_new.setText("⬇ امکانات جدید")
+            if not silent:
+                QMessageBox.warning(self, "امکانات جدید", err)
+        run_in_thread(self, _features_job(self.settings), done, failed)
+
+    def offer_features(self, up, plan):
+        actions_url = "https://github.com/%s/actions/workflows/%s" % (self.settings.repo, su.WORKFLOW)
+        if plan.needs_new_exe:
+            QMessageBox.information(
+                self, "امکانات جدید",
+                "نسخه‌ی جدید به کتابخانه‌های تازه‌ای نیاز دارد که فقط با دانلود کامل برنامه می‌آیند.\n"
+                "یک بار فایل PersianVPN-Release را از GitHub دریافت کنید:\n%s" % actions_url)
+            return
+        if plan.up_to_date:
+            QMessageBox.information(self, "امکانات جدید",
+                                    "برنامه به‌روز است (%s)." % su.version_text())
+            return
+        what = "%s فایل، حدود %s کیلوبایت" % (fa(len(plan.changes)), fa(max(1, plan.size // 1024)))
+        note = "" if plan.tested else "\n⚠ تست خودکار این نسخه قابل بررسی نبود (توکن به Actions دسترسی ندارد)."
+        if QMessageBox.question(
+                self, "امکانات جدید",
+                "نسخه‌ی جدید آماده است%s: %s.\nدریافت شود و برنامه دوباره باز شود؟%s"
+                % (" (#%s)" % fa(plan.run) if plan.run else "", what, note)) != QMessageBox.Yes:
+            return
+        if self.busy:
+            return QMessageBox.warning(self, "امکانات جدید", "اول کار در حال اجرا تمام شود.")
+
+        def job(log, progress):
+            try:
+                return up.apply(plan, log)
+            except (su.UpdateError, OSError) as e:
+                raise pb.ReleaseError("دریافت امکانات جدید ناموفق بود: %s" % e)
+
+        def done(_files):
+            QMessageBox.information(self, "امکانات جدید", "دریافت شد. برنامه دوباره باز می‌شود.")
+            _restart()
+        self.btn_new.setText("⏳ دریافت…")
+        run_in_thread(self, job, done,
+                      lambda e: (self.btn_new.setText("⬇ امکانات جدید"),
+                                 QMessageBox.warning(self, "امکانات جدید", e)),
+                      lambda line: self.btn_new.setText("⏳ " + line[:30]))
+
+
 # ------------------------------------------------------------------ main window
 
-class MainWindow(QMainWindow):
+class MainWindow(QMainWindow, FeaturesMixin):
     def __init__(self):
         super().__init__()
         self.settings = Settings.load()
@@ -1752,6 +1839,12 @@ class MainWindow(QMainWindow):
         titles.addWidget(t)
         titles.addWidget(sub)
         head.addLayout(titles, 1)
+        self.btn_new = QPushButton("⬇ امکانات جدید")
+        self.btn_new.setToolTip("دریافت فقط کدهای تغییرکرده از GitHub، بدون دانلود دوباره‌ی کل برنامه\n"
+                                + su.version_text())
+        self.btn_new.clicked.connect(lambda: self.check_features(False))
+        head.addWidget(self.btn_new, 0, Qt.AlignTop)
+        QTimer.singleShot(2000, lambda: self.check_features(True))
         gear = QPushButton("⚙")
         gear.setObjectName("Gear")
         gear.setToolTip("تنظیمات")

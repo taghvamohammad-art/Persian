@@ -144,13 +144,19 @@ jobs:
         run: python tools/release_tool/release_gui.py --smoke
 
       - name: Build exe
-        run: >
-          pyinstaller --noconfirm --onefile --windowed
-          --name PersianVPN-Release
-          --icon tools/icon/app.ico
-          --add-data "tools/icon/icon-512.png;."
-          --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" --paths tools --paths tools/release_tool
-          tools/release_tool/release_gui.py
+        shell: pwsh
+        run: |
+          $hidden = python tools/release_tool/stdlib_hidden.py
+          pyinstaller --noconfirm --onefile --windowed `
+            --name PersianVPN-Release `
+            --icon tools/icon/app.ico `
+            --add-data "tools/icon/icon-512.png;." `
+            --add-data "tools/release_tool/BASE;." `
+            --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" `
+            --paths tools --paths tools/release_tool `
+            --hidden-import release_gui @hidden `
+            tools/release_tool/launcher.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Smoke test the built exe
         env:
@@ -159,6 +165,21 @@ jobs:
         run: |
           $p = Start-Process -FilePath dist/PersianVPN-Release.exe -ArgumentList "--smoke" -PassThru -Wait
           if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: The exe runs code from "get new features"
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          $appdata = Join-Path $env:RUNNER_TEMP "appdata"
+          python tools/release_tool/it/make_overlay.py (Join-Path $appdata "PersianVPNRelease/code")
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $env:APPDATA = $appdata
+          $env:PV_MARK = Join-Path $env:RUNNER_TEMP "mark.txt"
+          $p = Start-Process -FilePath dist/PersianVPN-Release.exe -ArgumentList "--smoke" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { exit 1 }
+          if (-not (Test-Path $env:PV_MARK)) { Write-Error "code folder not used"; exit 1 }
+          Get-Content $env:PV_MARK
 
       - uses: actions/upload-artifact@v4
         with:
