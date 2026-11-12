@@ -149,7 +149,7 @@ jobs:
           --name PersianVPN-Release
           --icon tools/icon/app.ico
           --add-data "tools/icon/icon-512.png;."
-          --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --paths tools --paths tools/release_tool
+          --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" --paths tools --paths tools/release_tool
           tools/release_tool/release_gui.py
 
       - name: Smoke test the built exe

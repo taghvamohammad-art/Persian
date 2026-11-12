@@ -235,31 +235,6 @@ def vless_encryption(h):
     return dec[0], enc[0]
 
 
-DECOY_HTML = """<!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%(name)s</title>
-<style>
-body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#f6f7f9;color:#222}
-header{background:#123;color:#fff;padding:18px 24px;font-size:20px}
-main{max-width:860px;margin:32px auto;padding:0 16px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px}
-.card{background:#fff;border-radius:10px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-footer{text-align:center;color:#888;font-size:13px;margin:40px 0}
-</style></head><body>
-<header>%(name)s</header>
-<main>
-<p>فروشگاه آنلاین لوازم جانبی موبایل و کامپیوتر. سایت در حال به‌روزرسانی است و به‌زودی سفارش آنلاین فعال می‌شود.</p>
-<div class="grid">
-<div class="card">کابل و شارژر</div><div class="card">هدفون و هندزفری</div>
-<div class="card">قاب و گلس</div><div class="card">لوازم شبکه</div>
-</div>
-</main>
-<footer>&copy; %(name)s</footer>
-</body></html>
-"""
-
-
 def install_web(h, p, log):
     """nginx on port 80: the decoy shop for everyone; with a domain the secret
     path to Xray (Cloudflare, SSL mode Flexible, reaches the server here);
@@ -268,8 +243,18 @@ def install_web(h, p, log):
     h.run("export DEBIAN_FRONTEND=noninteractive; command -v nginx >/dev/null || "
           "apt-get install -y -q --no-install-recommends nginx", timeout=900)
     h.run("mkdir -p /var/www/pv /var/lib/pv-agent && chmod 755 /var/lib/pv-agent")
-    shop = p["domain"].split(".")[0].capitalize() + " Shop" if p.get("domain") else "Online Shop"
-    h.write("/var/www/pv/index.html", DECOY_HTML % {"name": shop})
+    name = p["domain"].split(".")[0].capitalize() if p.get("domain") else "Soft"
+    html = source("site/index.html").decode("utf-8")
+    for k, v in (("{{NAME}}", name), ("{{INITIAL}}", name[0]), ("{{DOMAIN}}", p.get("domain") or "example.com")):
+        html = html.replace(k, v)
+    h.write("/var/www/pv/index.html", html)
+    h.write("/var/www/pv/favicon.svg",
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" '
+            'x2="1" y2="1"><stop offset="0" stop-color="#2563eb"/><stop offset="1" stop-color="#7c3aed"/>'
+            '</linearGradient></defs><rect width="64" height="64" rx="16" fill="url(#g)"/><text x="32" y="44" '
+            'font-family="Arial" font-size="34" font-weight="700" fill="#fff" text-anchor="middle">%s</text></svg>'
+            % name[0])
+    h.write("/var/www/pv/robots.txt", "User-agent: *\nAllow: /\n")
     cdn = """
     location %(path)s {
         proxy_pass http://127.0.0.1:%(port)d;

@@ -169,7 +169,7 @@ def main():
             and "online" in sh("curl -s --max-time 10 http://127.0.0.1/pvs/wrong", check=False):
         problems.append("status page answers a wrong token")
     page = sh("curl -s --max-time 10 http://127.0.0.1/", check=False)
-    if "Shop" not in page:
+    if "دانلود رایگان نرم‌افزار" not in page or "{{" in page:
         problems.append("decoy site not served on port 80: %r" % page[:200])
     if st["services"].get("xray") != "active" or st["services"].get("pv-agent") != "active":
         problems.append("monitor: services %s" % st["services"])

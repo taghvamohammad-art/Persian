@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{NAME}} | دانلود رایگان نرم‌افزار</title>
+<meta name="description" content="{{NAME}}؛ دانلود مستقیم و رایگان نرم‌افزارهای آزاد و رایگان ویندوز، مک، لینوکس و اندروید با راهنمای نصب فارسی.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#f5f7fb;--card:#fff;--ink:#16202e;--muted:#5d6b7e;--line:#e3e8f0;
+  --brand:#2563eb;--brand2:#7c3aed;--ok:#0e9f6e;--chip:#eef2ff;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 6px 20px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0d1320;--card:#141c2c;--ink:#e8edf6;--muted:#9aa7bb;--line:#243049;--chip:#1c2742;
+        --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25)}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:Vazirmatn,"IRANSans",Tahoma,"Segoe UI",system-ui,sans-serif;line-height:1.75;font-size:15px}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:0 18px}
+header{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 85%,transparent);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:18px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px}
+.logo i{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:#fff;font-style:normal;
+  background:linear-gradient(135deg,var(--brand),var(--brand2))}
+nav{display:flex;gap:4px;margin-inline-start:auto;flex-wrap:wrap}
+nav a{padding:6px 12px;border-radius:9px;color:var(--muted);font-size:14px}
+nav a:hover,nav a.on{background:var(--chip);color:var(--ink)}
+.hero{padding:48px 0 26px;text-align:center}
+.hero h1{font-size:clamp(24px,4vw,38px);margin:0 0 8px;font-weight:900;letter-spacing:-.3px}
+.hero p{color:var(--muted);margin:0 auto 22px;max-width:620px}
+.search{display:flex;max-width:640px;margin:0 auto;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.search input{flex:1;min-width:0;border:0;background:transparent;padding:14px 16px;font:inherit;color:inherit;outline:0}
+.search button{border:0;white-space:nowrap;flex-shrink:0;background:var(--brand);color:#fff;padding:0 22px;font:inherit;cursor:pointer}
+.stats{display:flex;justify-content:center;gap:28px;margin-top:22px;color:var(--muted);font-size:13px;flex-wrap:wrap}
+.stats b{display:block;color:var(--ink);font-size:20px}
+.cats{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:26px 0 8px}
+.cats button{border:1px solid var(--line);background:var(--card);color:var(--muted);padding:7px 14px;
+  border-radius:999px;font:inherit;font-size:13.5px;cursor:pointer}
+.cats button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+h2.sec{font-size:19px;margin:30px 0 14px;display:flex;align-items:center;gap:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;gap:10px;transition:transform .15s}
+.card:hover{transform:translateY(-2px)}
+.top{display:flex;gap:12px;align-items:center}
+.ico{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:18px;flex:none}
+.card h3{margin:0;font-size:16px}
+.meta{color:var(--muted);font-size:12.5px}
+.card p{margin:0;color:var(--muted);font-size:13.5px;flex:1}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.tag{background:var(--chip);color:var(--muted);font-size:11.5px;padding:2px 8px;border-radius:6px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--brand);color:#fff;
+  padding:9px 14px;border-radius:10px;font-size:14px;font-weight:600}
+.btn.ghost{background:transparent;color:var(--brand);border:1px solid var(--line)}
+.row{display:flex;gap:8px}
+.detail{display:grid;grid-template-columns:1fr 320px;gap:20px;margin:30px 0}
+@media (max-width:860px){.detail{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
+.panel h1{margin:0;font-size:24px}
+.panel h3{margin:22px 0 8px;font-size:16px}
+.panel ul,.panel ol{margin:0;padding-inline-start:20px;color:var(--muted)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:14px}
+.kv span:nth-child(odd){color:var(--muted)}
+.dl{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.dl a{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:12px;
+  padding:10px 14px;font-size:14px}
+.dl a:hover{border-color:var(--brand)}
+.dl small{color:var(--muted)}
+.crumb{color:var(--muted);font-size:13px;margin-top:22px}
+.news{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.news .card p{flex:none}
+footer{margin-top:50px;border-top:1px solid var(--line);padding:30px 0;color:var(--muted);font-size:13.5px}
+.fgrid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:20px}
+@media (max-width:700px){.fgrid{grid-template-columns:1fr}nav{order:3;width:100%;overflow-x:auto;white-space:nowrap;display:flex;flex-wrap:nowrap}.bar{flex-wrap:wrap;row-gap:6px}}
+footer h4{color:var(--ink);margin:0 0 8px}
+footer a{display:block;padding:2px 0}
+.empty{text-align:center;color:var(--muted);padding:40px 0}
+.page{max-width:820px;margin:30px auto}
+</style>
+</head>
+<body>
+<header><div class="wrap bar">
+  <a class="logo" href="#/"><i>{{INITIAL}}</i>{{NAME}}</a>
+  <nav id="nav">
+    <a href="#/" data-k="home">خانه</a>
+    <a href="#/cat/windows" data-k="windows">ویندوز</a>
+    <a href="#/cat/android" data-k="android">اندروید</a>
+    <a href="#/cat/mac" data-k="mac">مک</a>
+    <a href="#/cat/linux" data-k="linux">لینوکس</a>
+    <a href="#/blog" data-k="blog">آموزش‌ها</a>
+    <a href="#/about" data-k="about">درباره ما</a>
+  </nav>
+</div></header>
+<main class="wrap" id="app"></main>
+<footer><div class="wrap fgrid">
+  <div><h4>{{NAME}}</h4>
+    مرجع دانلود نرم‌افزارهای آزاد و رایگان با لینک مستقیم از سایت سازنده، توضیحات و راهنمای نصب فارسی.
+    همه‌ی نرم‌افزارهای این سایت رایگان‌اند و فایل‌ها بدون هیچ تغییری از منبع رسمی ارائه می‌شوند.</div>
+  <div><h4>دسته‌ها</h4><a href="#/cat/windows">ویندوز</a><a href="#/cat/android">اندروید</a>
+    <a href="#/cat/mac">مک</a><a href="#/cat/linux">لینوکس</a></div>
+  <div><h4>سایت</h4><a href="#/about">درباره ما</a><a href="#/contact">تماس با ما</a><a href="#/terms">قوانین</a>
+    <a href="#/blog">آموزش‌ها</a></div>
+</div><div class="wrap" style="margin-top:18px">© <span id="yr"></span> {{NAME}} — همه‌ی نشان‌ها متعلق به صاحبانشان است.</div></footer>
+
+<script>
+const CATS = {all:"همه",media:"چندرسانه‌ای",office:"اداری",dev:"برنامه‌نویسی",net:"اینترنت",utils:"ابزارها",graphics:"گرافیک",security:"امنیت"};
+const OS = {windows:"ویندوز",mac:"مک",linux:"لینوکس",android:"اندروید"};
+const COLORS = ["#2563eb","#7c3aed","#db2777","#ea580c","#0891b2","#16a34a","#ca8a04","#dc2626","#4f46e5","#0d9488"];
+const APPS = [
+ {id:"vlc",n:"VLC Media Player",c:"media",os:["windows","mac","linux","android"],lic:"آزاد (GPL)",size:"۴۰ مگابایت",
+  d:"پخش‌کننده‌ی همه‌کاره‌ی ویدیو و صوت که تقریباً هر فرمتی را بدون نصب کدک اضافه پخش می‌کند.",
+  f:["پخش MKV، MP4، AVI، FLAC و ده‌ها فرمت دیگر","زیرنویس فارسی با انتخاب فونت","پخش استریم شبکه و IPTV","بدون تبلیغ و ردیاب"],
+  u:"https://www.videolan.org/vlc/"},
+ {id:"7zip",n:"7-Zip",c:"utils",os:["windows","linux"],lic:"آزاد (LGPL)",size:"۱٫۵ مگابایت",
+  d:"فشرده‌ساز سبک و قدرتمند با نسبت فشرده‌سازی بالا که فایل‌های RAR، ZIP، ISO و ... را باز می‌کند.",
+  f:["فرمت 7z با فشرده‌سازی بسیار بالا","باز کردن RAR، ZIP، TAR، ISO","رمزگذاری AES-256","یکپارچه با منوی راست‌کلیک"],u:"https://www.7-zip.org/"},
+ {id:"firefox",n:"Mozilla Firefox",c:"net",os:["windows","mac","linux","android"],lic:"آزاد (MPL)",size:"۶۰ مگابایت",
+  d:"مرورگر سریع و حافظ حریم خصوصی با افزونه‌های فراوان و همگام‌سازی بین دستگاه‌ها.",
+  f:["مسدودسازی ردیاب‌ها","هزاران افزونه","همگام‌سازی نشانک‌ها و رمزها","حالت مطالعه"],u:"https://www.mozilla.org/firefox/"},
+ {id:"libreoffice",n:"LibreOffice",c:"office",os:["windows","mac","linux"],lic:"آزاد (MPL)",size:"۳۴۰ مگابایت",
+  d:"مجموعه‌ی اداری کامل و رایگان؛ جایگزین آفیس با پشتیبانی از فایل‌های Word، Excel و PowerPoint.",
+  f:["Writer، Calc، Impress، Draw","باز و ذخیره کردن DOCX و XLSX","خروجی PDF","پشتیبانی کامل از راست‌به‌چپ"],u:"https://www.libreoffice.org/download/"},
+ {id:"gimp",n:"GIMP",c:"graphics",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۳۰۰ مگابایت",
+  d:"ویرایشگر حرفه‌ای تصویر با لایه، ماسک و فیلترهای متنوع برای عکاسان و طراحان.",
+  f:["لایه و ماسک","ابزارهای روتوش","پشتیبانی PSD","افزونه و اسکریپت"],u:"https://www.gimp.org/downloads/"},
+ {id:"inkscape",n:"Inkscape",c:"graphics",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۱۲۰ مگابایت",
+  d:"طراحی برداری برای لوگو، آیکون و پوستر با خروجی SVG، PDF و PNG.",f:["ابزار مسیر و بزیه","متن روی مسیر","خروجی SVG و PDF","کتابخانه‌ی نماد"],
+  u:"https://inkscape.org/release/"},
+ {id:"krita",n:"Krita",c:"graphics",os:["windows","mac","linux","android"],lic:"آزاد (GPL)",size:"۱۵۰ مگابایت",
+  d:"نرم‌افزار نقاشی دیجیتال با قلم‌موهای طبیعی، محبوب تصویرگران و انیمیشن‌سازان.",f:["بیش از ۱۰۰ قلم‌مو","انیمیشن فریم‌به‌فریم","پشتیبانی تبلت","مدیریت رنگ"],
+  u:"https://krita.org/en/download/"},
+ {id:"blender",n:"Blender",c:"graphics",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۳۵۰ مگابایت",
+  d:"مدل‌سازی، انیمیشن و رندر سه‌بعدی حرفه‌ای؛ از جلوه‌های ویژه تا بازی‌سازی.",f:["مدل‌سازی و اسکالپت","رندر Cycles و EEVEE","تدوین ویدیو","شبیه‌سازی فیزیک"],
+  u:"https://www.blender.org/download/"},
+ {id:"obs",n:"OBS Studio",c:"media",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۱۳۰ مگابایت",
+  d:"ضبط صفحه و پخش زنده برای یوتیوب، توییچ و آپارات با کیفیت بالا.",f:["ضبط صفحه و وب‌کم","پخش زنده","میکسر صدا","صحنه‌های چندگانه"],
+  u:"https://obsproject.com/download"},
+ {id:"audacity",n:"Audacity",c:"media",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۵۰ مگابایت",
+  d:"ضبط و ویرایش صدا برای پادکست و موسیقی با حذف نویز و افکت‌های متنوع.",f:["ضبط چندکاناله","حذف نویز","افکت و فیلتر","خروجی MP3 و WAV"],
+  u:"https://www.audacityteam.org/download/"},
+ {id:"handbrake",n:"HandBrake",c:"media",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۲۵ مگابایت",
+  d:"تبدیل و کم‌حجم کردن ویدیو به MP4 و MKV با پیش‌تنظیم‌های آماده برای موبایل.",f:["کدک H.264، H.265، AV1","پیش‌تنظیم دستگاه‌ها","زیرنویس چسبیده","صف تبدیل"],
+  u:"https://handbrake.fr/downloads.php"},
+ {id:"notepadpp",n:"Notepad++",c:"dev",os:["windows"],lic:"آزاد (GPL)",size:"۵ مگابایت",
+  d:"ویرایشگر متن و کد سبک با رنگ‌آمیزی نحو برای ده‌ها زبان برنامه‌نویسی.",f:["رنگ‌آمیزی نحو","چند زبانه","جست‌وجو با RegEx","افزونه‌ها"],
+  u:"https://notepad-plus-plus.org/downloads/"},
+ {id:"vscode",n:"Visual Studio Code",c:"dev",os:["windows","mac","linux"],lic:"رایگان",size:"۹۵ مگابایت",
+  d:"ویرایشگر کد محبوب با ترمینال داخلی، دیباگر و هزاران افزونه.",f:["IntelliSense","Git داخلی","ترمینال یکپارچه","افزونه‌های فراوان"],
+  u:"https://code.visualstudio.com/Download"},
+ {id:"python",n:"Python",c:"dev",os:["windows","mac","linux"],lic:"آزاد (PSF)",size:"۲۵ مگابایت",
+  d:"زبان برنامه‌نویسی همه‌کاره برای وب، هوش مصنوعی، اتوماسیون و آموزش.",f:["کتابخانه‌ی استاندارد غنی","pip و هزاران بسته","مناسب شروع یادگیری","چندسکویی"],
+  u:"https://www.python.org/downloads/"},
+ {id:"git",n:"Git",c:"dev",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۶۰ مگابایت",
+  d:"سیستم کنترل نسخه‌ی توزیع‌شده؛ ابزار پایه‌ی هر برنامه‌نویس.",f:["شاخه‌ها و ادغام","کار آفلاین","Git Bash در ویندوز","سازگار با GitHub و GitLab"],
+  u:"https://git-scm.com/downloads"},
+ {id:"qbittorrent",n:"qBittorrent",c:"net",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۳۰ مگابایت",
+  d:"کلاینت تورنت سبک و بدون تبلیغ با جست‌وجوی داخلی و زمان‌بندی دانلود.",f:["بدون تبلیغ","محدودیت سرعت و زمان‌بندی","رابط وب","رمزگذاری"],
+  u:"https://www.qbittorrent.org/download"},
+ {id:"thunderbird",n:"Thunderbird",c:"net",os:["windows","mac","linux"],lic:"آزاد (MPL)",size:"۶۰ مگابایت",
+  d:"مدیریت ایمیل، تقویم و مخاطبان با پشتیبانی از چند حساب و رمزگذاری OpenPGP.",f:["چند حساب ایمیل","تقویم داخلی","فیلتر هرزنامه","OpenPGP"],
+  u:"https://www.thunderbird.net/"},
+ {id:"keepassxc",n:"KeePassXC",c:"security",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۴۰ مگابایت",
+  d:"مدیر رمز عبور آفلاین و امن؛ همه‌ی رمزهایتان در یک فایل رمزگذاری‌شده.",f:["رمزگذاری AES-256","تولید رمز قوی","کد دومرحله‌ای","افزونه‌ی مرورگر"],
+  u:"https://keepassxc.org/download/"},
+ {id:"bitwarden",n:"Bitwarden",c:"security",os:["windows","mac","linux","android"],lic:"آزاد",size:"۹۰ مگابایت",
+  d:"مدیر رمز عبور ابری با همگام‌سازی بین گوشی و کامپیوتر.",f:["همگام‌سازی رایگان","رمزگذاری سرتاسری","پرکردن خودکار","اشتراک امن"],
+  u:"https://bitwarden.com/download/"},
+ {id:"sharex",n:"ShareX",c:"utils",os:["windows"],lic:"آزاد (GPL)",size:"۸ مگابایت",
+  d:"گرفتن اسکرین‌شات و ضبط GIF با ابزار ویرایش و حاشیه‌نویسی.",f:["اسکرین‌شات ناحیه و پنجره","ضبط GIF و ویدیو","حاشیه‌نویسی","OCR"],
+  u:"https://getsharex.com/"},
+ {id:"everything",n:"Everything",c:"utils",os:["windows"],lic:"رایگان",size:"۲ مگابایت",
+  d:"جست‌وجوی آنی فایل‌ها در کل هارد ویندوز؛ نتیجه در کسری از ثانیه.",f:["جست‌وجوی لحظه‌ای","بسیار کم‌حجم","فیلتر پیشرفته","سرور HTTP"],
+  u:"https://www.voidtools.com/downloads/"},
+ {id:"powertoys",n:"PowerToys",c:"utils",os:["windows"],lic:"آزاد (MIT)",size:"۲۰۰ مگابایت",
+  d:"مجموعه ابزارهای کاربردی مایکروسافت برای حرفه‌ای‌تر کردن ویندوز.",f:["چیدمان پنجره‌ها FancyZones","تغییر نام گروهی","انتخاب رنگ","Run سریع"],
+  u:"https://learn.microsoft.com/windows/powertoys/install"},
+ {id:"kdeconnect",n:"KDE Connect",c:"utils",os:["windows","linux","android"],lic:"آزاد (GPL)",size:"۷۰ مگابایت",
+  d:"اتصال گوشی و کامپیوتر: انتقال فایل، کلیپ‌بورد مشترک و اعلان‌ها روی دسکتاپ.",f:["ارسال فایل","کلیپ‌بورد مشترک","کنترل موسیقی","اعلان‌ها"],
+  u:"https://kdeconnect.kde.org/download.html"},
+ {id:"newpipe",n:"NewPipe",c:"media",os:["android"],lic:"آزاد (GPL)",size:"۱۰ مگابایت",
+  d:"پخش ویدیو در اندروید بدون تبلیغ، با دانلود و پخش در پس‌زمینه.",f:["پخش در پس‌زمینه","دانلود ویدیو و صدا","بدون تبلیغ","پنجره‌ی شناور"],
+  u:"https://newpipe.net/"},
+ {id:"fdroid",n:"F-Droid",c:"utils",os:["android"],lic:"آزاد (GPL)",size:"۱۲ مگابایت",
+  d:"فروشگاه برنامه‌های آزاد اندروید؛ هزاران برنامه‌ی رایگان و بی‌تبلیغ.",f:["فقط برنامه‌های آزاد","به‌روزرسانی خودکار","بدون حساب کاربری","هشدار ردیاب"],
+  u:"https://f-droid.org/"},
+ {id:"signal",n:"Signal",c:"security",os:["windows","mac","linux","android"],lic:"آزاد (AGPL)",size:"۱۵۰ مگابایت",
+  d:"پیام‌رسان امن با رمزگذاری سرتاسری برای پیام، تماس صوتی و تصویری.",f:["رمزگذاری سرتاسری","پیام‌های ناپدیدشونده","تماس تصویری","نسخه‌ی دسکتاپ"],
+  u:"https://signal.org/download/"},
+ {id:"anki",n:"Anki",c:"office",os:["windows","mac","linux","android"],lic:"آزاد (AGPL)",size:"۱۲۰ مگابایت",
+  d:"فلش‌کارت هوشمند با تکرار فاصله‌دار؛ بهترین ابزار حفظ لغت و درس.",f:["تکرار فاصله‌دار","کارت با تصویر و صدا","همگام‌سازی","هزاران دسته‌ی آماده"],
+  u:"https://apps.ankiweb.net/"},
+ {id:"calibre",n:"Calibre",c:"office",os:["windows","mac","linux"],lic:"آزاد (GPL)",size:"۱۸۰ مگابایت",
+  d:"مدیریت کتابخانه‌ی کتاب الکترونیک و تبدیل EPUB، PDF و MOBI.",f:["تبدیل فرمت کتاب","ویرایشگر EPUB","کتاب‌خوان داخلی","ارسال به کیندل"],
+  u:"https://calibre-ebook.com/download"},
+];
+const POSTS = [
+ {id:"install-libreoffice-fa",t:"راهنمای نصب LibreOffice و تنظیم فونت فارسی",d:"از دانلود تا تنظیم زبان راست‌به‌چپ، فونت وزیر و ذخیره‌ی پیش‌فرض با فرمت DOCX.",
+  b:["نسخه‌ی مناسب سیستم‌عامل خود را از صفحه‌ی LibreOffice دریافت کنید.","در هنگام نصب گزینه‌ی Typical را انتخاب کنید.",
+     "از منوی Tools ← Options ← Language Settings گزینه‌ی Complex text layout را فعال و زبان را فارسی کنید.",
+     "در بخش Load/Save فرمت پیش‌فرض را Word قرار دهید تا فایل‌ها در آفیس هم باز شوند."]},
+ {id:"vlc-subtitle",t:"نمایش درست زیرنویس فارسی در VLC",d:"حل مشکل حروف نامفهوم زیرنویس با تغییر Encoding و فونت.",
+  b:["از Tools ← Preferences به بخش Subtitles/OSD بروید.","Default encoding را روی Arabic (Windows-1256) یا UTF-8 بگذارید.",
+     "یک فونت فارسی مثل Tahoma را انتخاب و برنامه را دوباره باز کنید."]},
+ {id:"handbrake-mobile",t:"کم‌حجم کردن ویدیو برای موبایل با HandBrake",d:"با یک پیش‌تنظیم ساده حجم ویدیو را تا ۷۰٪ کم کنید بدون افت محسوس کیفیت.",
+  b:["فایل را در HandBrake باز کنید.","از Presets گزینه‌ی Fast 720p30 را انتخاب کنید.","کدک را H.265 بگذارید و RF را بین ۲۴ تا ۲۸ تنظیم کنید.","Start Encode را بزنید."]},
+ {id:"password-manager",t:"چرا به مدیر رمز عبور نیاز دارید؟",d:"مقایسه‌ی KeePassXC و Bitwarden و شروع کار با هرکدام در پنج دقیقه.",
+  b:["رمز تکراری بزرگ‌ترین ریسک امنیتی حساب‌هاست.","KeePassXC رمزها را آفلاین و در یک فایل نگه می‌دارد.","Bitwarden رمزها را رمزگذاری‌شده بین دستگاه‌ها همگام می‌کند.","یک رمز اصلی قوی بسازید و بقیه را به برنامه بسپارید."]},
+];
+const fa = s => String(s).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]);
+const hash = s => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+const icon = a => `<div class="ico" style="background:${COLORS[hash(a.id) % COLORS.length]}">${a.n[0]}</div>`;
+const dls = a => fa(12000 + hash(a.id + "d") % 280000);
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const card = a => `<div class="card"><div class="top">${icon(a)}<div><h3>${a.n}</h3>
+  <div class="meta">${CATS[a.c]} · ${a.size} · ${dls(a)} دانلود</div></div></div>
+  <p>${a.d}</p><div class="tags">${a.os.map(o => `<span class="tag">${OS[o]}</span>`).join("")}</div>
+  <div class="row"><a class="btn" href="#/app/${a.id}">دانلود</a><a class="btn ghost" href="#/app/${a.id}">جزئیات</a></div></div>`;
+let cat = "all", q = "";
+
+function list(items) { return items.length ? `<div class="grid">${items.map(card).join("")}</div>` : `<div class="empty">نتیجه‌ای پیدا نشد.</div>`; }
+
+function home() {
+  const items = APPS.filter(a => (cat === "all" || a.c === cat) &&
+    (!q || (a.n + a.d).toLowerCase().includes(q.toLowerCase())));
+  return `<section class="hero"><h1>دانلود رایگان و مستقیم نرم‌افزار</h1>
+   <p>بهترین نرم‌افزارهای آزاد و رایگان، دسته‌بندی‌شده با توضیح فارسی و لینک مستقیم از سایت سازنده.</p>
+   <form class="search" onsubmit="q=this.s.value;render();return false"><input name="s" value="${esc(q)}" placeholder="جست‌وجوی نرم‌افزار، مثلاً VLC…"><button>جست‌وجو</button></form>
+   <div class="stats"><span><b>${fa(APPS.length)}+</b>نرم‌افزار</span><span><b>${fa(4)}</b>سیستم‌عامل</span><span><b>${fa(POSTS.length)}</b>آموزش</span><span><b>۱۰۰٪</b>رایگان</span></div></section>
+   <div class="cats">${Object.entries(CATS).map(([k, v]) => `<button class="${k === cat ? "on" : ""}" onclick="cat='${k}';render()">${v}</button>`).join("")}</div>
+   <h2 class="sec">${q ? "نتایج جست‌وجو" : cat === "all" ? "محبوب‌ترین‌ها" : CATS[cat]}</h2>${list(items)}
+   <h2 class="sec">تازه‌ترین آموزش‌ها</h2><div class="news">${POSTS.slice(0, 2).map(postCard).join("")}</div>`;
+}
+
+function byOs(os) {
+  return `<p class="crumb"><a href="#/">خانه</a> / ${OS[os]}</p><h2 class="sec">نرم‌افزارهای ${OS[os]}</h2>${list(APPS.filter(a => a.os.includes(os)))}`;
+}
+
+function app(id) {
+  const a = APPS.find(x => x.id === id);
+  if (!a) return `<div class="empty">این صفحه پیدا نشد. <a href="#/">بازگشت به خانه</a></div>`;
+  const similar = APPS.filter(x => x.c === a.c && x.id !== a.id).slice(0, 3);
+  return `<p class="crumb"><a href="#/">خانه</a> / ${CATS[a.c]} / ${a.n}</p>
+  <div class="detail"><div class="panel"><div class="top">${icon(a)}<div><h1>دانلود ${a.n}</h1><div class="meta">${a.d}</div></div></div>
+   <h3>امکانات</h3><ul>${a.f.map(x => `<li>${x}</li>`).join("")}</ul>
+   <h3>راهنمای نصب</h3><ol><li>نسخه‌ی مناسب سیستم‌عامل خود را از کادر دانلود انتخاب کنید.</li>
+   <li>فایل نصب را اجرا کنید و مراحل را با گزینه‌های پیش‌فرض ادامه دهید.</li>
+   <li>پس از نصب، برنامه را از منوی Start یا فهرست برنامه‌ها باز کنید.</li></ol>
+   <h3>نکته</h3><p class="meta">فایل‌ها مستقیماً از سایت رسمی سازنده دریافت می‌شوند تا همیشه آخرین نسخه‌ی سالم و بدون تغییر را داشته باشید.</p></div>
+   <aside class="panel"><div class="kv"><span>مجوز</span><span>${a.lic}</span><span>حجم تقریبی</span><span>${a.size}</span>
+   <span>سیستم‌عامل</span><span>${a.os.map(o => OS[o]).join("، ")}</span><span>دانلود</span><span>${dls(a)} بار</span></div>
+   <div class="dl">${a.os.map(o => `<a href="${a.u}" target="_blank" rel="noopener"><span>دانلود برای ${OS[o]}</span><small>لینک مستقیم ↗</small></a>`).join("")}</div></aside></div>
+  ${similar.length ? `<h2 class="sec">نرم‌افزارهای مشابه</h2>${list(similar)}` : ""}`;
+}
+
+function postCard(p) { return `<div class="card"><h3>${p.t}</h3><p>${p.d}</p><div class="row"><a class="btn ghost" href="#/blog/${p.id}">ادامه‌ی مطلب</a></div></div>`; }
+function blog(id) {
+  if (!id) return `<h2 class="sec">آموزش‌ها</h2><div class="news">${POSTS.map(postCard).join("")}</div>`;
+  const p = POSTS.find(x => x.id === id);
+  if (!p) return `<div class="empty">مطلب پیدا نشد.</div>`;
+  return `<div class="page panel"><p class="crumb"><a href="#/blog">آموزش‌ها</a></p><h1>${p.t}</h1><p class="meta">${p.d}</p><ol>${p.b.map(x => `<li>${x}</li>`).join("")}</ol></div>`;
+}
+const PAGES = {
+  about: `<div class="page panel"><h1>درباره ما</h1><p>{{NAME}} از سال ۱۴۰۱ با هدف معرفی و دسترسی آسان به نرم‌افزارهای آزاد و رایگان فعالیت می‌کند. تمرکز ما بر نرم‌افزارهای قانونی و رایگان است و لینک‌ها همیشه به نسخه‌ی رسمی سازنده اشاره می‌کنند.</p><p>اگر نرم‌افزار رایگانی می‌شناسید که باید اینجا معرفی شود، از صفحه‌ی تماس به ما خبر دهید.</p></div>`,
+  contact: `<div class="page panel"><h1>تماس با ما</h1><p>پیشنهادها و گزارش لینک‌های خراب را به نشانی support@{{DOMAIN}} بفرستید. پاسخ معمولاً تا ۴۸ ساعت کاری ارسال می‌شود.</p></div>`,
+  terms: `<div class="page panel"><h1>قوانین استفاده</h1><ol><li>همه‌ی نرم‌افزارهای معرفی‌شده رایگان یا آزادند و متعلق به سازندگانشان هستند.</li><li>{{NAME}} فایل‌ها را تغییر نمی‌دهد و لینک‌ها به منبع رسمی است.</li><li>استفاده از مطالب آموزشی با ذکر منبع آزاد است.</li></ol></div>`,
+};
+
+function render() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  const k = parts[0] || "home";
+  let html;
+  if (k === "app") html = app(parts[1]);
+  else if (k === "cat" && OS[parts[1]]) html = byOs(parts[1]);
+  else if (k === "blog") html = blog(parts[1]);
+  else if (PAGES[k]) html = PAGES[k];
+  else html = home();
+  document.getElementById("app").innerHTML = html;
+  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.k === (k === "cat" ? parts[1] : k)));
+  document.title = (k === "app" && APPS.find(x => x.id === parts[1]) ? "دانلود " + APPS.find(x => x.id === parts[1]).n + " | " : "") + "{{NAME}}";
+}
+window.addEventListener("hashchange", () => { render(); scrollTo(0, 0); });
+document.getElementById("yr").textContent = fa(new Date().getFullYear());
+render();
+</script>
+</body>
+</html>
