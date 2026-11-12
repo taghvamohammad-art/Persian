@@ -8,7 +8,10 @@ Every minute it
      AmneziaWG peers, with credentials derived from username + password,
   3. reports each user's traffic to User Manager over RADIUS accounting
      (after an Access-Request, so User Manager's own limits decide), the
-     way a MikroTik NAS does: volume and days stay in one place.
+     way a MikroTik NAS does: volume and days stay in one place. Each
+     protocol gets its own accounting session (NAS-Port-Id = protocol), so
+     User Manager's sessions show who used how much, on which server
+     (NAS-Identifier) and over which protocol.
 
 Standard library only (Ubuntu's python3). Config: /etc/pv-agent/config.json.
 """
@@ -40,6 +43,17 @@ CONFIG = "/etc/pv-agent/config.json"
 # 2026/11/09 20:11:23.649858 from tcp:1.2.3.4:59426 accepted tcp:x:443 [vless-vision >> direct] email: 25g00001
 import re as _re  # noqa: E402
 ACCESS_RE = _re.compile(r"\[([\w.-]+) (?:>>|->) [^\]]*\] email: (\S+)")
+
+
+def xray_email(name, tag):
+    """One Xray user per inbound ("name@tag"), so traffic is counted per protocol."""
+    return "%s@%s" % (name.lower(), tag)
+
+
+def split_email(email):
+    """(user, protocol) from an Xray email; older plain emails count as "xray"."""
+    name, sep, tag = email.lower().rpartition("@")
+    return (name, tag) if sep and name else (email.lower(), "xray")
 ACCESS_LOG = "/var/log/xray/access.log"
 STATUS_FILE = "/var/lib/pv-agent/status.json"
 ONLINE_WINDOW = 180      # a user seen in the last 3 minutes counts as connected
@@ -135,11 +149,13 @@ class Radius:
                 s.close()
         raise OSError("no RADIUS server answered (%s)" % last if last else "no RADIUS server answered")
 
-    def _common(self, user, sid=None):
+    def _common(self, user, sid=None, port=None):
         a = [_attr(1, user), _attr(4, _ip(self.nas_ip)), _attr(32, self.nas_id),
              _attr(61, 5), _attr(6, 2)]
         if sid:
             a.append(_attr(44, sid))
+        if port:
+            a.append(_attr(87, port))           # NAS-Port-Id: the protocol
         return a
 
     def authorize(self, user, password):
@@ -149,8 +165,8 @@ class Radius:
         code, _ = self._exchange(ACCESS_REQUEST, attrs, acct=False)
         return code == ACCESS_ACCEPT
 
-    def account(self, kind, user, sid, seconds=0, octets_in=0, octets_out=0, address=None):
-        a = self._common(user, sid) + [_attr(40, kind), _attr(46, int(seconds)),
+    def account(self, kind, user, sid, seconds=0, octets_in=0, octets_out=0, address=None, port=None):
+        a = self._common(user, sid, port) + [_attr(40, kind), _attr(46, int(seconds)),
                                         _attr(42, octets_in), _attr(52, octets_in >> 32),
                                         _attr(43, octets_out), _attr(53, octets_out >> 32)]
         if address:
@@ -239,11 +255,11 @@ def fetch_users(routers):
 
 # ====================================================================== Xray
 
-def xray_clients(protocol, users):
+def xray_clients(protocol, users, tag=None):
     """Inbound client list for {username: password}."""
     out = []
     for name, pw in sorted(users.items()):
-        email = name.lower()
+        email = xray_email(name, tag) if tag else name.lower()
         if protocol == "vless":
             out.append({"id": pvcreds.vless_uuid(name, pw), "email": email, "flow": ""})
         elif protocol == "vless-vision":
@@ -279,7 +295,7 @@ class Xray:
     def _fill(self, ib, users):
         kind = self.inbounds[ib["tag"]]
         key = "users" if kind == "hysteria" else "clients"
-        ib.setdefault("settings", {})[key] = xray_clients(kind, users)
+        ib.setdefault("settings", {})[key] = xray_clients(kind, users, ib["tag"])
         return ib
 
     def inbound(self, tag, users):
@@ -317,7 +333,7 @@ class Xray:
             for tag, kind in self.inbounds.items():
                 if removed:
                     try:
-                        self._cli("rmu", "-tag=" + tag, *[n.lower() for n in removed])
+                        self._cli("rmu", "-tag=" + tag, *[xray_email(n, tag) for n in removed])
                     except RuntimeError as e:
                         if "not found" not in str(e).lower():
                             raise
@@ -486,11 +502,11 @@ class Agent:
     # ---------------------------------------------------------------- traffic
 
     def collect(self):
-        """{username lower: [in, out]} since the last round."""
+        """{"username lower|protocol": [in, out]} since the last round."""
         total = {}
         if self.xray:
             for email, (up, down) in self.xray.traffic().items():
-                t = total.setdefault(email.lower(), [0, 0])
+                t = total.setdefault("%s|%s" % split_email(email), [0, 0])
                 t[0] += up
                 t[1] += down
         if self.awg:
@@ -507,7 +523,7 @@ class Agent:
                 p_rx, p_tx = prev.get(pub, (0, 0))
                 d_rx, d_tx = (rx - p_rx, tx - p_tx) if rx >= p_rx and tx >= p_tx else (rx, tx)
                 if d_rx or d_tx:
-                    t = total.setdefault(peers[pub][0].lower(), [0, 0])
+                    t = total.setdefault(peers[pub][0].lower() + "|amneziawg", [0, 0])
                     t[0] += d_rx           # received by the server = sent by the user
                     t[1] += d_tx
             self.state["awg_transfer"] = {k: list(v) for k, v in now.items()}
@@ -517,34 +533,40 @@ class Agent:
         now = now or time.time()
         sessions = self.state.setdefault("sessions", {})
         names = {n.lower(): n for n in self.users}
-        for user, (up, down) in traffic.items():
+        for key, (up, down) in traffic.items():
+            user, _, proto = key.partition("|")
             name = names.get(user, user)
-            s = sessions.get(user)
+            s = sessions.get(key)
             if s is None:
                 password = self.users.get(name)
-                if password is not None:
+                # one Access-Request per user: a second protocol of a user already
+                # in must not be turned away by User Manager's shared-users limit
+                already = any(k.partition("|")[0] == user for k in sessions)
+                if password is not None and not already:
                     try:
                         if not self.radius.authorize(name, password):
                             self.block(name)
                             continue
                     except OSError as e:
                         log.warning("radius authorize %s: %s (letting the user in)", name, e)
-                s = sessions[user] = {"sid": "pv%x%s" % (int(now), secrets.token_hex(3)), "name": name,
-                                      "start": now, "in": 0, "out": 0, "last": now, "started": False}
+                s = sessions[key] = {"sid": "pv%x%s" % (int(now), secrets.token_hex(3)), "name": name,
+                                     "proto": proto or "xray", "start": now, "in": 0, "out": 0, "last": now, "started": False}
             s["in"] += up
             s["out"] += down
             s["last"] = now
-        for user, s in list(sessions.items()):
+        for key, s in list(sessions.items()):
             idle = now - s["last"] > IDLE_STOP
             kind = STOP if idle else (INTERIM if s["started"] else START)
+            port = s.get("proto")
             try:
-                self.radius.account(kind, s["name"], s["sid"], now - s["start"], s["in"], s["out"])
+                self.radius.account(kind, s["name"], s["sid"], now - s["start"], s["in"], s["out"], port=port)
                 if kind == START:
                     s["started"] = True
                     # the traffic before Start goes in the first interim update
-                    self.radius.account(INTERIM, s["name"], s["sid"], now - s["start"], s["in"], s["out"])
+                    self.radius.account(INTERIM, s["name"], s["sid"], now - s["start"], s["in"], s["out"],
+                                        port=port)
                 if idle:
-                    del sessions[user]
+                    del sessions[key]
             except OSError as e:
                 log.warning("radius accounting %s: %s (kept for the next round)", s["name"], e)
 
@@ -563,7 +585,7 @@ class Agent:
         except OSError:
             text = ""
         for m in ACCESS_RE.finditer(text):
-            seen["%s|%s" % (m.group(2).lower(), m.group(1))] = now
+            seen["%s|%s" % (split_email(m.group(2))[0], m.group(1))] = now
         if self.awg:
             try:
                 peers = getattr(self, "awg_peers", {})

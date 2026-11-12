@@ -24,7 +24,7 @@ class FakeRadius:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.port = self.sock.getsockname()[1]
-        self.accounting, self.auth_seen = [], []
+        self.accounting, self.auth_seen, self.ports = [], [], []
         threading.Thread(target=self.serve, daemon=True).start()
 
     @staticmethod
@@ -62,6 +62,7 @@ class FakeRadius:
                 octets_in = struct.unpack("!I", a[42][0])[0] + (struct.unpack("!I", a[52][0])[0] << 32)
                 octets_out = struct.unpack("!I", a[43][0])[0] + (struct.unpack("!I", a[53][0])[0] << 32)
                 self.accounting.append((user, kind, a[44][0].decode(), octets_in, octets_out))
+                self.ports.append(a[87][0].decode() if 87 in a else None)
                 rcode = 5
             resp = struct.pack("!BBH", rcode, ident, 20)
             resp += hashlib.md5(resp + auth + self.secret).digest()
@@ -200,6 +201,22 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(srv.accounting[-1][1], pa.STOP)
         self.assertEqual(agent.state["sessions"], {})
 
+    def test_one_session_per_protocol(self):
+        agent, srv = self.make({"25g00001": "abc123"})
+        pa.fetch_users = lambda routers: ({"25g00001": "abc123"}, "um1")
+        agent.sync_users()
+        agent.xray.pending = {"25g00001@vless-vision": [10, 100], "25g00001@hy2": [5, 50]}
+        agent.account(agent.collect(), now=1000)
+        self.assertEqual(len(srv.auth_seen), 1)                    # asked once for the user
+        self.assertEqual(set(agent.state["sessions"]), {"25g00001|vless-vision", "25g00001|hy2"})
+        self.assertEqual({p for p in srv.ports}, {"vless-vision", "hy2"})
+        sids = {s for u, k, s, i, o in srv.accounting}
+        self.assertEqual(len(sids), 2)
+        self.assertEqual(pa.split_email("25G00001@vless-cdn"), ("25g00001", "vless-cdn"))
+        self.assertEqual(pa.split_email("plain"), ("plain", "xray"))
+        clients = pa.xray_clients("vless", {"25G00001": "abc123"}, "vless-xhttp")
+        self.assertEqual(clients[0]["email"], "25g00001@vless-xhttp")
+
     def test_status_file_counts_online_users_per_protocol(self):
         agent, srv = self.make({})
         log_path = os.path.join(os.path.dirname(agent.state_path), "access.log")
@@ -207,7 +224,7 @@ class AgentTests(unittest.TestCase):
         agent.cfg["status_file"] = os.path.join(os.path.dirname(agent.state_path), "status.json")
         with open(log_path, "w") as f:
             f.write("2026/11/09 20:11:23.6 from tcp:1.2.3.4:5 accepted tcp:a:443 [vless-vision >> direct] email: 25G00001\n"
-                    "2026/11/09 20:11:24.6 from tcp:1.2.3.4:6 accepted tcp:b:443 [hy2 -> direct] email: 25g00002\n"
+                    "2026/11/09 20:11:24.6 from tcp:1.2.3.4:6 accepted tcp:b:443 [hy2 -> direct] email: 25g00002@hy2\n"
                     "2026/11/09 20:11:25.6 from tcp:1.2.3.4:7 accepted tcp:c:443 [vless-vision >> direct] email: 25g00003\n"
                     "2026/11/09 20:11:26.6 from tcp:1.2.3.4:8 accepted tcp:d:443 [vless-vision >> direct] email: 25g00001\n")
         st = agent.write_status(1000)

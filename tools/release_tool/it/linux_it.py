@@ -230,6 +230,8 @@ def main():
     print(agent_log(60))
     if "pv-it1" not in um_usage("A", USER) and "nas-identifier" not in um_usage("A", USER):
         problems.append("no session from the Linux server in UM1")
+    elif not any(t in um_usage("A", USER) for t in ("vless-vision", "ss", "hy2", "vless-xhttp")):
+        problems.append("UM1 sessions carry no protocol (nas-port-id)")
 
     step("AmneziaWG peer")
     if any(p["type"] == "amneziawg" for p in entry["protocols"]):
