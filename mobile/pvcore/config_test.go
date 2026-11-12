@@ -82,7 +82,7 @@ func TestAwgUAPI(t *testing.T) {
 
 func TestWindowsConfig(t *testing.T) {
 	choices := `[{"server":` + testServer + `,"kind":"hysteria2"}]`
-	cfg, err := WindowsConfig(choices, "25g00001", "abc123", 10808)
+	cfg, err := WindowsConfig(choices, "25g00001", "abc123", 10808, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,5 +105,28 @@ func TestTunnelDNSOverTCP(t *testing.T) {
 		if !strings.HasPrefix(s.(string), "tcp://") {
 			t.Fatalf("resolver must go over TCP through the tunnel: %v", s)
 		}
+	}
+}
+
+func TestWindowsBypass(t *testing.T) {
+	choices := `[{"server":` + testServer + `,"kind":"hysteria2"}]`
+	cfg, err := WindowsConfig(choices, "u", "p", 10808, []string{"C:\\Program Files\\Mozilla Firefox\\firefox.exe", "Telegram.exe", "firefox.exe", "bad*name", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c map[string]any
+	json.Unmarshal([]byte(cfg), &c)
+	rules := c["routing"].(map[string]any)["rules"].([]any)
+	if rules[0].(map[string]any)["outboundTag"] != "dns-out" {
+		t.Fatalf("DNS rule must stay first: %v", rules[0])
+	}
+	r := rules[1].(map[string]any)
+	names := r["process"].([]any)
+	if r["outboundTag"] != "direct" || len(names) != 2 || names[0] != "firefox.exe" || names[1] != "Telegram.exe" {
+		t.Fatalf("bypass rule: %v", r)
+	}
+	plain, _ := WindowsConfig(choices, "u", "p", 10808, nil)
+	if strings.Contains(plain, `"process"`) {
+		t.Fatal("no bypass rule without programs")
 	}
 }

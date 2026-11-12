@@ -62,7 +62,7 @@ func (s *session) Disconnect() {
 	s.set("off", nil, "")
 }
 
-func (s *session) Connect(cfg *pvcore.SignedConfig, user, pass string) {
+func (s *session) Connect(cfg *pvcore.SignedConfig, user, pass string, bypass []string) {
 	s.Disconnect()
 	stop, done := make(chan struct{}), make(chan struct{})
 	s.mu.Lock()
@@ -71,7 +71,7 @@ func (s *session) Connect(cfg *pvcore.SignedConfig, user, pass string) {
 	s.set("probing", nil, "")
 	go func() {
 		defer close(done)
-		s.run(cfg, user, pass, stop)
+		s.run(cfg, user, pass, bypass, stop)
 	}()
 }
 
@@ -106,10 +106,14 @@ func probeAll(servers []json.RawMessage, user, pass string) []choice {
 
 // attempts in order: each is a list of choices started together (one
 // AmneziaWG server, or a pool of Xray protocols).
-func plan(all []choice) [][]choice {
+// noAwg: programs must bypass the tunnel, which only the Xray TUN can do.
+func plan(all []choice, noAwg bool) [][]choice {
 	var pool, dns []choice
 	var awg *choice
 	for i, c := range all {
+		if noAwg && c.kind == "amneziawg" {
+			continue
+		}
 		switch c.kind {
 		case "vless-dns":
 			dns = append(dns, c)
@@ -141,7 +145,7 @@ func plan(all []choice) [][]choice {
 	return out
 }
 
-func start(chosen []choice, user, pass string) ([]string, error) {
+func start(chosen []choice, user, pass string, bypass []string) ([]string, error) {
 	var names []string
 	for _, c := range chosen {
 		names = append(names, fmt.Sprintf("%s/%s %dms", c.name, c.kind, c.ms))
@@ -154,7 +158,7 @@ func start(chosen []choice, user, pass string) ([]string, error) {
 		list = append(list, map[string]any{"server": c.server, "kind": c.kind})
 	}
 	cj, _ := json.Marshal(list)
-	return names, pvcore.StartWindows(string(cj), user, pass)
+	return names, pvcore.StartWindows(string(cj), user, pass, bypass)
 }
 
 // sstpCheck: through Windows' own routes, which the SSTP connection owns.
@@ -169,7 +173,7 @@ func sstpCheck() int {
 	return int(time.Since(t).Milliseconds())
 }
 
-func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, stop chan struct{}) {
+func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []string, stop chan struct{}) {
 	servers := cfg.LinuxServers
 	wait := func(d time.Duration) bool {
 		select {
@@ -189,14 +193,14 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, stop chan str
 		var names []string
 		lastErr := "no protocol works"
 		up := false
-		for _, attempt := range plan(probeAll(servers, user, pass)) {
+		for _, attempt := range plan(probeAll(servers, user, pass), len(bypass) > 0) {
 			select {
 			case <-stop:
 				return
 			default:
 			}
 			var err error
-			if names, err = start(attempt, user, pass); err == nil {
+			if names, err = start(attempt, user, pass, bypass); err == nil {
 				up = true
 				break
 			}

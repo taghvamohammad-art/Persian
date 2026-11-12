@@ -39,6 +39,11 @@ class SignedConfig(unittest.TestCase):
         env["payload"] = base64.b64encode(b'{"version": 99}').decode()
         self.assertIsNone(pc.verify(json.dumps(env), self.pub))
 
+    def test_bypass_names(self):
+        self.assertEqual(pc.clean_bypass(
+            ["C:\\Program Files\\Mozilla Firefox\\firefox.exe", "Telegram.exe", "FIREFOX.EXE", "notes.txt", ""]),
+            ["firefox.exe", "Telegram.exe"])
+
     def test_secret_roundtrip(self):
         self.assertEqual(pc.unseal(pc.seal("pw-1")), "pw-1")
 

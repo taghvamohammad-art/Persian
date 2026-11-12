@@ -12,7 +12,7 @@
 // Requests are JSON lines on 127.0.0.1:47811, one answer line each:
 //
 //	{"cmd":"status"}
-//	{"cmd":"connect","envelope":"<signed app config>","user":"..","pass":".."}
+//	{"cmd":"connect","envelope":"<signed app config>","user":"..","pass":"..","bypass":["firefox.exe"]}
 //	{"cmd":"disconnect"}
 //	{"cmd":"upgrade","envelope":"<signed app config>","path":"C:\\...\\pvwin.exe"}
 //
@@ -51,11 +51,12 @@ var version = "0" // the build number, set when building
 var tunnel session
 
 type request struct {
-	Cmd      string `json:"cmd"`
-	Envelope string `json:"envelope"`
-	User     string `json:"user"`
-	Pass     string `json:"pass"`
-	Path     string `json:"path"`
+	Cmd      string   `json:"cmd"`
+	Envelope string   `json:"envelope"`
+	User     string   `json:"user"`
+	Pass     string   `json:"pass"`
+	Bypass   []string `json:"bypass"`
+	Path     string   `json:"path"`
 }
 
 func exeDir() string {
@@ -82,7 +83,7 @@ func handle(req request) map[string]any {
 		if len(cfg.LinuxServers) == 0 && len(cfg.Servers) == 0 {
 			return map[string]any{"ok": false, "error": "no servers"}
 		}
-		tunnel.Connect(cfg, req.User, req.Pass)
+		tunnel.Connect(cfg, req.User, req.Pass, req.Bypass)
 	case "disconnect":
 		tunnel.Disconnect()
 	case "upgrade":

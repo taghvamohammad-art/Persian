@@ -27,8 +27,9 @@ import urllib.request
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QStackedWidget, QSystemTrayIcon, QMenu,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+                               QProgressBar, QPushButton, QStackedWidget, QSystemTrayIcon, QMenu,
                                QVBoxLayout, QWidget)
 
 APP_NAME = "Persian VPN"
@@ -376,7 +377,123 @@ QPushButton:hover { background: rgba(255,255,255,0.14); }
        font-size: 15pt; font-weight: bold; border: 4px solid #2EE6C5; background: rgba(46,230,197,0.08); }
 #Big[state="on"] { background: #2EE6C5; color: #04211C; }
 #Big[state="busy"] { border-color: #F5C451; }
+#Profile { font-size: 13pt; font-weight: bold; color: #2EE6C5; }
+QProgressBar { background: rgba(255,255,255,0.10); border: none; border-radius: 4px; max-height: 8px; }
+QProgressBar::chunk { background: #2EE6C5; border-radius: 4px; }
+QProgressBar[low="true"]::chunk { background: #F5C451; }
+QListWidget, QDialog { background: #0B2F45; border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; }
+#Link { background: transparent; border: none; color: #2EE6C5; padding: 2px 6px; }
 """
+
+
+# ---------------------------------------------------------------- programs outside the VPN
+
+SYSTEM_PROCESSES = {
+    "system", "system idle process", "registry", "smss.exe", "csrss.exe", "wininit.exe", "services.exe",
+    "lsass.exe", "svchost.exe", "winlogon.exe", "fontdrvhost.exe", "dwm.exe", "memory compression",
+    "conhost.exe", "sihost.exe", "taskhostw.exe", "runtimebroker.exe", "ctfmon.exe", "dllhost.exe",
+    "searchindexer.exe", "spoolsv.exe", "wmiprvse.exe", "audiodg.exe", "lsaiso.exe", "secure system",
+    "pvwin.exe", "tasklist.exe", "smartscreen.exe", "securityhealthservice.exe", "msmpeng.exe",
+}
+
+
+def running_programs():
+    """File names of the programs running now (for picking), without Windows' own."""
+    try:
+        out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, timeout=15,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    names = {}
+    for line in out.decode("mbcs" if os.name == "nt" else "utf-8", "replace").splitlines():
+        name = line.split('","', 1)[0].strip('"')
+        if name.lower().endswith(".exe") and name.lower() not in SYSTEM_PROCESSES:
+            names.setdefault(name.lower(), name)
+    me = os.path.basename(sys.executable).lower()
+    return sorted((n for k, n in names.items() if k != me), key=str.lower)
+
+
+def clean_bypass(names):
+    """Plain program file names, each once (case kept: Windows reports it as on disk)."""
+    out, seen = [], set()
+    for n in names:
+        n = os.path.basename(str(n).replace("\\", "/").strip())
+        if n and n.lower().endswith(".exe") and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
+class BypassDialog(QDialog):
+    """Programs whose traffic goes outside the VPN (e.g. Chrome through the VPN,
+    Firefox not). Ticked = outside."""
+
+    def __init__(self, parent, chosen):
+        super().__init__(parent)
+        self.setWindowTitle("برنامه‌های خارج از VPN")
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.resize(380, 520)
+        lay = QVBoxLayout(self)
+        hint = QLabel("برنامه‌هایی که تیک بخورند مستقیم به اینترنت وصل می‌شوند و از VPN رد نمی‌شوند. "
+                      "بقیه‌ی برنامه‌ها از VPN استفاده می‌کنند.")
+        hint.setWordWrap(True)
+        hint.setObjectName("Hint")
+        lay.addWidget(hint)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("جست‌وجو…")
+        self.search.textChanged.connect(self.filter)
+        lay.addWidget(self.search)
+        self.list = QListWidget()
+        self.list.setLayoutDirection(Qt.LeftToRight)
+        lay.addWidget(self.list, 1)
+        names = clean_bypass(list(chosen) + running_programs())
+        chosen_l = {n.lower() for n in chosen}
+        for n in sorted(names, key=lambda x: (x.lower() not in chosen_l, x.lower())):
+            self.add(n, n.lower() in chosen_l)
+        row = QHBoxLayout()
+        add = QPushButton("افزودن فایل برنامه…")
+        add.clicked.connect(self.add_file)
+        row.addWidget(add)
+        clear = QPushButton("همه از VPN")
+        clear.clicked.connect(lambda: [self.list.item(i).setCheckState(Qt.Unchecked)
+                                       for i in range(self.list.count())])
+        row.addWidget(clear)
+        lay.addLayout(row)
+        note = QLabel("وقتی برنامه‌ای در این فهرست باشد، اتصال فقط با پروتکل‌هایی برقرار می‌شود "
+                      "که این امکان را دارند.")
+        note.setWordWrap(True)
+        note.setObjectName("Hint")
+        lay.addWidget(note)
+        ok = QPushButton("ذخیره")
+        ok.setObjectName("Primary")
+        ok.clicked.connect(self.accept)
+        lay.addWidget(ok)
+
+    def add(self, name, checked):
+        for i in range(self.list.count()):
+            if self.list.item(i).text().lower() == name.lower():
+                self.list.item(i).setCheckState(Qt.Checked if checked else self.list.item(i).checkState())
+                return
+        it = QListWidgetItem(name)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.list.insertItem(0, it) if checked else self.list.addItem(it)
+
+    def add_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "انتخاب برنامه", os.environ.get("ProgramFiles", ""),
+                                              "Programs (*.exe)")
+        if path:
+            self.add(os.path.basename(path), True)
+
+    def filter(self, text):
+        t = text.strip().lower()
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            it.setHidden(bool(t) and t not in it.text().lower())
+
+    def chosen(self):
+        return clean_bypass(self.list.item(i).text() for i in range(self.list.count())
+                            if self.list.item(i).checkState() == Qt.Checked)
 
 
 class Window(QWidget):
@@ -478,10 +595,35 @@ class Window(QWidget):
         card = QFrame()
         card.setObjectName("Card")
         cl = QVBoxLayout(card)
-        self.l_account = QLabel("…")
+        cl.setSpacing(6)
+        top = QHBoxLayout()
+        self.l_profile = QLabel("…")
+        self.l_profile.setObjectName("Profile")
+        self.l_profile.setWordWrap(True)
+        top.addWidget(self.l_profile, 1)
+        again = QPushButton("↻")
+        again.setObjectName("Link")
+        again.setToolTip("به‌روزرسانی")
+        again.clicked.connect(self.refresh_account)
+        top.addWidget(again)
+        cl.addLayout(top)
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setRange(0, 1000)
+        self.bar.hide()
+        cl.addWidget(self.bar)
+        self.l_account = QLabel("")
         self.l_account.setWordWrap(True)
         cl.addWidget(self.l_account)
         lay.addWidget(card)
+        self.account_timer = QTimer(self)
+        self.account_timer.setInterval(5 * 60 * 1000)        # used volume, while the app is open
+        self.account_timer.timeout.connect(self.refresh_account)
+        self.account_timer.start()
+        self.b_bypass = QPushButton("")
+        self.b_bypass.clicked.connect(self.edit_bypass)
+        lay.addWidget(self.b_bypass)
+        self.show_bypass()
         self.auto = QCheckBox("بعد از باز شدن برنامه خودکار وصل شود")
         self.auto.setChecked(bool(self.state.get("auto")))
         self.auto.toggled.connect(lambda v: self.set_state(auto=v))
@@ -564,13 +706,55 @@ class Window(QWidget):
         cur = st.get("current") or {}
         state = {"active": "فعال", "volume_finished": "حجم تمام شده", "expired": "زمان تمام شده",
                  "waiting": "در انتظار شروع", "no_profile": "بدون اشتراک"}.get(st.get("state"), st.get("state", ""))
+        self.l_profile.setText(cur.get("display") or cur.get("profile") or "بدون اشتراک فعال")
         lines = ["وضعیت: %s" % state]
+        limit, used = cur.get("limit_bytes"), cur.get("used_bytes")
+        if cur and limit:
+            frac = min(1.0, (used or 0) / limit)
+            self.bar.setValue(int(frac * 1000))
+            self.bar.setProperty("low", frac > 0.85)
+            self.bar.style().unpolish(self.bar)
+            self.bar.style().polish(self.bar)
+            self.bar.show()
+            lines.append("مصرف: %s از %s" % (gib(used or 0), gib(limit)))
+        else:
+            self.bar.hide()
         if cur:
-            if cur.get("remaining_bytes") is not None or cur.get("limit_bytes") is None:
+            if cur.get("remaining_bytes") is not None or limit is None:
                 lines.append("حجم باقی‌مانده: %s" % gib(cur.get("remaining_bytes")))
             if cur.get("days_left") is not None:
                 lines.append("روزهای باقی‌مانده: %d" % cur["days_left"])
+            if cur.get("end"):
+                lines.append("پایان: %s" % cur["end"][:16])
+        for n in st.get("next") or []:
+            what = n.get("display") or n.get("profile") or ""
+            extra = []
+            if n.get("limit_bytes"):
+                extra.append(gib(n["limit_bytes"]))
+            if n.get("validity_days"):
+                extra.append("%d روز" % n["validity_days"])
+            lines.append("بعدی: %s%s" % (what, " (%s)" % "، ".join(extra) if extra else ""))
         self.l_account.setText("\n".join(lines))
+
+    # programs outside the VPN
+    def bypass(self):
+        return clean_bypass(self.state.get("bypass") or [])
+
+    def show_bypass(self):
+        n = len(self.bypass())
+        self.b_bypass.setText("برنامه‌های خارج از VPN" + (" (%d)" % n if n else ""))
+
+    def edit_bypass(self):
+        d = BypassDialog(self, self.bypass())
+        if d.exec() != QDialog.Accepted:
+            return
+        new = d.chosen()
+        if new == self.bypass():
+            return
+        self.set_state(bypass=new)
+        self.show_bypass()
+        if self.wanted:
+            self.connect_vpn()              # the service starts over with the new list
 
     def logout(self):
         self.disconnect_vpn()
@@ -590,6 +774,7 @@ class Window(QWidget):
             QMessageBox.warning(self, APP_NAME, "سروری برای این نسخه تعریف نشده است.")
             return
         user, pw = self.creds()
+        bypass = self.bypass()
         self.wanted = True
         self.set_look("busy", "در حال آماده‌سازی…")
         raw = self.config.raw
@@ -598,7 +783,8 @@ class Window(QWidget):
             problem = ensure_service(raw)
             if problem is None:
                 try:
-                    r = service("connect", timeout=15, envelope=raw, user=user, **{"pass": pw})
+                    r = service("connect", timeout=15, envelope=raw, user=user, bypass=bypass,
+                                **{"pass": pw})
                     problem = None if r.get("ok") else r.get("error", "خطا")
                 except OSError as e:
                     problem = "سرویس VPN جواب نداد: %s" % e
@@ -695,6 +881,13 @@ def main():
     w.show()
     if "--smoke" in sys.argv:          # CI: the window builds with the bundled config
         app.processEvents()
+        w.render_account({"state": "active", "current": {
+            "display": "30G-1M", "limit_bytes": 30 * 1024 ** 3, "used_bytes": 27 * 1024 ** 3,
+            "remaining_bytes": 3 * 1024 ** 3, "days_left": 20, "end": "2026-12-01 10:00:00"},
+            "next": [{"display": "60G-1M", "limit_bytes": 60 * 1024 ** 3, "validity_days": 30}]})
+        assert w.l_profile.text() == "30G-1M" and "بعدی" in w.l_account.text()
+        d = BypassDialog(w, ["firefox.exe"])
+        assert d.chosen() == ["firefox.exe"], d.chosen()
         print("smoke ok, config version", w.config.cfg.get("version"))
         sys.exit(0)
     sys.exit(app.exec())
