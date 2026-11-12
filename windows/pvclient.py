@@ -350,7 +350,9 @@ def replace_self(new):
         if not os.path.exists(me) and os.path.exists(old):
             os.rename(old, me)
         return False
-    subprocess.Popen([me], close_fds=True)
+    # PYINSTALLER_RESET_ENVIRONMENT: the new .exe must unpack itself, not reuse
+    # this process's folder (deleted when this one closes)
+    subprocess.Popen([me], close_fds=True, env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"))
     return True
 
 

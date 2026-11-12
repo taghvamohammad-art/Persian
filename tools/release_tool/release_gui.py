@@ -1728,9 +1728,12 @@ def _features_job(settings):
 
 def _restart():
     """Start the tool again (with the new code) and close this one."""
-    from PySide6.QtCore import QProcess
     args = sys.argv[1:] if getattr(sys, "frozen", False) else [os.path.abspath(sys.argv[0])] + sys.argv[1:]
-    QProcess.startDetached(sys.executable, args)
+    # a onefile .exe started by itself would otherwise reuse this process's
+    # unpacked folder, which is deleted as soon as this one closes
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+    flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0   # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    subprocess.Popen([sys.executable] + args, env=env, close_fds=True, creationflags=flags)
     QApplication.instance().quit()
 
 
