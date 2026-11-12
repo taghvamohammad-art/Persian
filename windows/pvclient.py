@@ -381,7 +381,10 @@ QPushButton:hover { background: rgba(255,255,255,0.14); }
 QProgressBar { background: rgba(255,255,255,0.10); border: none; border-radius: 4px; max-height: 8px; }
 QProgressBar::chunk { background: #2EE6C5; border-radius: 4px; }
 QProgressBar[low="true"]::chunk { background: #F5C451; }
-QListWidget, QDialog { background: #0B2F45; border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; }
+QListWidget { background: #0B2F45; border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; }
+QDialog, QMessageBox, QInputDialog { background: #0B2F45; }
+QMessageBox QLabel { color: #FFFFFF; min-width: 260px; }
+QMessageBox QPushButton { min-width: 80px; }
 #Link { background: transparent; border: none; color: #2EE6C5; padding: 2px 6px; }
 """
 
