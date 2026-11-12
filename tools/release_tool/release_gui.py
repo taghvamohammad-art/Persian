@@ -2110,15 +2110,60 @@ class MainWindow(QMainWindow, FeaturesMixin):
             ws.check()
         except (pb.ReleaseError, OSError) as e:
             return self.fail(str(e))
-        path, _ = QFileDialog.getOpenFileName(self, "فایل PersianVPN-Windows از GitHub", "", "zip (*.zip)")
-        if not path:
+        box = QMessageBox(self)
+        box.setWindowTitle("انتشار نسخه‌ی ویندوز")
+        box.setText("آخرین نسخه‌ی اپ ویندوز از GitHub دریافت و منتشر شود؟")
+        b_gh = box.addButton("دریافت از GitHub", QMessageBox.AcceptRole)
+        b_file = box.addButton("انتخاب فایل zip…", QMessageBox.ActionRole)
+        box.addButton("انصراف", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is b_file:
+            path, _ = QFileDialog.getOpenFileName(self, "فایل PersianVPN-Windows از GitHub", "", "zip (*.zip)")
+            if not path:
+                return
+            try:
+                win = pb.read_windows_build(path)
+            except pb.ReleaseError as e:
+                return self.fail(str(e))
+            return self._publish_windows(ws, win)
+        if box.clickedButton() is not b_gh:
             return
+        if not (self.settings.token and self.settings.repo):
+            return self.fail("برای دریافت از GitHub، توکن و نام مخزن را در تنظیمات وارد کنید.")
+        gh = pb.GitHubClient(self.settings.token, self.settings.repo)
+        tmp = tempfile.mkdtemp(prefix="pvwin-")
+
+        def fetch(log, progress):
+            art = gh.latest_windows()
+            if not art:
+                raise pb.ReleaseError("نسخه‌ی ویندوزی در GitHub پیدا نشد (یا قدیمی و پاک شده است).")
+            log("دانلود اپ ویندوز از GitHub…")
+            return pb.read_windows_build(gh.download_artifact(art, tmp, progress))
+
+        def fetched(win):
+            self.set_busy(False)
+            self._publish_windows(ws, win)
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, fetch, fetched, self.fail, self.say, self.on_progress)
+
+    def _publish_windows(self, ws, win):
+        from PySide6.QtWidgets import QInputDialog
         try:
-            win = pb.read_windows_build(path)
-        except pb.ReleaseError as e:
-            return self.fail(str(e))
-        notes, ok = QInputDialog.getMultiLineText(self, "نسخه‌ی ویندوز %d" % win.version_code,
-                                                  "توضیح تغییرات (اختیاری؛ به کاربر نشان داده می‌شود):")
+            now = int((ws.load_config().get("windows_update") or {}).get("version_code", 0))
+        except (pb.ReleaseError, OSError, ValueError):
+            now = 0
+        if now and win.version_code <= now:
+            if QMessageBox.question(
+                    self, "نسخه‌ی ویندوز",
+                    "نسخه‌ی %s همین الان منتشر شده است (آخرین روی GitHub: %s).\nدوباره منتشر شود؟"
+                    % (fa(now), fa(win.version_code))) != QMessageBox.Yes:
+                return
+        notes, ok = QInputDialog.getMultiLineText(
+            self, "نسخه‌ی ویندوز %s" % fa(win.version_code),
+            "نسخه‌ی منتشرشده‌ی فعلی: %s\nتوضیح تغییرات (اختیاری؛ به کاربر نشان داده می‌شود):"
+            % (fa(now) if now else "—"))
         if not ok:
             return
         github = public = None

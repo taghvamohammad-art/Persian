@@ -222,6 +222,20 @@ class ReleaseFlow(unittest.TestCase):
         self.assertEqual(pb.read_build(path).apk, self.apk)
         self.assertEqual(self.gh.blob_auth, [None])    # token not leaked to storage
 
+    def test_github_latest_windows(self):
+        self.gh.artifacts += [
+            {"id": 20, "name": "PersianVPN-Windows", "expired": False, "created_at": "2026-11-10T10:00:00Z",
+             "workflow_run": {"head_branch": "main"}},
+            {"id": 21, "name": "PersianVPN-Windows", "expired": False, "created_at": "2026-11-12T10:00:00Z",
+             "workflow_run": {"head_branch": "main"}},
+            {"id": 22, "name": "PersianVPN-Windows", "expired": False, "created_at": "2026-11-13T10:00:00Z",
+             "workflow_run": {"head_branch": "test"}},
+            {"id": 23, "name": "PersianVPN-Windows", "expired": True, "created_at": "2026-11-14T10:00:00Z"},
+        ]
+        self.assertEqual(self.gh.client().latest_windows()["id"], 21)
+        self.gh.artifacts = []
+        self.assertIsNone(self.gh.client().latest_windows())
+
     def test_public_mirror(self):
         build = pb.read_build(self.zip_path)
         cfg = pb.release(self.ws, build, 16, "", "", github=self.gh.client(),

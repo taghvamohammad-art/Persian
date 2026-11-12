@@ -252,6 +252,9 @@ def local_patches(ws, upd):
     return out
 
 
+WIN_ARTIFACT = "PersianVPN-Windows"
+
+
 class WinBuild:
     """The Windows app from GitHub (artifact PersianVPN-Windows): the app,
     its engine (the service checks it against engine_sha256) and the build number."""
@@ -541,6 +544,15 @@ class GitHubClient:
                 if best is None or n > best[0]:
                     best = (n, a)
         return best
+
+    def latest_windows(self):
+        """Newest unexpired PersianVPN-Windows artifact of the main branch, or None."""
+        with self._req("GET", "/repos/%s/actions/artifacts?name=%s&per_page=30"
+                       % (self.repo, WIN_ARTIFACT)) as r:
+            arts = json.loads(r.read()).get("artifacts", [])
+        arts = [a for a in arts if a.get("name") == WIN_ARTIFACT and not a.get("expired")
+                and (a.get("workflow_run") or {}).get("head_branch", "main") == "main"]
+        return max(arts, key=lambda a: a.get("created_at", "")) if arts else None
 
     def download_artifact(self, artifact, dest_dir, progress=None):
         # GitHub answers with a redirect to signed storage; follow it WITHOUT
