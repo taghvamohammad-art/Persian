@@ -334,11 +334,6 @@ def tun_e2e(entry):
                 not (len(counted) == 2 and int(counted[1]) >= int(got)):
             out.append("TUN %s: watchdog byte counters wrong: %s" % (label, counted))
         ok = dns >= 4 and (not url or got.isdigit() and int(got) >= 5000000)
-        # QUIC from the apps is refused (they fall back to TCP at once)
-        quic = sh(ns + "curl -s -o /dev/null -w '%{http_code}' --http3-only --max-time 8 https://www.google.com/",
-                  check=False).strip()
-        if kind != "amneziawg" and quic not in ("", "000"):
-            out.append("TUN %s: QUIC went through (%s)" % (label, quic))
         print("  %s: dns %d/5, download %s bytes, check %s" % (label, dns, got or "-", health))
         if not ok:
             out.append("TUN %s: dns %d/5, download %s bytes (engine check %s)" % (label, dns, got or "-", health))

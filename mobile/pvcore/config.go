@@ -187,34 +187,14 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
 }
 
-// TunnelDNS: the phone's DNS queries (UDP to port 53) are answered by
-// Xray itself, over TCP through the tunnel. UDP through some protocols can
-// stall while TCP still works; then every app would look "connected but
-// no internet" although the health check (TCP) passes. Only IPv4 answers:
-// the tunnel carries no IPv6, and AAAA answers make apps wait for a dead
-// path first.
-var TunnelDNS = map[string]any{
-	"servers":       []any{"tcp://1.1.1.1:53", "tcp://8.8.8.8:53"},
-	"queryStrategy": "UseIPv4",
-}
-
 func baseConfig(socksPort int, outs []any, rules []any) map[string]any {
 	return map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
-		"dns": TunnelDNS,
 		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
 			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
 			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
-		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"},
-			map[string]any{"tag": "dns-out", "protocol": "dns"},
-			map[string]any{"tag": "block", "protocol": "blackhole"}),
+		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"}),
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": append([]any{
-			map[string]any{"inboundTag": []string{"socks", "tun"}, "network": "udp", "port": "53",
-				"outboundTag": "dns-out"},
-			// QUIC (HTTP/3) over the tunnel's UDP stalls easily; refused, the
-			// apps use TCP right away (the usual VPN-client setting)
-			map[string]any{"inboundTag": []string{"socks", "tun"}, "network": "udp", "port": "443",
-				"outboundTag": "block"},
 			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
 				"outboundTag": "direct"}}, rules...)},
 	}

@@ -38,9 +38,8 @@ func WindowsConfig(choicesJSON, user, pass string, socksPort int, bypass []strin
 	if names := bypassNames(bypass); len(names) > 0 {
 		routing := cfg["routing"].(map[string]any)
 		rules := routing["rules"].([]any)
-		// after the DNS rule (DNS comes from Windows' DNS service, not from the program)
 		rule := map[string]any{"inboundTag": []string{"tun"}, "process": names, "outboundTag": "direct"}
-		routing["rules"] = append(rules[:1:1], append([]any{rule}, rules[1:]...)...)
+		routing["rules"] = append([]any{rule}, rules...)
 	}
 	b, err := json.Marshal(cfg)
 	return string(b), err

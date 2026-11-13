@@ -93,24 +93,6 @@ func TestWindowsConfig(t *testing.T) {
 	}
 }
 
-func TestTunnelDNSOverTCP(t *testing.T) {
-	cfg := baseConfig(1080, []any{map[string]any{"tag": "proxy"}}, nil)
-	rules := cfg["routing"].(map[string]any)["rules"].([]any)
-	first := rules[0].(map[string]any)
-	if first["outboundTag"] != "dns-out" || first["port"] != "53" || first["network"] != "udp" {
-		t.Fatalf("first rule should send DNS to Xray's resolver: %v", first)
-	}
-	if q := rules[1].(map[string]any); q["outboundTag"] != "block" || q["port"] != "443" || q["network"] != "udp" {
-		t.Fatalf("QUIC from the apps must be refused: %v", q)
-	}
-	servers := cfg["dns"].(map[string]any)["servers"].([]any)
-	for _, s := range servers {
-		if !strings.HasPrefix(s.(string), "tcp://") {
-			t.Fatalf("resolver must go over TCP through the tunnel: %v", s)
-		}
-	}
-}
-
 func TestWindowsBypass(t *testing.T) {
 	choices := `[{"server":` + testServer + `,"kind":"hysteria2"}]`
 	cfg, err := WindowsConfig(choices, "u", "p", 10808, []string{"C:\\Program Files\\Mozilla Firefox\\firefox.exe", "Telegram.exe", "firefox.exe", "bad*name", ""})
@@ -120,13 +102,7 @@ func TestWindowsBypass(t *testing.T) {
 	var c map[string]any
 	json.Unmarshal([]byte(cfg), &c)
 	rules := c["routing"].(map[string]any)["rules"].([]any)
-	if rules[0].(map[string]any)["outboundTag"] != "dns-out" {
-		t.Fatalf("DNS rule must stay first: %v", rules[0])
-	}
-	if rules[1].(map[string]any)["outboundTag"] != "direct" {
-		t.Fatalf("bypassed programs before the QUIC block: %v", rules[1])
-	}
-	r := rules[1].(map[string]any)
+	r := rules[0].(map[string]any)
 	names := r["process"].([]any)
 	if r["outboundTag"] != "direct" || len(names) != 2 || names[0] != "firefox.exe" || names[1] != "Telegram.exe" {
 		t.Fatalf("bypass rule: %v", r)

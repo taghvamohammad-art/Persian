@@ -238,7 +238,6 @@ func awgHealth(state string) int {
 		}
 	}
 	mu.Lock()
-	lastRx, lastTx := awgRx, awgTx
 	awgRx, awgTx = rx, tx
 	mu.Unlock()
 	if sec <= 0 {
@@ -246,9 +245,6 @@ func awgHealth(state string) int {
 	}
 	age := time.Since(time.Unix(sec, 0))
 	if age > 200*time.Second {
-		return -1
-	}
-	if lastTx >= 0 && tx-lastTx > 8192 && rx == lastRx {
 		return -1
 	}
 	return int(age.Milliseconds())
