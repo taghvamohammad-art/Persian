@@ -218,7 +218,7 @@ def patch_entries(cfg, patches, beta=False):
 
 
 def prepare_release(ws, build, version_code, version_name, notes, public_repo=None, patches=None,
-                    testers=None):
+                    testers=None, min_version=0):
     """Returns (new_config_dict, envelope_text). Nothing is written yet.
     testers: a test build, offered only to these usernames (app_update_beta);
     the public version stays as it is."""
@@ -264,11 +264,13 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
         else:
             cfg["windows_update"]["urls"] = [u.replace("/v1/config", "/v1/win.exe")
                                              for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
-    return sign(ws, cfg)
+    return sign(ws, cfg, min_version)
 
 
-def sign(ws, cfg):
-    cfg["version"] = int(cfg.get("version", 0)) + 1
+def sign(ws, cfg, min_version=0):
+    # min_version: the router already has a newer number (an earlier
+    # release reached it but was not saved here, e.g. the disk was full)
+    cfg["version"] = max(int(cfg.get("version", 0)) + 1, int(min_version or 0))
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
     if errors:
@@ -396,7 +398,8 @@ def local_files(ws, cfg, new=None):
     return b"".join(parts)
 
 
-def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes="", win_testers=None):
+def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes="", win_testers=None,
+                        min_version=0):
     """New signed config with the same app version: for a server change, or a
     new Windows build (win; a test build for win_testers when given)."""
     cfg = ws.load_config()
@@ -432,7 +435,7 @@ def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_n
     if cfg.get("windows_update"):
         cfg["windows_update"]["urls"] = router_urls(cfg, "/v1/win.exe")
     refresh_beta_urls(ws, cfg)
-    return sign(ws, cfg)
+    return sign(ws, cfg, min_version)
 
 
 def _write_patches(d, patches):
@@ -566,6 +569,7 @@ class RouterClient:
             err = data.get("error", "HTTP %d" % resp.status)
             ex = ReleaseError(ROUTER_ERRORS.get(err, "روتر خطا داد: %s" % err))
             ex.code = err
+            ex.data = data
             raise ex
         return data
 
@@ -683,6 +687,20 @@ class GitHubClient:
 
 # ------------------------------------------------------------------ whole flow
 
+def router_ahead(e):
+    """The router's config number when it refused ours as not newer, else 0."""
+    if getattr(e, "code", "") == "not_newer":
+        try:
+            return int(getattr(e, "data", {}).get("current_version", 0))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+AHEAD_MSG = ("روتر تنظیمات %d را دارد (انتشار قبلی به روتر رسید ولی اینجا ذخیره نشد)؛ "
+             "با شماره‌ی %d دوباره ارسال می‌شود.")
+
+
 def _needs(cfg):
     return "beta" if cfg.get("app_update_beta") or cfg.get("windows_update_beta") else None
 
@@ -716,7 +734,16 @@ def release(ws, build, version_code, version_name, notes,
     if send_router:
         log("ارسال به روتر…")
         try:
-            body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
+            try:
+                body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
+            except ReleaseError as e:
+                ahead = router_ahead(e)
+                if not ahead:
+                    raise
+                log(AHEAD_MSG % (ahead, ahead + 1))
+                cfg, envelope = prepare_release(ws, build, version_code, version_name, notes, pub, patches,
+                                                testers, ahead + 1)
+                body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
         except ReleaseError as e:
             if beta or not patches or getattr(e, "code", "") != "apk_size_mismatch":
                 raise
@@ -779,7 +806,16 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
             return local_files(ws, cfg)
         log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
         try:
-            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
+            try:
+                body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
+            except ReleaseError as e:
+                ahead = router_ahead(e)
+                if not ahead:
+                    raise
+                log(AHEAD_MSG % (ahead, ahead + 1))
+                cfg, envelope = prepare_config_only(ws, pub, win=win, win_notes=win_notes,
+                                                    win_testers=win_testers, min_version=ahead + 1)
+                body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
         except ReleaseError as e:
             if not (cfg.get("app_update") or {}).get("patches") or \
                     getattr(e, "code", "") not in ("apk_size_mismatch", "apk_required"):

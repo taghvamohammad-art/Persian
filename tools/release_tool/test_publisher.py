@@ -254,6 +254,26 @@ class ReleaseFlow(unittest.TestCase):
         self.assertEqual(self.ws.load_config(), before)
         self.assertFalse(os.path.exists(self.ws.path("app.apk")))
 
+    def test_router_ahead_after_lost_local_save(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        before = self.ws.load_config()
+        real = pb.save_local
+        pb.save_local = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+        try:
+            with self.assertRaises(OSError):
+                pb.release(self.ws, pb.Build(b"PK" + os.urandom(900), 17, "b"), 17, "", "", log=q,
+                           testers=["mohammad"])
+        finally:
+            pb.save_local = real
+        self.assertEqual(self.ws.load_config(), before)            # router got it, the workspace did not
+        lines = []
+        pb.release(self.ws, pb.Build(b"PK" + os.urandom(900), 17, "b"), 17, "", "", log=lines.append,
+                   testers=["mohammad"])
+        self.assertTrue(any("دوباره ارسال" in l for l in lines))
+        self.assertEqual(self.served()["version"], before["version"] + 2)
+        self.assertEqual(self.served()["app_update_beta"]["version_code"], 17)
+
     def test_pin_mismatch_refuses_to_send(self):
         conf = self.ws.load_config()
         conf["status_pins"] = ["00" * 32]
