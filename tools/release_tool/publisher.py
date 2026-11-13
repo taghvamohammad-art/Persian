@@ -152,11 +152,16 @@ def apk_history(ws):
     return out
 
 
-def make_patches(ws, build, log=print):
-    """{from_sha256: patch bytes} from the kept older APKs to this build."""
+def make_patches(ws, build, log=print, only_current=False):
+    """{from_sha256: patch bytes} from the kept older APKs to this build.
+    only_current: just from the public version (a test build: testers have
+    it, and the router's disk is spared)."""
     import apkdelta
     out = {}
-    for _, path in apk_history(ws):
+    history = apk_history(ws)
+    if only_current:
+        history = [h for h in history if h[0] == -1]
+    for _, path in history:
         try:
             with open(path, "rb") as f:
                 old = f.read()
@@ -690,7 +695,7 @@ def release(ws, build, version_code, version_name, notes,
     release, so a failed attempt can simply be repeated.
     """
     ws.check()
-    patches = make_patches(ws, build, log)
+    patches = make_patches(ws, build, log, only_current=testers is not None)
     if patches:
         log("وصله‌های به‌روزرسانی سبک: %s" % "، ".join(
             "%.1f MB" % (len(b) / 1048576) for b in patches.values()))
