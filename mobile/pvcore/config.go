@@ -202,14 +202,22 @@ func baseConfig(socksPort int, outs []any, rules []any) map[string]any {
 	return map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
 		"dns": TunnelDNS,
+		// bytes to and from the apps, for the watchdog (TunnelBytes)
+		"stats":  map[string]any{},
+		"policy": map[string]any{"system": map[string]any{"statsInboundUplink": true, "statsInboundDownlink": true}},
 		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
 			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
 			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
 		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"},
-			map[string]any{"tag": "dns-out", "protocol": "dns"}),
+			map[string]any{"tag": "dns-out", "protocol": "dns"},
+			map[string]any{"tag": "block", "protocol": "blackhole"}),
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": append([]any{
 			map[string]any{"inboundTag": []string{"socks", "tun"}, "network": "udp", "port": "53",
 				"outboundTag": "dns-out"},
+			// QUIC (HTTP/3) over the tunnel's UDP stalls easily; refused, the
+			// apps use TCP right away (the usual VPN-client setting)
+			map[string]any{"inboundTag": []string{"socks", "tun"}, "network": "udp", "port": "443",
+				"outboundTag": "block"},
 			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
 				"outboundTag": "direct"}}, rules...)},
 	}

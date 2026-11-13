@@ -320,7 +320,7 @@ def tun_e2e(entry):
            % (dev, addr, dev, dev, 1280 if kind == "amneziawg" else 1500, dev))
         return cmd("start " + kind).startswith("ok")
 
-    def traffic(label):
+    def traffic(label, kind="pool"):
         ns = "sudo ip netns exec pvcli "
         dns = sum(1 for _ in range(5) if sh(ns + "dig +short +time=4 +tries=1 @1.1.1.1 example.com",
                                             check=False).strip())
@@ -329,7 +329,16 @@ def tun_e2e(entry):
             got = sh(ns + "curl -s -o /dev/null -w '%%{size_download}' --max-time 40 '%s'" % url,
                      check=False, timeout=60).strip()
         health = cmd("check").replace("ok ", "")
+        counted = cmd("bytes").replace("ok ", "").split()
+        if kind != "amneziawg" and url and got.isdigit() and int(got) >= 5000000 and \
+                not (len(counted) == 2 and int(counted[1]) >= int(got)):
+            out.append("TUN %s: watchdog byte counters wrong: %s" % (label, counted))
         ok = dns >= 4 and (not url or got.isdigit() and int(got) >= 5000000)
+        # QUIC from the apps is refused (they fall back to TCP at once)
+        quic = sh(ns + "curl -s -o /dev/null -w '%{http_code}' --http3-only --max-time 8 https://www.google.com/",
+                  check=False).strip()
+        if kind != "amneziawg" and quic not in ("", "000"):
+            out.append("TUN %s: QUIC went through (%s)" % (label, quic))
         print("  %s: dns %d/5, download %s bytes, check %s" % (label, dns, got or "-", health))
         if not ok:
             out.append("TUN %s: dns %d/5, download %s bytes (engine check %s)" % (label, dns, got or "-", health))
@@ -347,7 +356,7 @@ def tun_e2e(entry):
                                   DOWNLOADS[0]), shell=True)        # a download running while switching
             time.sleep(1)
             if use("pv%d" % n, kind):
-                traffic("switched to " + kind)
+                traffic("switched to " + kind, kind)
             else:
                 out.append("TUN: %s did not start" % kind)
             bg.kill()

@@ -7,6 +7,7 @@
 //	start KIND       start KIND (pool | amneziawg | an Xray type) on the current descriptor
 //	stop             stop the engine
 //	check            the health check the app's watchdog runs
+//	bytes            "up down" between the apps and the Xray tunnel
 //
 // Every command answers one line: "@@ ok ..." or "@@ err ..." (Xray logs go to stdout too).
 package main
@@ -90,6 +91,8 @@ func main() {
 			}
 		case "stop":
 			pvcore.Stop()
+		case "bytes":
+			out = pvcore.TunnelBytes()
 		case "check":
 			out = fmt.Sprint(pvcore.Check(5000))
 		default:

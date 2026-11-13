@@ -33,6 +33,9 @@ private const val QUICK_CHECK_MS = 6_000L     // the remembered protocol must an
 private const val OPTIMIZE_FIRST_MS = 4_000L
 private const val OPTIMIZE_EVERY_MS = 15 * 60_000L
 private const val LAST_CHOICE_KEY = "pv_last_choice"
+private const val STALL_UP_BYTES = 16_384L
+private const val STALL_DOWN_BYTES = 512L
+private const val STALL_ROUNDS = 2
 private const val XRAY_MTU = 1500
 private const val AWG_MTU = 1280
 private const val XRAY_ADDRESS = "172.19.0.1"
@@ -345,14 +348,36 @@ internal class LinuxTunnel(
         }
     }
 
+    /** (up, down) bytes between the apps and the Xray tunnel, or null. */
+    private fun tunnelBytes(): Pair<Long, Long>? = runCatching {
+        val (u, d) = Pvcore.tunnelBytes().trim().split(" ").map { it.toLong() }
+        if (u < 0 || d < 0) null else u to d
+    }.getOrNull()
+
     private fun startWatchdog() {
         watchdog?.cancel()
         watchdog = service.scope.launch {
             var failures = 0
+            var stalls = 0
+            var last = tunnelBytes()
             while (isActive && !closed) {
                 delay(if (failures > 0) CHECK_RETRY_MS else CHECK_EVERY_MS)
                 if (switching) continue
+                // apps kept sending but got nothing back: stuck for them even if
+                // the health check below passes
+                val now = tunnelBytes()
+                if (now != null && last != null) {
+                    val up = now.first - last.first
+                    val down = now.second - last.second
+                    stalls = if (up > STALL_UP_BYTES && down < STALL_DOWN_BYTES) stalls + 1 else 0
+                    if (stalls > 0) service.logWriter?.report("linux: apps sent $up B, got $down B ($current)")
+                    if (stalls >= STALL_ROUNDS) {
+                        failover("no data back for the apps")
+                        return@launch
+                    }
+                }
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
+                last = tunnelBytes() ?: now           // the check's own bytes do not count
                 failures = if (ms < 0) failures + 1 else 0
                 if (failures >= CHECK_FAILURES) {
                     failover("check failed")

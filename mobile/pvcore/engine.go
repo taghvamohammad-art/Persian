@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 	core "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
@@ -88,6 +90,34 @@ func Stop() {
 	mu.Lock()
 	defer mu.Unlock()
 	stopLocked()
+}
+
+// TunnelBytes: "up down", the bytes the apps sent into the Xray tunnel and
+// got back since it started ("-1 -1" when not an Xray tunnel). Apps that
+// keep sending and get nothing back while the health check still passes
+// mean the tunnel is stuck for them.
+func TunnelBytes() string {
+	mu.Lock()
+	inst := xrayInst
+	mu.Unlock()
+	if inst == nil {
+		return "-1 -1"
+	}
+	m, ok := inst.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return "-1 -1"
+	}
+	val := func(name string) int64 {
+		if c := m.GetCounter(name); c != nil {
+			return c.Value()
+		}
+		return -1
+	}
+	in := "socks"
+	if runtime.GOOS == "windows" {
+		in = "tun"
+	}
+	return fmt.Sprintf("%d %d", val("inbound>>>"+in+">>>traffic>>>uplink"), val("inbound>>>"+in+">>>traffic>>>downlink"))
 }
 
 // Running is the protocol type in use ("" when stopped).

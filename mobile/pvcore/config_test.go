@@ -100,6 +100,9 @@ func TestTunnelDNSOverTCP(t *testing.T) {
 	if first["outboundTag"] != "dns-out" || first["port"] != "53" || first["network"] != "udp" {
 		t.Fatalf("first rule should send DNS to Xray's resolver: %v", first)
 	}
+	if q := rules[1].(map[string]any); q["outboundTag"] != "block" || q["port"] != "443" || q["network"] != "udp" {
+		t.Fatalf("QUIC from the apps must be refused: %v", q)
+	}
 	servers := cfg["dns"].(map[string]any)["servers"].([]any)
 	for _, s := range servers {
 		if !strings.HasPrefix(s.(string), "tcp://") {
@@ -119,6 +122,9 @@ func TestWindowsBypass(t *testing.T) {
 	rules := c["routing"].(map[string]any)["rules"].([]any)
 	if rules[0].(map[string]any)["outboundTag"] != "dns-out" {
 		t.Fatalf("DNS rule must stay first: %v", rules[0])
+	}
+	if rules[1].(map[string]any)["outboundTag"] != "direct" {
+		t.Fatalf("bypassed programs before the QUIC block: %v", rules[1])
 	}
 	r := rules[1].(map[string]any)
 	names := r["process"].([]any)
