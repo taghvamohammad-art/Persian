@@ -355,6 +355,12 @@ def local_win(ws, wupd, beta=False):
     return None
 
 
+class Body(bytes):
+    """All files for the router in order; .parts keeps them apart so a router
+    that already holds some (umstatus "partial") gets only the others."""
+    parts = ()
+
+
 def local_files(ws, cfg, new=None):
     """Every file the config names, in the order the router takes them
     (APK, its patches, Windows build, then the same for the test builds),
@@ -395,7 +401,9 @@ def local_files(ws, cfg, new=None):
             parts += win_part(cfg["windows_update_beta"], True)
     except (OSError, KeyError):
         return b""
-    return b"".join(parts)
+    body = Body(b"".join(parts))
+    body.parts = parts
+    return body
 
 
 def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes="", win_testers=None,
@@ -581,6 +589,10 @@ class RouterClient:
             ex = ReleaseError(ROUTER_ERRORS["old_umstatus"])
             ex.code = "old_umstatus"
             raise ex
+        if getattr(apk, "parts", None) and "partial" in (probe.get("features") or []):
+            # only what the router does not hold yet: less upload, less disk on the router
+            have = set(probe.get("have") or [])
+            apk = b"".join(p for p in apk.parts if hashlib.sha256(p).hexdigest() not in have)
         return self._call(envelope, apk, dry_run=False, progress=progress)
 
 

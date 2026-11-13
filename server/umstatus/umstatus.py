@@ -509,9 +509,6 @@ class Publisher:
             if cur is not None and version <= int(cur.get("version", 0)):
                 return 409, {"ok": False, "error": "not_newer",
                              "current_version": int(cur.get("version", 0))}
-            if dry_run:
-                return 200, {"ok": True, "dry_run": True, "version": version, "features": ["beta"]}
-
             # public and test builds, each: (apk/exe path, patch dir, update entry);
             # the files arrive in this order: APK, its patches, Windows build, then the same for the test builds
             groups = [(self.cfg["app_apk_file"], self.patch_dir(), new.get("app_update")),
@@ -534,18 +531,29 @@ class Publisher:
                     keep[pdir] = {patch_name(f) for f, _, _ in patches}
             except (KeyError, TypeError, ValueError):
                 return 400, {"ok": False, "error": "bad_config"}
+            # files already here need not come again ("partial"): the body then
+            # carries only the missing ones, in the same order
+            missing = [f for f in files if not _have(*f)]
+            if dry_run:
+                return 200, {"ok": True, "dry_run": True, "version": version, "features": ["beta", "partial"],
+                             "have": sorted({f[2] for f in files} - {f[2] for f in missing})}
             if not files and length != 0:
                 return 400, {"ok": False, "error": "unexpected_apk"}
             if length == 0:
                 # config-only release: the files on the router must already match
-                for path, size, sha in files:
-                    if not (os.path.exists(path) and os.path.getsize(path) == size and _sha256_file(path) == sha):
-                        return 400, {"ok": False, "error": "apk_required"}
+                if missing:
+                    return 400, {"ok": False, "error": "apk_required"}
             else:
-                if length != sum(f[1] for f in files) or any(f[1] > self.cfg["max_apk_bytes"] for f in files):
+                if any(f[1] > self.cfg["max_apk_bytes"] for f in files):
+                    return 400, {"ok": False, "error": "apk_size_mismatch"}
+                if length == sum(f[1] for f in missing):
+                    incoming = missing
+                elif length == sum(f[1] for f in files):
+                    incoming = files            # an older release tool sends everything
+                else:
                     return 400, {"ok": False, "error": "apk_size_mismatch"}
                 import hashlib
-                for path, want_size, want_sha in files:
+                for path, want_size, want_sha in incoming:
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     h, left = hashlib.sha256(), want_size
                     with open(path + ".part", "wb") as f:
@@ -557,19 +565,29 @@ class Publisher:
                             f.write(chunk)
                             left -= len(chunk)
                     if left != 0 or h.hexdigest() != want_sha:
-                        for p_, _, _ in files:
+                        for p_, _, _ in incoming:
                             if os.path.exists(p_ + ".part"):
                                 os.remove(p_ + ".part")
                         return 400, {"ok": False, "error": "apk_mismatch"}
 
             # all files are swapped in only after everything checked out
             if length:
-                for path, _, _ in files:
+                for path, _, sha in incoming:
                     os.replace(path + ".part", path)
+                    _remember_sha(path, sha)
+            if True:
                 for pdir, names in keep.items():
                     for n in (os.listdir(pdir) if os.path.isdir(pdir) else []):
-                        if n not in names:
+                        if n not in names and n[:-len(".sha256")] not in names:
                             os.remove(os.path.join(pdir, n))
+                # a test build no longer listed: its files go
+                if not new.get("app_update_beta"):
+                    _drop(self.beta_apk())
+                    bdir = self.patch_dir(True)
+                    for n in (os.listdir(bdir) if os.path.isdir(bdir) else []):
+                        os.remove(os.path.join(bdir, n))
+                if not new.get("windows_update_beta"):
+                    _drop(self.beta_win())
             tmp = self.cfg["app_config_file"] + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(envelope_text)
@@ -581,6 +599,41 @@ class Publisher:
             return 200, {"ok": True, "version": version}
         finally:
             self.lock.release()
+
+
+def _remember_sha(path, sha):
+    try:
+        with open(path + ".sha256", "w") as f:
+            f.write(sha)
+    except OSError:
+        pass
+
+
+def _drop(path):
+    for p in (path, path + ".sha256"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def _have(path, size, sha):
+    """The router already holds exactly this file (SHA-256 kept next to it)."""
+    try:
+        if os.path.getsize(path) != size:
+            return False
+    except OSError:
+        return False
+    try:
+        with open(path + ".sha256") as f:
+            if f.read().strip() == sha:
+                return True
+    except OSError:
+        pass
+    if _sha256_file(path) == sha:
+        _remember_sha(path, sha)
+        return True
+    return False
 
 
 def patch_name(from_sha):

@@ -229,6 +229,24 @@ class ReleaseFlow(unittest.TestCase):
         with open(self.srv_cfg["app_apk_file"], "rb") as f:
             self.assertEqual(f.read(), beta_apk)
 
+    def test_router_gets_only_what_it_lacks(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        sent = []
+        real = pb.RouterClient._call
+
+        def spy(self_, envelope, body, dry_run, progress=None):
+            if not dry_run:
+                sent.append(len(body))
+            return real(self_, envelope, body, dry_run, progress)
+        pb.RouterClient._call = spy
+        try:
+            beta_apk = b"PK" + os.urandom(2000)
+            pb.release(self.ws, pb.Build(beta_apk, 17, "b"), 17, "", "", log=q, testers=["mohammad"])
+        finally:
+            pb.RouterClient._call = real
+        self.assertEqual(sent, [len(beta_apk)])           # the public APK was not sent again
+
     def test_windows_test_build(self):
         q = lambda *_: None
         pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)

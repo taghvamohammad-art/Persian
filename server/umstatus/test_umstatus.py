@@ -416,7 +416,7 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.send(self.envelope(4, self.apk, patches=p2)[0], b"")[1]["error"], "apk_required")
         newer = b"PK" + os.urandom(1000)
         self.assertEqual(self.send(self.envelope(4, newer, patches=p2)[0], newer + b"patch-two!")[0], 200)
-        self.assertEqual(sorted(os.listdir(pdir)), ["b" * 16 + ".pvdl"])
+        self.assertEqual(sorted(n for n in os.listdir(pdir) if not n.endswith(".sha256")), ["b" * 16 + ".pvdl"])
 
     def test_windows_build_with_and_without_apk(self):
         import os
@@ -431,12 +431,30 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.send(self.envelope(4, win=win2)[0], win2)[0], 200)
         self.assertEqual(self.send(self.envelope(5, win=win)[0], b"")[1]["error"], "apk_required")
 
+    def test_only_missing_files_are_sent(self):
+        import hashlib
+        import os
+        win, beta = b"MZ" + os.urandom(300), b"PK" + os.urandom(900)
+        self.assertEqual(self.send(self.envelope(2, self.apk, win=win)[0], self.apk + win)[0], 200)
+        b64, _ = self.envelope(3, self.apk, win=win, beta=beta)
+        probe = self.pub.publish(b64, 0, None, dry_run=True)[1]
+        self.assertEqual(set(probe["have"]), {hashlib.sha256(self.apk).hexdigest(), hashlib.sha256(win).hexdigest()})
+        self.assertEqual(self.send(b64, beta)[0], 200)                       # just the new test build
+        with open(self.pub.beta_apk(), "rb") as f:
+            self.assertEqual(f.read(), beta)
+        # the whole set (older release tools) is still accepted
+        b64, _ = self.envelope(4, self.apk, win=win, beta=beta)
+        self.assertEqual(self.send(b64, self.apk + win + beta)[0], 200)
+        # test build gone from the config: its file goes
+        self.assertEqual(self.send(self.envelope(5, self.apk, win=win)[0], b"")[0], 200)
+        self.assertFalse(os.path.exists(self.pub.beta_apk()))
+
     def test_test_builds_next_to_public_ones(self):
         import os
         win, beta, bwin = b"MZ" + os.urandom(300), b"PK" + os.urandom(900), b"MZ" + os.urandom(400)
         bp = {"c" * 64: b"beta-patch"}
         self.assertEqual(self.pub.publish(self.envelope(2, self.apk)[0], 0, None, dry_run=True)[1]["features"],
-                         ["beta"])
+                         ["beta", "partial"])
         body = self.apk + win + beta + b"beta-patch" + bwin
         b64, _ = self.envelope(2, self.apk, win=win, beta=beta, beta_patches=bp, beta_win=bwin)
         self.assertEqual(self.send(b64, body)[0], 200)
