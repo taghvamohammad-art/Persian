@@ -169,6 +169,11 @@ def make_patches(ws, build, log=print):
             patch = apkdelta.make_patch(old, build.apk)
         except (ValueError, zipfile.BadZipFile) as e:
             log("⚠ وصله از %s ساخته نشد: %s" % (os.path.basename(path), e))
+            if os.path.dirname(path) == ws.path("apks"):
+                try:
+                    os.remove(path)          # a damaged copy; no use keeping it
+                except OSError:
+                    pass
             continue
         if len(patch) <= PATCH_MAX_SHARE * len(build.apk):
             out[old_sha] = patch
