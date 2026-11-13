@@ -300,9 +300,15 @@ def tun_e2e(entry):
     def cmd(c):
         eng.stdin.write(c + "\n")
         eng.stdin.flush()
-        line = eng.stdout.readline().strip()
-        print("  engine:", c, "->", line)
-        return line
+        while True:
+            line = eng.stdout.readline()
+            if not line:
+                return "err engine exited"
+            if line.startswith("@@ "):
+                line = line[3:].strip()
+                print("  engine:", c, "->", line)
+                return line
+            print("    |", line.rstrip()[:200])
 
     def use(dev, kind):
         if not cmd("open " + dev).startswith("ok"):
@@ -322,7 +328,7 @@ def tun_e2e(entry):
         if url:
             got = sh(ns + "curl -s -o /dev/null -w '%%{size_download}' --max-time 40 '%s'" % url,
                      check=False, timeout=60).strip()
-        health = cmd("check")
+        health = cmd("check").replace("ok ", "")
         ok = dns >= 4 and (not url or got.isdigit() and int(got) >= 5000000)
         print("  %s: dns %d/5, download %s bytes, check %s" % (label, dns, got or "-", health))
         if not ok:

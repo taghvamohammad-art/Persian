@@ -8,7 +8,7 @@
 //	stop             stop the engine
 //	check            the health check the app's watchdog runs
 //
-// Every command answers one line: "ok ..." or "err ...".
+// Every command answers one line: "@@ ok ..." or "@@ err ..." (Xray logs go to stdout too).
 package main
 
 import (
@@ -96,9 +96,9 @@ func main() {
 			err = fmt.Errorf("unknown command")
 		}
 		if err != nil {
-			fmt.Println("err", err)
+			fmt.Println("@@ err", err)
 		} else {
-			fmt.Println("ok", out)
+			fmt.Println("@@ ok", out)
 		}
 	}
 }
