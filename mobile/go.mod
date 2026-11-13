@@ -58,6 +58,6 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96 // indirect
+	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 	lukechampine.com/blake3 v1.4.1 // indirect
 )

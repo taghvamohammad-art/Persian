@@ -14,7 +14,6 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/tun"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	core "github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -64,7 +63,7 @@ func startXrayInstance(cfg string) (*core.Instance, error) {
 
 func stopLocked() {
 	if tunOn {
-		engine.Stop()
+		stopNetstack()
 		tunOn = false
 	}
 	if xrayInst != nil {
@@ -139,14 +138,11 @@ func startXrayWith(build func(port int) (string, error), kind string, tunFd, mtu
 	if err != nil {
 		return fail(err)
 	}
+	if err := startNetstack(tunFd, mtu, port); err != nil {
+		inst.Close()
+		return fail(err)
+	}
 	xrayInst = inst
-	engine.Insert(&engine.Key{
-		Proxy:    fmt.Sprintf("socks5://127.0.0.1:%d", port),
-		Device:   fmt.Sprintf("fd://%d", tunFd),
-		MTU:      mtu,
-		LogLevel: "error",
-	})
-	engine.Start()
 	tunOn = true
 	running = kind
 	socksAt = port
