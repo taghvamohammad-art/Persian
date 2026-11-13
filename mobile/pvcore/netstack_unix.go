@@ -14,6 +14,7 @@ import (
 	t2slog "github.com/xjasonlyu/tun2socks/v2/log"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 )
 
 // The TUN -> SOCKS bridge (tun2socks' stack, set up here instead of with its
@@ -81,4 +82,9 @@ func stopNetstack() {
 		unix.Close(nsDev.fd)           // ...so the number can be reused safely
 		nsDev = nil
 	}
+}
+
+func bridgeBytes() string {
+	snap := statistic.DefaultManager.Snapshot()
+	return fmt.Sprintf("%d %d", snap.UploadTotal, snap.DownloadTotal)
 }

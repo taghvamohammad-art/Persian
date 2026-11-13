@@ -8,3 +8,5 @@ func startNetstack(fd, mtu, socksPort int) error {
 }
 
 func stopNetstack() {}
+
+func bridgeBytes() string { return "-1 -1" }

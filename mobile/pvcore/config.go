@@ -202,9 +202,6 @@ func baseConfig(socksPort int, outs []any, rules []any) map[string]any {
 	return map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
 		"dns": TunnelDNS,
-		// bytes to and from the apps, for the watchdog (TunnelBytes)
-		"stats":  map[string]any{},
-		"policy": map[string]any{"system": map[string]any{"statsInboundUplink": true, "statsInboundDownlink": true}},
 		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
 			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
 			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
