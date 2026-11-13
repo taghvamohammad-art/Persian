@@ -166,7 +166,7 @@ def make_patches(ws, build, log=print):
         if old_sha == build.sha256 or old_sha in out:
             continue
         try:
-            patch = apkdelta.make_patch(old, build.apk)
+            patch = apkdelta.make_best_patch(old, build.apk, log)
         except (ValueError, zipfile.BadZipFile) as e:
             log("⚠ وصله از %s ساخته نشد: %s" % (os.path.basename(path), e))
             if os.path.dirname(path) == ws.path("apks"):

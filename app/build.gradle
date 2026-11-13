@@ -23,6 +23,14 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
+    // Engine libraries stored, not compressed (also the default for minSdk 23+):
+    // app updates (bsdiff patches) then carry only the bytes that changed.
+    packaging {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+
     // Release signing for the automatic GitHub build: the keystore comes from
     // repository secrets (see .github/workflows/android.yml). Android Studio's
     // "Generate Signed APK" keeps working as before.

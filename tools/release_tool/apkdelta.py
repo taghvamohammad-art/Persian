@@ -11,6 +11,11 @@ Format (gzip-compressed): MAGIC, then operations
   b"E"                           end
 The result is checked against the signed SHA-256 of the new APK, so a
 wrong patch can never install anything else.
+
+When the installed app can apply it (FEATURE in its assets) the patch can
+instead be a BSDIFF40 one (bsdiff4): it also carries only the changed bytes
+INSIDE changed files, which matters for the engine library that changes a
+little in almost every version. The smaller of the two is used.
 """
 
 import gzip
@@ -20,6 +25,33 @@ import struct
 import zipfile
 
 MAGIC = b"PVDL1\n"
+BSDIFF_MAGIC = b"BSDIFF40"
+FEATURE_FILE = "assets/pv_features.txt"     # in the APK: what its updater can apply
+
+
+def features(apk):
+    try:
+        z = zipfile.ZipFile(io.BytesIO(apk))
+        return set(z.read(FEATURE_FILE).decode().split())
+    except (KeyError, zipfile.BadZipFile, UnicodeDecodeError):
+        return set()
+
+
+def make_best_patch(old, new, log=None):
+    """The smallest patch the installed APK (old) can apply."""
+    best = make_patch(old, new)
+    if "bsdiff" in features(old):
+        try:
+            import bsdiff4
+        except ImportError:
+            bsdiff4 = None
+            if log:
+                log("⚠ bsdiff4 در این نسخه‌ی ابزار نیست؛ وصله‌ی ساده ساخته شد.")
+        if bsdiff4 is not None:
+            b = bsdiff4.diff(old, new)
+            if len(b) < len(best):
+                best = b
+    return best
 LOCAL_HEADER = 30
 
 
@@ -89,7 +121,10 @@ def make_patch(old, new):
 
 
 def apply_patch(old, patch):
-    """The new APK (the phone does the same in Kotlin; this is for tests)."""
+    """The new APK (the phone does the same in Kotlin/Go; this is for tests)."""
+    if patch.startswith(BSDIFF_MAGIC):
+        import bsdiff4
+        return bsdiff4.patch(old, patch)
     raw = gzip.decompress(patch)
     if not raw.startswith(MAGIC):
         raise ValueError("not a patch")

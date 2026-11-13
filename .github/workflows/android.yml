@@ -19,7 +19,9 @@ jobs:
 
       - name: release tool tests
         working-directory: tools/release_tool
-        run: python -m unittest -v test_publisher
+        run: |
+          python -m pip install --disable-pip-version-check bsdiff4 cryptography
+          python -m unittest -v test_publisher test_apkdelta test_selfupdate
 
   engine:
     uses: ./.github/workflows/mobile-engine.yml

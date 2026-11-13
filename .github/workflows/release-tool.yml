@@ -94,6 +94,26 @@ jobs:
           go mod tidy
           go build -o /tmp/pvprobe ./pvcore/cmd/probe
           go build -o /tmp/pvtuntest ./pvcore/cmd/tuntest
+          go build -o /tmp/pvbspatch ./pvcore/cmd/bspatch
+
+      - name: App updates - patches made by the tool (bsdiff4) rebuild the APK in the app's engine
+        run: |
+          python -m pip install --disable-pip-version-check bsdiff4
+          python - <<'PY'
+          import bsdiff4, os, random, subprocess
+          for seed in range(5):
+              rnd = random.Random(seed)
+              old = bytearray(os.urandom(rnd.randint(1, 3_000_000)))
+              new = bytearray(old)
+              for _ in range(40):
+                  p = rnd.randrange(len(new))
+                  new[p:p + rnd.randint(0, 3000)] = os.urandom(rnd.randint(0, 5000))
+              open("/tmp/o", "wb").write(old)
+              open("/tmp/p", "wb").write(bsdiff4.diff(bytes(old), bytes(new)))
+              subprocess.run(["/tmp/pvbspatch", "/tmp/o", "/tmp/p", "/tmp/n"], check=True)
+              assert open("/tmp/n", "rb").read() == bytes(new), seed
+              print("seed", seed, "ok:", len(new), "bytes from a", os.path.getsize("/tmp/p"), "byte patch")
+          PY
 
       - name: Unit tests (agent)
         working-directory: server/linux
@@ -137,7 +157,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install
-        run: python -m pip install --disable-pip-version-check pyside6 pyinstaller paramiko cryptography
+        run: python -m pip install --disable-pip-version-check pyside6 pyinstaller paramiko cryptography bsdiff4
 
       - name: GUI smoke test (offscreen)
         env:
@@ -155,7 +175,7 @@ jobs:
             --add-data "tools/release_tool/BASE;." `
             --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" `
             --paths tools --paths tools/release_tool `
-            --hidden-import release_gui @hidden `
+            --hidden-import release_gui --hidden-import bsdiff4 @hidden `
             tools/release_tool/launcher.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
