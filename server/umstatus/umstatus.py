@@ -467,8 +467,15 @@ class Publisher:
     def win_file(self):
         return self.cfg.get("app_win_file") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "win.exe")
 
-    def patch_dir(self):
-        return self.cfg.get("app_patch_dir") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "patches")
+    def patch_dir(self, beta=False):
+        d = self.cfg.get("app_patch_dir") or os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "patches")
+        return d + "-beta" if beta else d
+
+    def beta_apk(self):
+        return os.path.join(os.path.dirname(self.cfg["app_apk_file"]), "beta.apk")
+
+    def beta_win(self):
+        return os.path.join(os.path.dirname(self.win_file()), "beta-win.exe")
 
     def publish(self, envelope_b64, length, read, dry_run=False):
         """Returns (http_status, body). `read(n)` reads n body bytes.
@@ -503,27 +510,28 @@ class Publisher:
                 return 409, {"ok": False, "error": "not_newer",
                              "current_version": int(cur.get("version", 0))}
             if dry_run:
-                return 200, {"ok": True, "dry_run": True, "version": version}
+                return 200, {"ok": True, "dry_run": True, "version": version, "features": ["beta"]}
 
-            upd = new.get("app_update")
-            wupd = new.get("windows_update")
-            apk_path = self.cfg["app_apk_file"]
-            win_path = self.win_file()
-            pdir = self.patch_dir()
-            patches = []
+            # public and test builds, each: (apk/exe path, patch dir, update entry);
+            # the files arrive in this order: APK, its patches, Windows build, then the same for the test builds
+            groups = [(self.cfg["app_apk_file"], self.patch_dir(), new.get("app_update")),
+                      (self.win_file(), None, new.get("windows_update")),
+                      (self.beta_apk(), self.patch_dir(True), new.get("app_update_beta")),
+                      (self.beta_win(), None, new.get("windows_update_beta"))]
+            files, keep = [], {}
             try:
-                if upd:
+                for path, pdir, upd in groups:
+                    if not upd:
+                        continue
+                    files.append((path, int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()))
+                    if pdir is None:
+                        continue
                     patches = [(str(p["from_sha256"]).lower(), int(p["size"]), str(p["sha256"]).lower())
                                for p in upd.get("patches") or []]
                     if any(not re.fullmatch(r"[0-9a-f]{64}", f) for f, _, _ in patches):
                         raise ValueError
-                # the files this config names, in the order they arrive: (path, size, sha256)
-                files = []
-                if upd:
-                    files.append((apk_path, int(upd.get("size", 0)), str(upd.get("sha256", "")).lower()))
                     files += [(os.path.join(pdir, patch_name(f)), ps, psha) for f, ps, psha in patches]
-                if wupd:
-                    files.append((win_path, int(wupd.get("size", 0)), str(wupd.get("sha256", "")).lower()))
+                    keep[pdir] = {patch_name(f) for f, _, _ in patches}
             except (KeyError, TypeError, ValueError):
                 return 400, {"ok": False, "error": "bad_config"}
             if not files and length != 0:
@@ -537,8 +545,8 @@ class Publisher:
                 if length != sum(f[1] for f in files) or any(f[1] > self.cfg["max_apk_bytes"] for f in files):
                     return 400, {"ok": False, "error": "apk_size_mismatch"}
                 import hashlib
-                os.makedirs(pdir, exist_ok=True)
                 for path, want_size, want_sha in files:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
                     h, left = hashlib.sha256(), want_size
                     with open(path + ".part", "wb") as f:
                         while left > 0:
@@ -558,17 +566,18 @@ class Publisher:
             if length:
                 for path, _, _ in files:
                     os.replace(path + ".part", path)
-                if upd:
-                    keep = {patch_name(f) for f, _, _ in patches}
-                    for n in os.listdir(pdir):
-                        if n not in keep:
+                for pdir, names in keep.items():
+                    for n in (os.listdir(pdir) if os.path.isdir(pdir) else []):
+                        if n not in names:
                             os.remove(os.path.join(pdir, n))
             tmp = self.cfg["app_config_file"] + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(envelope_text)
             os.replace(tmp, self.cfg["app_config_file"])
-            log("published config version %d%s" % (
-                version, " with app %s" % upd.get("version_code") if upd else ""))
+            upd = new.get("app_update")
+            log("published config version %d%s%s" % (
+                version, " with app %s" % upd.get("version_code") if upd else "",
+                " and test build %s" % new["app_update_beta"].get("version_code") if new.get("app_update_beta") else ""))
             return 200, {"ok": True, "version": version}
         finally:
             self.lock.release()
@@ -752,9 +761,9 @@ def make_handler(service):
             m = re.fullmatch(r"/v1/umsync/([A-Za-z0-9_-]{16,})", self.path)
             if m:
                 return self._send_umsync(m.group(1))
-            m = re.fullmatch(r"/v1/patch/([0-9a-f]{16}\.pvdl)", self.path)
+            m = re.fullmatch(r"/v1/patch(-beta)?/([0-9a-f]{16}\.pvdl)", self.path)
             if m:
-                path = os.path.join(service.publisher.patch_dir(), m.group(1))
+                path = os.path.join(service.publisher.patch_dir(bool(m.group(1))), m.group(2))
                 try:
                     f = open(path, "rb")
                 except OSError:
@@ -777,6 +786,10 @@ def make_handler(service):
                 return
             if self.path == "/v1/win.exe":
                 return self._send_file(service.publisher.win_file())
+            if self.path == "/v1/beta-win.exe":
+                return self._send_file(service.publisher.beta_win())
+            if self.path == "/v1/beta.apk":
+                return self._send_file(service.publisher.beta_apk())
             if self.path == "/v1/app.apk":
                 # The SHA-256 of this file is in the signed config; the app
                 # refuses a download that does not match it.

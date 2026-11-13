@@ -37,8 +37,17 @@ internal object UpdateManager {
 
     internal fun currentVersionCode(): Long = BuildConfig.VERSION_CODE.toLong()
 
-    internal fun available(config: AppConfig?): AppUpdate? =
-        config?.appUpdate?.takeIf { it.versionCode > currentVersionCode() && it.urls.isNotEmpty() }
+    /** The update for this user: the test build for testers when it is newer, else the public one. */
+    internal fun available(config: AppConfig?, username: String = ""): AppUpdate? {
+        val beta = config?.appUpdateBeta?.takeIf {
+            username.isNotBlank() && testerHash(username) in it.testers &&
+                it.versionCode > currentVersionCode() && it.urls.isNotEmpty()
+        }
+        val stable = config?.appUpdate?.takeIf { it.versionCode > currentVersionCode() && it.urls.isNotEmpty() }
+        return if (beta != null && (stable == null || beta.versionCode > stable.versionCode)) beta else stable
+    }
+
+    internal fun isBeta(update: AppUpdate): Boolean = update.testers.isNotEmpty()
 
     private fun target(context: Context): File =
         File(File(context.cacheDir, DIR).apply { mkdirs() }, FILE)

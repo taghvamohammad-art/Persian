@@ -76,6 +76,7 @@
     <string name="brand_update_err_file">فایل دانلودشده معتبر نبود و نصب نشد.</string>
     <string name="brand_update_permission">برای نصب، اجازه‌ی «نصب برنامه‌های ناشناس» را برای این برنامه روشن کنید و برگردید.</string>
     <string name="brand_update_size">حجم: %1$s مگابایت</string>
+    <string name="brand_update_beta">🧪 نسخه‌ی آزمایشی (فقط برای تست)</string>
 
     <string name="brand_login_subtitle">با نام کاربری و رمز اشتراک خود وارد شوید</string>
     <string name="brand_hint_connect">برای اتصال بزنید</string>

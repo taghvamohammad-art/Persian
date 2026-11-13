@@ -40,6 +40,8 @@ internal data class AppConfig(
     @SerialName("config_urls") val configUrls: List<String> = emptyList(),
     @SerialName("config_pins") val configPins: List<String> = emptyList(),
     @SerialName("app_update") val appUpdate: AppUpdate? = null,
+    // a test build, offered only to the usernames whose tester hash is listed
+    @SerialName("app_update_beta") val appUpdateBeta: AppUpdate? = null,
     // Xray / AmneziaWG servers (tools/release_tool/linux.py server_entry);
     // kept as raw JSON and handed to the pvcore engine as is
     @SerialName("linux_servers") val linuxServers: List<kotlinx.serialization.json.JsonObject> = emptyList(),
@@ -56,7 +58,12 @@ internal data class AppUpdate(
     val notes: String = "",
     // small updates: rebuild the new APK from the installed one
     val patches: List<ApkPatch> = emptyList(),
+    // test builds: sha256("pv-tester\n" + username)[:16] of each tester
+    val testers: List<String> = emptyList(),
 )
+
+internal fun testerHash(username: String): String =
+    sha256Hex(("pv-tester\n" + username.trim().lowercase()).toByteArray()).take(16)
 
 @Serializable
 internal data class ApkPatch(

@@ -333,9 +333,19 @@ class Publish(unittest.TestCase):
         self.pub = u.Publisher(self.cfg)
         self.apk = b"PK" + os.urandom(200000)
 
-    def envelope(self, version, apk=None, key=None, tamper=False, patches=None, win=None):
+    def envelope(self, version, apk=None, key=None, tamper=False, patches=None, win=None,
+                 beta=None, beta_patches=None, beta_win=None):
         import hashlib
         cfg = {"version": version, "servers": [{"host": "h", "port": 443}]}
+        if beta is not None:
+            cfg["app_update_beta"] = {"version_code": version + 100, "urls": [], "testers": ["ab" * 8],
+                                      "sha256": hashlib.sha256(beta).hexdigest(), "size": len(beta)}
+            if beta_patches:
+                cfg["app_update_beta"]["patches"] = [{"from_sha256": f, "sha256": hashlib.sha256(b).hexdigest(),
+                                                      "size": len(b), "urls": []} for f, b in beta_patches.items()]
+        if beta_win is not None:
+            cfg["windows_update_beta"] = {"version_code": version + 100, "urls": [],
+                                          "sha256": hashlib.sha256(beta_win).hexdigest(), "size": len(beta_win)}
         if win is not None:
             cfg["windows_update"] = {"version_code": version, "sha256": hashlib.sha256(win).hexdigest(),
                                      "size": len(win), "urls": []}
@@ -420,6 +430,28 @@ class Publish(unittest.TestCase):
         win2 = b"MZ" + os.urandom(600)
         self.assertEqual(self.send(self.envelope(4, win=win2)[0], win2)[0], 200)
         self.assertEqual(self.send(self.envelope(5, win=win)[0], b"")[1]["error"], "apk_required")
+
+    def test_test_builds_next_to_public_ones(self):
+        import os
+        win, beta, bwin = b"MZ" + os.urandom(300), b"PK" + os.urandom(900), b"MZ" + os.urandom(400)
+        bp = {"c" * 64: b"beta-patch"}
+        self.assertEqual(self.pub.publish(self.envelope(2, self.apk)[0], 0, None, dry_run=True)[1]["features"],
+                         ["beta"])
+        body = self.apk + win + beta + b"beta-patch" + bwin
+        b64, _ = self.envelope(2, self.apk, win=win, beta=beta, beta_patches=bp, beta_win=bwin)
+        self.assertEqual(self.send(b64, body)[0], 200)
+        for path, want in ((self.cfg["app_apk_file"], self.apk), (self.pub.win_file(), win),
+                           (self.pub.beta_apk(), beta), (self.pub.beta_win(), bwin),
+                           (os.path.join(self.pub.patch_dir(True), "c" * 16 + ".pvdl"), b"beta-patch")):
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), want)
+        # a public release later keeps the test build (config-only for it)
+        self.assertEqual(self.send(self.envelope(3, self.apk, win=win, beta=beta, beta_patches=bp,
+                                                 beta_win=bwin)[0], b"")[0], 200)
+        # test build withdrawn: its patches go too
+        newer = b"PK" + os.urandom(800)
+        self.assertEqual(self.send(self.envelope(4, newer, beta=beta)[0], newer + beta)[0], 200)
+        self.assertEqual(os.listdir(self.pub.patch_dir(True)), [])
 
     def test_size_mismatch_and_config_only(self):
         b64, _ = self.envelope(2, self.apk)

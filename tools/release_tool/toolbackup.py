@@ -43,6 +43,7 @@ def snapshot(settings):
                          "public_repo": settings.public_repo, "token": settings.token,
                          "backup_repo": settings.backup_repo, "backup_password": settings.backup_password,
                          "auto_backup": settings.auto_backup, "backup_hours": settings.backup_hours,
+                         "testers": settings.testers,
                          "routers": routers},
             "files": files}
 
@@ -86,7 +87,8 @@ def apply(data, settings, workspace):
         written.append(name)
     s = data.get("settings") or {}
     settings.workspace = workspace
-    for key in ("repo", "public_repo", "token", "backup_repo", "backup_password", "auto_backup", "backup_hours"):
+    for key in ("repo", "public_repo", "token", "backup_repo", "backup_password", "auto_backup", "backup_hours",
+                "testers"):
         if key in s:
             setattr(settings, key, s[key])
     settings.routers = []

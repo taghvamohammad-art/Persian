@@ -301,6 +301,12 @@ class SettingsDialog(QDialog):
         self.public_repo.setPlaceholderText("خالی = بدون پشتیبان")
         lay.addWidget(self.public_repo)
 
+        lay.addWidget(QLabel("یوزرهای تست (نسخه‌ی آزمایشی فقط به این‌ها پیشنهاد می‌شود؛ با کاما جدا کنید):"))
+        self.testers = QLineEdit("، ".join(settings.testers))
+        self.testers.setLayoutDirection(Qt.LeftToRight)
+        self.testers.setPlaceholderText("mohammad, ali")
+        lay.addWidget(self.testers)
+
         lay.addWidget(QLabel("توکن GitHub (رمزنگاری‌شده روی همین ویندوز ذخیره می‌شود):"))
         self.token = QLineEdit(settings.token)
         self.token.setEchoMode(QLineEdit.Password)
@@ -419,6 +425,7 @@ class SettingsDialog(QDialog):
         self.settings.repo = self.repo.text().strip()
         self.settings.public_repo = self.public_repo.text().strip()
         self.settings.token = self.token.text().strip()
+        self.settings.testers = [t.strip() for t in re.split(r"[,،\s]+", self.testers.text()) if t.strip()]
         self.settings.save()
         self.accept()
 
@@ -1923,6 +1930,25 @@ class MainWindow(QMainWindow, FeaturesMixin):
         opts.addWidget(self.chk_github)
         opts.addStretch()
         l3.addLayout(opts)
+        self.chk_beta = QCheckBox("🧪 آزمایشی: اول فقط برای یوزرهای تست (اندروید و ویندوز)")
+        self.chk_beta.setChecked(True)
+        self.chk_beta.setToolTip("یوزرهای تست در ⚙ تنظیمات. بقیه همان نسخه‌ی فعلی را دارند تا «انتشار عمومی» را بزنید.")
+        l3.addWidget(self.chk_beta)
+        self.beta_box = QFrame()
+        bl = QVBoxLayout(self.beta_box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        self.beta_info = QLabel("")
+        self.beta_info.setWordWrap(True)
+        bl.addWidget(self.beta_info)
+        brow = QHBoxLayout()
+        self.btn_promote = QPushButton("✅ انتشار عمومی نسخه‌ی آزمایشی اندروید")
+        self.btn_promote.clicked.connect(lambda: self.promote(False))
+        self.btn_promote_win = QPushButton("✅ انتشار عمومی نسخه‌ی آزمایشی ویندوز")
+        self.btn_promote_win.clicked.connect(lambda: self.promote(True))
+        brow.addWidget(self.btn_promote)
+        brow.addWidget(self.btn_promote_win)
+        bl.addLayout(brow)
+        l3.addWidget(self.beta_box)
         self.btn_go = QPushButton("امضا و انتشار")
         self.btn_go.setObjectName("Primary")
         self.btn_go.setCursor(Qt.PointingHandCursor)
@@ -1976,6 +2002,21 @@ class MainWindow(QMainWindow, FeaturesMixin):
             self.chk_github.setToolTip("ابتدا توکن GitHub را در تنظیمات وارد کنید")
         self.btn_go.setEnabled(self.build is not None and not self.busy)
         self.btn_cfg.setEnabled(not self.busy)
+        try:
+            beta, wbeta = pb.beta_status(self.workspace())
+        except (pb.ReleaseError, OSError, ValueError):
+            beta = wbeta = None
+        parts = []
+        if beta:
+            parts.append("اندروید %s" % fa(beta.get("version_name") or beta["version_code"]))
+        if wbeta:
+            parts.append("ویندوز %s" % fa(wbeta["version_code"]))
+        self.beta_box.setVisible(bool(parts))
+        self.beta_info.setText("🧪 در حال تست (فقط یوزرهای تست): %s" % "، ".join(parts))
+        self.btn_promote.setVisible(bool(beta))
+        self.btn_promote_win.setVisible(bool(wbeta))
+        self.btn_promote.setEnabled(not self.busy)
+        self.btn_promote_win.setEnabled(not self.busy)
 
     def say(self, line):
         self.log.appendPlainText(line)
@@ -2076,13 +2117,32 @@ class MainWindow(QMainWindow, FeaturesMixin):
                 public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
         ws, build, notes = self.workspace(), self.build, self.notes.toPlainText()
         send_router = self.chk_router.isChecked()
+        testers = self.testers_or_none()
+        if testers is False:
+            return
 
         def job(log, progress):
             return pb.release(ws, build, code, name, notes, send_router=send_router,
-                              github=github, public_github=public, log=log, progress=progress)
+                              github=github, public_github=public, log=log, progress=progress,
+                              testers=testers)
 
         def done(cfg):
             self.set_busy(False)
+            if testers is not None:
+                v = fa(cfg["app_update_beta"]["version_name"])
+                self.say("✓ نسخه‌ی آزمایشی %s منتشر شد (فقط برای: %s)." % (v, "، ".join(testers)))
+                QMessageBox.information(
+                    self, "نسخه‌ی آزمایشی",
+                    "نسخه‌ی %s فقط برای یوزرهای تست منتشر شد (%s).\n"
+                    "روی گوشی خودتان برنامه را باز کنید و به‌روزرسانی «آزمایشی» را نصب کنید.\n"
+                    "اگر سالم بود، «✅ انتشار عمومی نسخه‌ی آزمایشی اندروید» را بزنید." % (v, "، ".join(testers)))
+                self.build = None
+                self.drop.text.setText("فایل بیلد را اینجا بکشید یا کلیک کنید")
+                self.drop.sub.setText("فایل zip دانلودشده از GitHub یا فایل APK")
+                self.drop._restyle(loaded="false")
+                self.notes.clear()
+                self.refresh_state()
+                return
             self.say("✓ انتشار نسخه‌ی %s کامل شد." % fa(cfg["app_update"]["version_name"]))
             if cfg.get("_public_failed"):
                 QMessageBox.warning(self, "هشدار",
@@ -2172,17 +2232,71 @@ class MainWindow(QMainWindow, FeaturesMixin):
             if self.settings.public_repo:
                 public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
         send_router = self.chk_router.isChecked()
+        testers = self.testers_or_none()
+        if testers is False:
+            return
 
         def job(log, progress):
             return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
-                                          log=log, progress=progress, win=win, win_notes=notes)
+                                          log=log, progress=progress, win=win, win_notes=notes,
+                                          win_testers=testers)
 
         def done(cfg):
             self.set_busy(False)
+            if testers is not None:
+                self.say("✓ نسخه‌ی آزمایشی ویندوز %d فقط برای یوزرهای تست منتشر شد." % win.version_code)
+                QMessageBox.information(self, "نسخه‌ی آزمایشی",
+                    "نسخه‌ی ویندوز %s فقط برای یوزرهای تست منتشر شد.\n"
+                    "اگر سالم بود، «✅ انتشار عمومی نسخه‌ی آزمایشی ویندوز» را بزنید." % fa(win.version_code))
+                self.refresh_state()
+                return
             self.say("✓ نسخه‌ی ویندوز %d منتشر شد (تنظیمات %s)." % (win.version_code, fa(cfg["version"])))
             QMessageBox.information(self, "انجام شد",
                 "نسخه‌ی ویندوز منتشر شد.\nبرنامه‌های ویندوز موقع باز شدن پیشنهاد به‌روزرسانی می‌دهند.\n\n"
                 "برای نصب اول، فایل PersianVPN.exe داخل همان zip را به کاربران بدهید.")
+            self.refresh_state()
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
+
+    def testers_or_none(self):
+        """Usernames for a test release, None for a public one, False = cancelled."""
+        if not self.chk_beta.isChecked():
+            if QMessageBox.question(
+                    self, "انتشار عمومی",
+                    "تیک «آزمایشی» برداشته شده: این نسخه همین الان برای همه‌ی کاربران منتشر می‌شود.\nادامه؟"
+                    ) != QMessageBox.Yes:
+                return False
+            return None
+        if not self.settings.testers:
+            QMessageBox.warning(self, "یوزرهای تست",
+                                "اول یوزرهای تست (مثلاً یوزر خودتان) را در ⚙ تنظیمات وارد کنید.")
+            return False
+        return list(self.settings.testers)
+
+    def promote(self, windows):
+        what = "ویندوز" if windows else "اندروید"
+        if QMessageBox.question(
+                self, "انتشار عمومی",
+                "نسخه‌ی آزمایشی %s، همان فایلی که تست کردید، برای همه‌ی کاربران منتشر شود؟" % what
+                ) != QMessageBox.Yes:
+            return
+        github = public = None
+        if self.chk_github.isChecked():
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+        ws, send_router = self.workspace(), self.chk_router.isChecked()
+        fn = pb.promote_win_beta if windows else pb.promote_beta
+
+        def job(log, progress):
+            return fn(ws, send_router=send_router, github=github, public_github=public, log=log, progress=progress)
+
+        def done(cfg):
+            self.set_busy(False)
+            self.say("✓ نسخه‌ی %s برای همه منتشر شد." % what)
+            QMessageBox.information(self, "انجام شد", "نسخه‌ی %s برای همه‌ی کاربران منتشر شد." % what)
             self.refresh_state()
 
         self.log.clear()

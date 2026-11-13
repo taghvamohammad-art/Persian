@@ -23,11 +23,15 @@ type SignedConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
 	} `json:"servers"`
-	SstpPins      []string `json:"sstp_pins"`
-	WindowsUpdate *struct {
-		VersionCode  int    `json:"version_code"`
-		EngineSHA256 string `json:"engine_sha256"`
-	} `json:"windows_update"`
+	SstpPins          []string      `json:"sstp_pins"`
+	WindowsUpdate     *WindowsBuild `json:"windows_update"`
+	WindowsUpdateBeta *WindowsBuild `json:"windows_update_beta"` // test build (testers only)
+}
+
+// WindowsBuild: what the service needs to accept an engine upgrade.
+type WindowsBuild struct {
+	VersionCode  int    `json:"version_code"`
+	EngineSHA256 string `json:"engine_sha256"`
 }
 
 // VerifyEnvelope checks {"payload": b64, "sig": b64} against the public key

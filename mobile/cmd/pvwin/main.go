@@ -112,16 +112,21 @@ func upgrade(req request) error {
 		return err
 	}
 	cur, _ := strconv.Atoi(version)
-	if cfg.WindowsUpdate == nil || cfg.WindowsUpdate.EngineSHA256 == "" || cfg.WindowsUpdate.VersionCode <= cur {
-		return fmt.Errorf("no newer signed engine")
-	}
 	data, err := os.ReadFile(req.Path)
 	if err != nil {
 		return err
 	}
 	sum := sha256.Sum256(data)
-	if !strings.EqualFold(hex.EncodeToString(sum[:]), cfg.WindowsUpdate.EngineSHA256) {
-		return fmt.Errorf("engine does not match the signed hash")
+	ok := false
+	// the public build or the test build: both are named by the owner's signature
+	for _, b := range []*pvcore.WindowsBuild{cfg.WindowsUpdate, cfg.WindowsUpdateBeta} {
+		if b != nil && b.EngineSHA256 != "" && b.VersionCode > cur &&
+			strings.EqualFold(hex.EncodeToString(sum[:]), b.EngineSHA256) {
+			ok = true
+		}
+	}
+	if !ok {
+		return fmt.Errorf("no newer signed engine matches")
 	}
 	exe, _ := os.Executable()
 	next, old := exe+".new", exe+".old"

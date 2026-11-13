@@ -320,9 +320,24 @@ def download(url, pins, dest, size, progress):
     return h.hexdigest()
 
 
-def fetch_update(cfg, progress):
+def tester_hash(username):
+    return hashlib.sha256(("pv-tester\n" + username.strip().lower()).encode()).hexdigest()[:16]
+
+
+def update_for(cfg, username):
+    """The Windows build for this user: the test build for testers when it is
+    newer than the public one, else the public one ({} when none)."""
+    pub = cfg.get("windows_update") or {}
+    beta = cfg.get("windows_update_beta") or {}
+    if beta and username and tester_hash(username) in beta.get("testers", []) and \
+            int(beta.get("version_code", 0)) > int(pub.get("version_code", 0)):
+        return beta
+    return pub
+
+
+def fetch_update(cfg, progress, upd=None):
     """Downloads the Windows build named in the signed config; path or None."""
-    upd = cfg.get("windows_update") or {}
+    upd = upd if upd is not None else (cfg.get("windows_update") or {})
     os.makedirs(DATA, exist_ok=True)
     dest = os.path.join(DATA, "PersianVPN-new.exe")
     for url in upd.get("urls", []):
@@ -543,7 +558,7 @@ class Window(QWidget):
     def background_start(self):
         """Newer signed config, then a newer Windows build if it names one."""
         self.config.refresh()
-        upd = self.config.cfg.get("windows_update") or {}
+        upd = update_for(self.config.cfg, self.state.get("user", ""))
         if int(upd.get("version_code", 0)) > BUILD and getattr(sys, "frozen", False):
             self.status_ready.emit(("update", upd))
 
@@ -834,15 +849,16 @@ class Window(QWidget):
             self.set_look("off", "قطع")
 
     def offer_update(self, upd):
-        if QMessageBox.question(self, APP_NAME, "نسخه‌ی جدید برنامه آماده است (%s).\nالان به‌روز شود؟\n\n%s"
-                                % (upd.get("version_name", upd.get("version_code")), upd.get("notes", ""))) \
+        beta = "🧪 نسخه‌ی آزمایشی (فقط برای تست)\n" if upd.get("testers") else ""
+        if QMessageBox.question(self, APP_NAME, "نسخه‌ی جدید برنامه آماده است (%s).\nالان به‌روز شود؟\n\n%s%s"
+                                % (upd.get("version_name", upd.get("version_code")), beta, upd.get("notes", ""))) \
                 != QMessageBox.Yes:
             return
         self.set_look("busy", "در حال دریافت نسخه‌ی جدید…")
         cfg = self.config.cfg
 
         def job():
-            path = fetch_update(cfg, lambda pct: None)
+            path = fetch_update(cfg, lambda pct: None, upd)
             self.status_ready.emit(("update_ready", path))
         threading.Thread(target=job, daemon=True).start()
 

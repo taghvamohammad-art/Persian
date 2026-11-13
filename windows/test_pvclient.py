@@ -44,6 +44,15 @@ class SignedConfig(unittest.TestCase):
             ["C:\\Program Files\\Mozilla Firefox\\firefox.exe", "Telegram.exe", "FIREFOX.EXE", "notes.txt", ""]),
             ["firefox.exe", "Telegram.exe"])
 
+    def test_test_build_only_for_testers(self):
+        cfg = {"windows_update": {"version_code": 5},
+               "windows_update_beta": {"version_code": 6, "testers": [pc.tester_hash("Mohammad")]}}
+        self.assertEqual(pc.update_for(cfg, "mohammad ")["version_code"], 6)
+        self.assertEqual(pc.update_for(cfg, "ali")["version_code"], 5)
+        self.assertEqual(pc.update_for(cfg, "")["version_code"], 5)
+        cfg["windows_update"]["version_code"] = 6                 # published for everyone meanwhile
+        self.assertNotIn("testers", pc.update_for(cfg, "mohammad"))
+
     def test_secret_roundtrip(self):
         self.assertEqual(pc.unseal(pc.seal("pw-1")), "pw-1")
 

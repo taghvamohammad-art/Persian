@@ -70,6 +70,7 @@ class Settings:
         self.backup_password = ""
         self.auto_backup = False
         self.backup_hours = 6
+        self.testers = []          # usernames that get test builds
         # [{"id", "name", "role": "main"|"secondary", "host", "port", "user", "password", "hostkey"}]
         self.routers = []
 
@@ -87,6 +88,7 @@ class Settings:
             s.backup_password = _decrypt(d.get("backup_password", ""))
             s.auto_backup = bool(d.get("auto_backup", False))
             s.backup_hours = int(d.get("backup_hours", 6))
+            s.testers = [str(t) for t in d.get("testers", []) if str(t).strip()]
             for r in d.get("routers", []):
                 r = {k: r.get(k, "") for k in ROUTER_FIELDS}
                 r["password"] = _decrypt(r["password"])
@@ -122,6 +124,7 @@ class Settings:
                        "backup_repo": self.backup_repo,
                        "backup_password": _encrypt(self.backup_password),
                        "auto_backup": self.auto_backup, "backup_hours": self.backup_hours,
+                       "testers": self.testers,
                        "routers": routers}, f, ensure_ascii=False, indent=2)
         os.replace(tmp, FILE)
 

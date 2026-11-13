@@ -192,6 +192,59 @@ class ReleaseFlow(unittest.TestCase):
         pb.release(self.ws, build2, 17, "", "", github=self.gh.client(), log=lambda *_: None)
         self.assertIn("1.0.17", self.gh.last_message)
 
+    def served(self):
+        with open(self.srv_cfg["app_config_file"]) as f:
+            return json.loads(base64.b64decode(json.loads(f.read())["payload"]))
+
+    def test_test_build_then_public(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        # no testers: refused
+        beta_apk = b"PK" + os.urandom(2000)
+        with self.assertRaises(pb.ReleaseError):
+            pb.release(self.ws, pb.Build(beta_apk, 17, "b"), 17, "", "test", log=q, testers=[" "])
+        pb.release(self.ws, pb.Build(beta_apk, 17, "b"), 17, "", "test", log=q, testers=["Mohammad", "ali"])
+        cfg = self.served()
+        self.assertEqual(cfg["app_update"]["version_code"], 16)          # public one untouched
+        beta = cfg["app_update_beta"]
+        self.assertEqual(beta["version_code"], 17)
+        self.assertEqual(beta["testers"], pb.tester_hashes(["mohammad", "ALI "]))
+        self.assertNotIn("mohammad", json.dumps(cfg).lower())             # names are not published
+        self.assertTrue(all(u.endswith("/v1/beta.apk") for u in beta["urls"]))
+        srv_dir = os.path.dirname(self.srv_cfg["app_apk_file"])
+        with open(os.path.join(srv_dir, "beta.apk"), "rb") as f:
+            self.assertEqual(f.read(), beta_apk)
+        with open(self.srv_cfg["app_apk_file"], "rb") as f:
+            self.assertEqual(f.read(), self.apk)
+        # a server-settings release keeps the test build
+        pb.release_config_only(self.ws, log=q)
+        self.assertEqual(self.served()["app_update_beta"]["version_code"], 17)
+        # promoted: the same bytes for everyone, the test entry gone
+        pb.promote_beta(self.ws, log=q)
+        cfg = self.served()
+        self.assertEqual((cfg["app_update"]["version_code"], cfg["app_update"]["notes"]), (17, "test"))
+        self.assertEqual(cfg["app_update"]["sha256"], hashlib.sha256(beta_apk).hexdigest())
+        self.assertNotIn("app_update_beta", cfg)
+        self.assertFalse(os.path.exists(self.ws.path(pb.BETA_APK)))
+        with open(self.srv_cfg["app_apk_file"], "rb") as f:
+            self.assertEqual(f.read(), beta_apk)
+
+    def test_windows_test_build(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        win = pb.WinBuild(b"MZ" + os.urandom(3000), b"engine", 5)
+        pb.release_config_only(self.ws, log=q, win=win, win_notes="w", win_testers=["mohammad"])
+        cfg = self.served()
+        self.assertNotIn("windows_update", cfg)
+        self.assertEqual(cfg["windows_update_beta"]["engine_sha256"], hashlib.sha256(b"engine").hexdigest())
+        pb.promote_win_beta(self.ws, log=q)
+        cfg = self.served()
+        self.assertEqual(cfg["windows_update"]["sha256"], win.sha256)
+        self.assertEqual(cfg["windows_update"]["engine_sha256"], win.engine_sha256)
+        self.assertNotIn("windows_update_beta", cfg)
+        with open(os.path.join(os.path.dirname(self.srv_cfg["app_apk_file"]), "win.exe"), "rb") as f:
+            self.assertEqual(f.read(), win.exe)
+
     def test_router_failure_keeps_workspace(self):
         before = self.ws.load_config()
         os.remove(self.srv_cfg["config_pubkey_file"])     # router not set up

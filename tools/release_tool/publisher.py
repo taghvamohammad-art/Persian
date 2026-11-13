@@ -182,19 +182,41 @@ def make_patches(ws, build, log=print):
     return out
 
 
+def tester_hashes(names):
+    """What the config lists for test builds: not the usernames themselves."""
+    out = []
+    for n in names:
+        n = str(n).strip().lower()
+        if n:
+            h = hashlib.sha256(("pv-tester\n" + n).encode()).hexdigest()[:16]
+            if h not in out:
+                out.append(h)
+    return out
+
+
+def router_urls(cfg, path):
+    return [u.replace("/v1/config", path) for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
+
+
+BETA_APK, BETA_PATCHES, BETA_WIN = "beta.apk", "patches-beta", "beta-win.exe"
+
+
 def patch_name(from_sha):
     return from_sha[:16] + ".pvdl"
 
 
-def patch_entries(cfg, patches):
+def patch_entries(cfg, patches, beta=False):
     """app_update.patches of the config (the bytes themselves go to the router)."""
-    bases = [u.replace("/v1/config", "/v1/patch/") for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
+    bases = router_urls(cfg, "/v1/patch-beta/" if beta else "/v1/patch/")
     return [{"from_sha256": f, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b),
              "urls": [base + patch_name(f) for base in bases]} for f, b in patches.items()]
 
 
-def prepare_release(ws, build, version_code, version_name, notes, public_repo=None, patches=None):
-    """Returns (new_config_dict, envelope_text). Nothing is written yet."""
+def prepare_release(ws, build, version_code, version_name, notes, public_repo=None, patches=None,
+                    testers=None):
+    """Returns (new_config_dict, envelope_text). Nothing is written yet.
+    testers: a test build, offered only to these usernames (app_update_beta);
+    the public version stays as it is."""
     cfg = ws.load_config()
     if public_repo:
         # make sure installed apps learn the mirror while the router still works
@@ -206,11 +228,13 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     if version_code <= old:
         raise ReleaseError("شماره‌ی نسخه (%d) باید از آخرین نسخه‌ی منتشرشده (%d) بزرگ‌تر باشد."
                            % (version_code, old))
-    urls = [u.replace("/v1/config", "/v1/app.apk") for u in cfg.get("config_urls", [])
-            if u.endswith("/v1/config")]
+    beta = testers is not None
+    if beta and not tester_hashes(testers):
+        raise ReleaseError("برای نسخه‌ی آزمایشی، یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+    urls = router_urls(cfg, "/v1/beta.apk" if beta else "/v1/app.apk")
     if not urls:
         raise ReleaseError("در config.json هیچ آدرس config_urls با /v1/config نیست.")
-    cfg["app_update"] = {
+    entry = {
         "version_code": version_code,
         "version_name": version_name or "1.0.%d" % version_code,
         "urls": urls,
@@ -219,7 +243,15 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
         "notes": notes.strip(),
     }
     if patches:
-        cfg["app_update"]["patches"] = patch_entries(cfg, patches)
+        entry["patches"] = patch_entries(cfg, patches, beta)
+    if beta:
+        entry["testers"] = tester_hashes(testers)
+        cfg["app_update_beta"] = entry
+    else:
+        cfg["app_update"] = entry
+        if int((cfg.get("app_update_beta") or {}).get("version_code", 0)) <= version_code:
+            cfg.pop("app_update_beta", None)      # published, or older than the public one
+    refresh_beta_urls(ws, cfg, app=not beta)
     if cfg.get("windows_update"):
         # the Windows build goes to the router with the APK; without our copy it cannot stay listed
         if local_win(ws, cfg["windows_update"]) is None:
@@ -227,6 +259,10 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
         else:
             cfg["windows_update"]["urls"] = [u.replace("/v1/config", "/v1/win.exe")
                                              for u in cfg.get("config_urls", []) if u.endswith("/v1/config")]
+    return sign(ws, cfg)
+
+
+def sign(ws, cfg):
     cfg["version"] = int(cfg.get("version", 0)) + 1
     cfg = sc.normalise(cfg)
     errors = sc.check_config(cfg)
@@ -243,12 +279,28 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     return cfg, envelope
 
 
-def local_patches(ws, upd):
+def refresh_beta_urls(ws, cfg, app=True):
+    """Test builds stay listed only while their files are in the workspace;
+    their URLs follow the router in config_urls[0]."""
+    b = cfg.get("app_update_beta") if app else None
+    if b:
+        b["urls"] = router_urls(cfg, "/v1/beta.apk")
+        if b.get("patches"):
+            b["patches"] = patch_entries(cfg, local_patches(ws, b, beta=True), beta=True)
+            if not b["patches"]:
+                b.pop("patches")
+    w = cfg.get("windows_update_beta")
+    if w:
+        w["urls"] = router_urls(cfg, "/v1/beta-win.exe")
+
+
+def local_patches(ws, upd, beta=False):
     """{from_sha256: bytes} of the config's patches still in the workspace."""
     out = {}
     for p in upd.get("patches") or []:
         try:
-            with open(os.path.join(ws.path("patches"), patch_name(p["from_sha256"])), "rb") as f:
+            with open(os.path.join(ws.path(BETA_PATCHES if beta else "patches"), patch_name(p["from_sha256"])),
+                      "rb") as f:
                 b = f.read()
         except OSError:
             continue
@@ -283,8 +335,9 @@ def read_windows_build(path):
         raise ReleaseError("فایل نسخه‌ی ویندوز خوانده نشد: %s" % e)
 
 
-def local_win(ws, wupd):
-    for name in ("win.exe.new", "win.exe"):     # .new: being published right now
+def local_win(ws, wupd, beta=False):
+    base = BETA_WIN if beta else "win.exe"
+    for name in (base + ".new", base):     # .new: being published right now
         try:
             with open(ws.path(name), "rb") as f:
                 data = f.read()
@@ -295,33 +348,52 @@ def local_win(ws, wupd):
     return None
 
 
-def local_files(ws, cfg):
-    """Every file the config names (APK, patches, Windows build), from the
-    workspace, as one body for the router; b"" when any is missing (the
-    router then has to have them all)."""
+def local_files(ws, cfg, new=None):
+    """Every file the config names, in the order the router takes them
+    (APK, its patches, Windows build, then the same for the test builds),
+    as one body; b"" when any is missing (the router then has to have them
+    all). new: bytes not saved yet, {"apk"|"beta_apk": bytes,
+    "patches"|"beta_patches": {from_sha256: bytes}}."""
+    new = new or {}
     parts = []
-    upd, wupd = cfg.get("app_update"), cfg.get("windows_update")
-    try:
-        if upd:
-            with open(ws.path("app.apk"), "rb") as f:
+
+    def apk_part(upd, name, beta):
+        key = "beta_apk" if beta else "apk"
+        if key in new:
+            apk = new[key]
+        else:
+            with open(ws.path(name), "rb") as f:
                 apk = f.read()
-            if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
-                return b""
-            parts.append(apk)
-            have = local_patches(ws, upd)
-            parts += [have[p["from_sha256"]] for p in upd.get("patches") or []]
-        if wupd:
-            win = local_win(ws, wupd)
-            if win is None:
-                return b""
-            parts.append(win)
+        if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
+            raise KeyError(name)
+        have = new.get("beta_patches" if beta else "patches")
+        if have is None:
+            have = local_patches(ws, upd, beta)
+        return [apk] + [have[p["from_sha256"]] for p in upd.get("patches") or []]
+
+    def win_part(wupd, beta):
+        win = local_win(ws, wupd, beta)
+        if win is None:
+            raise KeyError("win")
+        return [win]
+
+    try:
+        if cfg.get("app_update"):
+            parts += apk_part(cfg["app_update"], "app.apk", False)
+        if cfg.get("windows_update"):
+            parts += win_part(cfg["windows_update"], False)
+        if cfg.get("app_update_beta"):
+            parts += apk_part(cfg["app_update_beta"], BETA_APK, True)
+        if cfg.get("windows_update_beta"):
+            parts += win_part(cfg["windows_update_beta"], True)
     except (OSError, KeyError):
         return b""
     return b"".join(parts)
 
 
-def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes=""):
-    """New signed config with the same app version: for a server change."""
+def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_notes="", win_testers=None):
+    """New signed config with the same app version: for a server change, or a
+    new Windows build (win; a test build for win_testers when given)."""
     cfg = ws.load_config()
     if public_repo:
         urls = cfg.setdefault("config_urls", [])
@@ -340,29 +412,43 @@ def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_n
             else:
                 upd.pop("patches")
     if win is not None:
-        cfg["windows_update"] = {"version_code": win.version_code, "version_name": "1.0.%d" % win.version_code,
-                                 "sha256": win.sha256, "size": len(win.exe),
-                                 "engine_sha256": win.engine_sha256, "notes": win_notes.strip()}
+        entry = {"version_code": win.version_code, "version_name": "1.0.%d" % win.version_code,
+                 "sha256": win.sha256, "size": len(win.exe),
+                 "engine_sha256": win.engine_sha256, "notes": win_notes.strip()}
+        if win_testers is not None:
+            if not tester_hashes(win_testers):
+                raise ReleaseError("برای نسخه‌ی آزمایشی، یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+            entry["testers"] = tester_hashes(win_testers)
+            cfg["windows_update_beta"] = entry
+        else:
+            cfg["windows_update"] = entry
+            if int((cfg.get("windows_update_beta") or {}).get("version_code", 0)) <= win.version_code:
+                cfg.pop("windows_update_beta", None)
     if cfg.get("windows_update"):
-        cfg["windows_update"]["urls"] = [u.replace("/v1/config", "/v1/win.exe") for u in cfg.get("config_urls", [])
-                                         if u.endswith("/v1/config")]
-    cfg["version"] = int(cfg.get("version", 0)) + 1
-    cfg = sc.normalise(cfg)
-    errors = sc.check_config(cfg)
-    if errors:
-        raise ReleaseError("config.json مشکل دارد:\n" + "\n".join(errors))
-    payload = json.dumps(cfg, ensure_ascii=False, separators=(",", ":")).encode()
-    d = ws.private_key()
-    sig = sc.sign(d, payload)
-    if not sc.verify(sc.public_der(d), payload, sig):
-        raise ReleaseError("امضا ساخته شد ولی بررسی آن ناموفق بود.")
-    envelope = json.dumps({"payload": base64.b64encode(payload).decode(),
-                           "sig": base64.b64encode(sig).decode()})
-    return cfg, envelope
+        cfg["windows_update"]["urls"] = router_urls(cfg, "/v1/win.exe")
+    refresh_beta_urls(ws, cfg)
+    return sign(ws, cfg)
 
 
-def save_local(ws, cfg, envelope, build, patches=None):
-    """Called only after the router accepted the release."""
+def _write_patches(d, patches):
+    os.makedirs(d, exist_ok=True)
+    keep = {patch_name(f) for f in patches}
+    for n in os.listdir(d):
+        if n not in keep:
+            os.remove(os.path.join(d, n))
+    for f, b in patches.items():
+        with open(os.path.join(d, patch_name(f)), "wb") as out:
+            out.write(b)
+
+
+def save_local(ws, cfg, envelope, build, patches=None, beta=False):
+    """Called only after the router accepted the release. beta: build is the
+    test build (beta.apk; the public app.apk and its history stay)."""
+    if beta:
+        with open(ws.path(BETA_APK), "wb") as f:
+            f.write(build.apk)
+        _write_patches(ws.path(BETA_PATCHES), patches or {})
+        build = patches = None
     try:
         prev = int(ws.load_config().get("app_update", {}).get("version_code", 0))
     except (ReleaseError, OSError, ValueError):
@@ -386,15 +472,17 @@ def save_local(ws, cfg, envelope, build, patches=None):
             if os.path.basename(path) != "app.apk":
                 os.remove(path)
     if patches is not None:
-        d = ws.path("patches")
-        os.makedirs(d, exist_ok=True)
-        keep = {patch_name(f) for f in patches}
-        for n in os.listdir(d):
-            if n not in keep:
-                os.remove(os.path.join(d, n))
-        for f, b in patches.items():
-            with open(os.path.join(d, patch_name(f)), "wb") as out:
-                out.write(b)
+        _write_patches(ws.path("patches"), patches)
+    # test builds no longer listed: their files go
+    if not cfg.get("app_update_beta"):
+        for name in (BETA_APK, BETA_PATCHES):
+            p = ws.path(name)
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            elif os.path.isfile(p):
+                os.remove(p)
+    if not cfg.get("windows_update_beta") and os.path.isfile(ws.path(BETA_WIN)):
+        os.remove(ws.path(BETA_WIN))
 
 
 # ------------------------------------------------------------------ router
@@ -407,6 +495,8 @@ ROUTER_ERRORS = {
     "apk_size_mismatch": "حجم APK با تنظیمات امضاشده یکی نیست.",
     "busy": "یک انتشار دیگر در حال انجام است.",
     "too_many_attempts": "تعداد تلاش‌های ناموفق زیاد بود؛ چند دقیقه بعد امتحان کنید.",
+    "old_umstatus": "سرویس umstatus روتر قدیمی است و نسخه‌ی آزمایشی را نمی‌شناسد؛ "
+                    "از تب «سرویس‌ها و بات» آن را به‌روز کنید و دوباره امتحان کنید.",
 }
 
 
@@ -474,10 +564,14 @@ class RouterClient:
             raise ex
         return data
 
-    def publish(self, envelope, apk, progress=None):
+    def publish(self, envelope, apk, progress=None, need=None):
         # ask first (signature, version, router set up) so a rejection is
         # reported clearly instead of cutting a half-sent upload
-        self._call(envelope, b"", dry_run=True)
+        probe = self._call(envelope, b"", dry_run=True)
+        if need and need not in (probe.get("features") or []):
+            ex = ReleaseError(ROUTER_ERRORS["old_umstatus"])
+            ex.code = "old_umstatus"
+            raise ex
         return self._call(envelope, apk, dry_run=False, progress=progress)
 
 
@@ -584,8 +678,12 @@ class GitHubClient:
 
 # ------------------------------------------------------------------ whole flow
 
+def _needs(cfg):
+    return "beta" if cfg.get("app_update_beta") or cfg.get("windows_update_beta") else None
+
+
 def release(ws, build, version_code, version_name, notes,
-            send_router=True, github=None, public_github=None, log=print, progress=None):
+            send_router=True, github=None, public_github=None, log=print, progress=None, testers=None):
     """Sign, publish to the router, save locally, update GitHub.
 
     The local config.json changes only after the router accepted the
@@ -596,37 +694,44 @@ def release(ws, build, version_code, version_name, notes,
     if patches:
         log("وصله‌های به‌روزرسانی سبک: %s" % "، ".join(
             "%.1f MB" % (len(b) / 1048576) for b in patches.values()))
-    log("امضای تنظیمات نسخه‌ی %d…" % version_code)
-    cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
-                                    public_github.repo if public_github else None, patches)
+    beta = testers is not None
+    log("امضای تنظیمات %s %d…" % ("نسخه‌ی آزمایشی" if beta else "نسخه‌ی", version_code))
+    pub = public_github.repo if public_github else None
+    cfg, envelope = prepare_release(ws, build, version_code, version_name, notes, pub, patches, testers)
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
+
+    def body_for(cfg, patches):
+        new = {"beta_apk": build.apk, "beta_patches": patches} if beta else {"apk": build.apk, "patches": patches}
+        body = local_files(ws, cfg, new)
+        if not body:
+            raise ReleaseError("فایل‌های نسخه‌ی فعلی در پوشه‌ی کاری کامل نیست؛ "
+                               "یک بار «انتشار فقط تنظیمات سرور» را بزنید.")
+        return body
 
     if send_router:
         log("ارسال به روتر…")
         try:
-            win = local_win(ws, cfg["windows_update"]) if cfg.get("windows_update") else b""
-            body = RouterClient(cfg).publish(envelope, build.apk + b"".join(patches.values()) + win, progress)
+            body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
         except ReleaseError as e:
-            if not patches or getattr(e, "code", "") != "apk_size_mismatch":
+            if beta or not patches or getattr(e, "code", "") != "apk_size_mismatch":
                 raise
             # umstatus on the router is older than patches: plain release
             log("⚠ سرویس umstatus روتر قدیمی است و وصله نمی‌پذیرد (از تب سرویس‌ها به‌روزش کنید)؛ "
                 "این نسخه بدون وصله منتشر می‌شود.")
             patches = {}
-            cfg, envelope = prepare_release(ws, build, version_code, version_name, notes,
-                                            public_github.repo if public_github else None)
-            win = local_win(ws, cfg["windows_update"]) if cfg.get("windows_update") else b""
-            body = RouterClient(cfg).publish(envelope, build.apk + win, progress)
+            cfg, envelope = prepare_release(ws, build, version_code, version_name, notes, pub)
+            body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
-    save_local(ws, cfg, envelope, build, patches)
+    save_local(ws, cfg, envelope, build, patches, beta=beta)
     log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
 
     if github is not None:
         log("ارسال تنظیمات به GitHub…")
         github.put_file(ASSET_PATH, envelope.encode(),
-                        "Release app %s (config v%d) [skip ci]"
-                        % (cfg["app_update"]["version_name"], cfg["version"]))
+                        "Release %sapp %s (config v%d) [skip ci]"
+                        % ("test " if beta else "", (cfg["app_update_beta"] if beta else cfg["app_update"])
+                           ["version_name"], cfg["version"]))
         log("✓ GitHub به‌روز شد")
 
     if public_github is not None:
@@ -643,7 +748,7 @@ def release(ws, build, version_code, version_name, notes,
 
 
 def release_config_only(ws, send_router=True, github=None, public_github=None,
-                        log=print, progress=None, win=None, win_notes=""):
+                        log=print, progress=None, win=None, win_notes="", win_testers=None):
     """Publish changed server settings (config.json) without a new app version,
     or with a new Windows build (win).
 
@@ -652,15 +757,16 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
     freshly set-up router can serve updates too.
     """
     ws.check()
+    win_name = BETA_WIN if win_testers is not None else "win.exe"
     if win is not None:
         cur = (ws.load_config().get("windows_update") or {}).get("version_code", 0)
         if win.version_code <= int(cur):
             raise ReleaseError("نسخه‌ی ویندوز %d از نسخه‌ی منتشرشده (%d) جدیدتر نیست." % (win.version_code, cur))
-        with open(ws.path("win.exe.new"), "wb") as f:
+        with open(ws.path(win_name + ".new"), "wb") as f:
             f.write(win.exe)
     log("امضای تنظیمات سرور…")
     pub = public_github.repo if public_github else None
-    cfg, envelope = prepare_config_only(ws, pub, win=win, win_notes=win_notes)
+    cfg, envelope = prepare_config_only(ws, pub, win=win, win_notes=win_notes, win_testers=win_testers)
     log("✓ امضا شد (نسخه‌ی تنظیمات %d)" % cfg["version"])
 
     if send_router:
@@ -668,18 +774,19 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
             return local_files(ws, cfg)
         log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
         try:
-            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
+            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
         except ReleaseError as e:
             if not (cfg.get("app_update") or {}).get("patches") or \
                     getattr(e, "code", "") not in ("apk_size_mismatch", "apk_required"):
                 raise
             log("⚠ روتر وصله‌های به‌روزرسانی را نمی‌پذیرد یا ندارد؛ بدون وصله منتشر می‌شود.")
-            cfg, envelope = prepare_config_only(ws, pub, with_patches=False, win=win, win_notes=win_notes)
+            cfg, envelope = prepare_config_only(ws, pub, with_patches=False, win=win, win_notes=win_notes,
+                                                win_testers=win_testers)
             body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
     if win is not None:
-        os.replace(ws.path("win.exe.new"), ws.path("win.exe"))
+        os.replace(ws.path(win_name + ".new"), ws.path(win_name))
     save_local(ws, cfg, envelope, None)
     log("✓ فایل‌ها در پوشه‌ی کاری ذخیره شدند")
 
@@ -699,3 +806,42 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
             log("⚠ مخزن عمومی به‌روز نشد: %s" % e)
             cfg["_public_failed"] = str(e)
     return cfg
+
+
+# ------------------------------------------------------------------ test builds
+
+def beta_status(ws):
+    """(app test build entry or None, Windows test build entry or None)."""
+    cfg = ws.load_config()
+    return cfg.get("app_update_beta"), cfg.get("windows_update_beta")
+
+
+def promote_beta(ws, send_router=True, github=None, public_github=None, log=print, progress=None):
+    """The tested app build, unchanged, for everyone."""
+    upd = ws.load_config().get("app_update_beta")
+    if not upd:
+        raise ReleaseError("نسخه‌ی آزمایشی اندرویدی منتشر نشده است.")
+    try:
+        with open(ws.path(BETA_APK), "rb") as f:
+            apk = f.read()
+    except OSError:
+        raise ReleaseError("فایل نسخه‌ی آزمایشی در پوشه‌ی کاری نیست.")
+    if hashlib.sha256(apk).hexdigest() != upd["sha256"]:
+        raise ReleaseError("فایل نسخه‌ی آزمایشی در پوشه‌ی کاری با نسخه‌ی منتشرشده یکی نیست.")
+    build = Build(apk, int(upd["version_code"]), BETA_APK)
+    return release(ws, build, build.version_code, upd.get("version_name", ""), upd.get("notes", ""),
+                   send_router, github, public_github, log, progress)
+
+
+def promote_win_beta(ws, send_router=True, github=None, public_github=None, log=print, progress=None):
+    """The tested Windows build, unchanged, for everyone."""
+    w = ws.load_config().get("windows_update_beta")
+    if not w:
+        raise ReleaseError("نسخه‌ی آزمایشی ویندوز منتشر نشده است.")
+    exe = local_win(ws, w, beta=True)
+    if exe is None:
+        raise ReleaseError("فایل نسخه‌ی آزمایشی ویندوز در پوشه‌ی کاری نیست.")
+    win = WinBuild(exe, b"", int(w["version_code"]))
+    win.engine_sha256 = w["engine_sha256"]
+    return release_config_only(ws, send_router, github, public_github, log, progress, win=win,
+                               win_notes=w.get("notes", ""))
