@@ -221,6 +221,9 @@ def main():
     if any(isinstance(v, int) and v >= 0 for v in probe_json(bad).values()):
         problems.append("pvcore probe: a wrong password worked")
 
+    step("the app's engine on a real TUN: data, DNS and switching protocols")
+    problems += tun_e2e(probe_entry)
+
     step("clients with a wrong password must fail")
     res = run_clients(entry, USER, "nope", only=["vision", "ss"])
     problems += ["%s let a wrong password in" % k for k, v in res.items() if v == "204"]
@@ -272,6 +275,85 @@ def main():
     if problems:
         raise SystemExit("PROBLEMS:\n  " + "\n  ".join(problems))
     print("\nLINUX ALL OK")
+
+
+DOWNLOADS = ["https://speed.cloudflare.com/__down?bytes=8000000", "https://proof.ovh.net/files/10Mb.dat"]
+
+
+def tun_e2e(entry):
+    """Like the phone: the engine reads a TUN; the "apps" live in a network
+    namespace whose only route is that TUN. Checked after the first start,
+    after every switch (new TUN first, then the engine moves over, as
+    Android's establish() does) and after stop/start."""
+    out = []
+    path = tempfile.mktemp(suffix=".json")
+    with open(path, "w") as f:
+        json.dump(entry, f)
+    sh("sudo ip netns add pvcli && sudo ip netns exec pvcli ip link set lo up && sudo mkdir -p /etc/netns/pvcli "
+       "&& printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' | sudo tee /etc/netns/pvcli/resolv.conf")
+    url = next((u for u in DOWNLOADS if sh("curl -s -o /dev/null -w '%%{http_code}' --max-time 20 '%s'" % u,
+                                          check=False).strip() == "200"), None)
+    print("download test:", url)
+    eng = subprocess.Popen(["sudo", "/tmp/pvtuntest", "-entry", path, "-user", USER, "-pass", PASS],
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+
+    def cmd(c):
+        eng.stdin.write(c + "\n")
+        eng.stdin.flush()
+        line = eng.stdout.readline().strip()
+        print("  engine:", c, "->", line)
+        return line
+
+    def use(dev, kind):
+        if not cmd("open " + dev).startswith("ok"):
+            return False
+        addr = pvcreds.awg_address(USER) + "/32" if kind == "amneziawg" else "172.19.0.1/30"
+        sh("sudo ip link set %s netns pvcli && sudo ip netns exec pvcli ip addr add %s dev %s && "
+           "sudo ip netns exec pvcli ip link set %s mtu %d up && "
+           "sudo ip netns exec pvcli ip route replace default dev %s"
+           % (dev, addr, dev, dev, 1280 if kind == "amneziawg" else 1500, dev))
+        return cmd("start " + kind).startswith("ok")
+
+    def traffic(label):
+        ns = "sudo ip netns exec pvcli "
+        dns = sum(1 for _ in range(5) if sh(ns + "dig +short +time=4 +tries=1 @1.1.1.1 example.com",
+                                            check=False).strip())
+        got = ""
+        if url:
+            got = sh(ns + "curl -s -o /dev/null -w '%%{size_download}' --max-time 40 '%s'" % url,
+                     check=False, timeout=60).strip()
+        health = cmd("check")
+        ok = dns >= 4 and (not url or got.isdigit() and int(got) >= 5000000)
+        print("  %s: dns %d/5, download %s bytes, check %s" % (label, dns, got or "-", health))
+        if not ok:
+            out.append("TUN %s: dns %d/5, download %s bytes (engine check %s)" % (label, dns, got or "-", health))
+
+    kinds = [p_["type"] for p_ in entry["protocols"] if p_["type"] != "vless-dns"]
+    n = 0
+    try:
+        if use("pv%d" % n, "pool"):
+            traffic("pool")
+        else:
+            out.append("TUN: pool did not start")
+        for kind in kinds + ["pool"]:
+            n += 1
+            bg = subprocess.Popen("sudo ip netns exec pvcli curl -s -o /dev/null --max-time 20 '%s'" % (url or
+                                  DOWNLOADS[0]), shell=True)        # a download running while switching
+            time.sleep(1)
+            if use("pv%d" % n, kind):
+                traffic("switched to " + kind)
+            else:
+                out.append("TUN: %s did not start" % kind)
+            bg.kill()
+        cmd("stop")
+        n += 1
+        if use("pv%d" % n, "pool"):
+            traffic("pool after stop/start")
+    finally:
+        eng.stdin.close()
+        eng.wait(timeout=30)
+        sh("sudo ip netns del pvcli", check=False)
+    return out
 
 
 def awg_client_test(entry):
