@@ -85,6 +85,15 @@ internal object BrandSession {
     }
 
     /** Package names kept outside the tunnel. Stored where the engine reads them. */
+    internal const val SHARE_PORT = 8080
+
+    /** Hotspot sharing (a proxy for devices on this phone's hotspot). */
+    internal fun shareEnabled(prefs: SharedPreferences) = prefs.getBoolean("pv_share", false)
+
+    internal fun setShareEnabled(prefs: SharedPreferences, on: Boolean) {
+        prefs.edit().putBoolean("pv_share", on).apply()
+    }
+
     internal fun excludedApps(prefs: SharedPreferences): Set<String> =
         prefs.getStringSet(OscPrefKey.ROUTE_SELECTED_APPS.name, null) ?: emptySet()
 

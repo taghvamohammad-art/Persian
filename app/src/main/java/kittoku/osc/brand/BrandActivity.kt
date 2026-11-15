@@ -105,6 +105,9 @@ class BrandActivity : AppCompatActivity() {
         binding.refreshButton.setOnClickListener { refreshStatus(force = true) }
         binding.logoutButton.setOnClickListener { onLogoutClicked() }
         binding.updateButton.setOnClickListener { onUpdateClicked() }
+        binding.shareButton.setOnClickListener {
+            startActivity(Intent(this, ShareActivity::class.java))
+        }
         binding.excludedButton.setOnClickListener {
             startActivity(Intent(this, ExcludedAppsActivity::class.java))
         }
@@ -166,6 +169,8 @@ class BrandActivity : AppCompatActivity() {
             installAfterPermission = false
             updateFile?.let { startInstall(it) }
         }
+        binding.shareButton.setText(if (BrandSession.shareEnabled(prefs)) R.string.brand_share_button_on
+                                     else R.string.brand_share_button)
         val n = BrandSession.excludedApps(prefs).size
         binding.excludedButton.text = if (n == 0) getString(R.string.brand_excluded_button)
             else getString(R.string.brand_excluded_button_count, Fa.digits(n.toString()))

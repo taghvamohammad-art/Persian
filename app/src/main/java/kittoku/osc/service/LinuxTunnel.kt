@@ -116,7 +116,8 @@ internal class LinuxTunnel(
     private fun plan(all: List<Choice>): List<Choice> {
         val members = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
-        val awg = all.firstOrNull { it.kind == "amneziawg" }
+        // hotspot sharing needs the Xray tunnel (its proxy goes through it)
+        val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
         val out = mutableListOf<Choice>()
         if (pool != null && (awg == null || pool.ms <= awg.ms * 3 / 2)) {
             out += pool
@@ -202,6 +203,7 @@ internal class LinuxTunnel(
 
         startTrafficCounter()
         startWatchdog()
+        startShare()
         if (networkWatcher == null) {
             networkWatcher = UnderlyingNetworkWatcher(
                 service.getSystemService(ConnectivityManager::class.java)
@@ -267,7 +269,17 @@ internal class LinuxTunnel(
         }
     }
 
+    /** The hotspot proxy, when the user turned sharing on (BrandSession.shareEnabled). */
+    internal fun startShare() {
+        if (!BrandSession.shareEnabled(prefs)) return
+        val cm = service.getSystemService(android.net.ConnectivityManager::class.java)
+        val uplink = runCatching { cm.getLinkProperties(cm.activeNetwork)?.interfaceName }.getOrNull() ?: ""
+        runCatching { Pvcore.startShare(BrandSession.SHARE_PORT.toLong(), uplink) }
+            .onFailure { service.logWriter?.report("share: ${it.message}") }
+    }
+
     private fun stopEngine() {
+        runCatching { Pvcore.stopShare() }
         watchdog?.cancel()
         watchdog = null
         trafficJob?.cancel()
