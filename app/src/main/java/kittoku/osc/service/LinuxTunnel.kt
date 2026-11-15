@@ -270,7 +270,7 @@ internal class LinuxTunnel(
     }
 
     /** The hotspot proxy, when the user turned sharing on (BrandSession.shareEnabled). */
-    internal fun startShare() {
+    internal suspend fun startShare() {
         if (!BrandSession.shareEnabled(prefs)) return
         val cm = service.getSystemService(android.net.ConnectivityManager::class.java)
         val uplink = runCatching { cm.getLinkProperties(cm.activeNetwork)?.interfaceName }.getOrNull() ?: ""
