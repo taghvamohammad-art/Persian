@@ -94,17 +94,22 @@ class ShareActivity : AppCompatActivity() {
         if (kind.isEmpty() || kind == "amneziawg") return
         val cm = getSystemService(android.net.ConnectivityManager::class.java)
         val uplink = runCatching { cm.getLinkProperties(cm.activeNetwork)?.interfaceName }.getOrNull() ?: ""
+        BrandSession.updateShareNets(this)
         runCatching { Pvcore.startShare(BrandSession.SHARE_PORT.toLong(), uplink) }
     }
 
     private fun render() {
         val on = BrandSession.shareEnabled(prefs)
         val kind = runCatching { Pvcore.running() }.getOrDefault("")
+        val vpnUp = kittoku.osc.preference.accessor.getStringPrefValue(
+            kittoku.osc.preference.OscPrefKey.HOME_STATUS, prefs).isNotEmpty()
+        if (on && kind.isNotEmpty()) BrandSession.updateShareNets(this)
         val addrs = runCatching { Pvcore.shareAddresses() }.getOrDefault("").trim()
         binding.shareAddressRow.visibility = View.GONE
         binding.shareStatus.setText(
             when {
                 !on -> R.string.brand_share_status_off
+                kind.isEmpty() && vpnUp -> R.string.brand_share_status_not_this_server
                 kind.isEmpty() -> R.string.brand_share_status_no_vpn
                 kind == "amneziawg" -> R.string.brand_share_status_reconnect
                 addrs.isEmpty() -> R.string.brand_share_status_no_hotspot

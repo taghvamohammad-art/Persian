@@ -152,8 +152,19 @@ func TestShareProxy(t *testing.T) {
 		t.Fatalf("SOCKS tunnel: %q", rest)
 	}
 
-	// strangers (not on the hotspot) are refused
+	// networks given by the app (Android 11+) are listed and allowed
+	SetShareNets("192.168.77.1/24\n10.0.0.5/8\n8.8.8.8/24 garbage")
+	if got := ShareAddresses(); !strings.Contains(got, fmt.Sprintf("192.168.77.1:%d", port)) ||
+		!strings.Contains(got, "10.0.0.5:") || strings.Contains(got, "8.8.8.8") {
+		t.Fatalf("addresses: %q", got)
+	}
 	shareAnyone = false
+	if !shareAllowed(&net.TCPAddr{IP: net.ParseIP("192.168.77.20")}) || shareAllowed(&net.TCPAddr{IP: net.ParseIP("192.168.78.20")}) {
+		t.Fatal("hotspot client check")
+	}
+	SetShareNets("")
+
+	// strangers (not on the hotspot) are refused
 	if r, err := client.Get(target); err == nil && r.StatusCode == 200 {
 		t.Fatal("a client from outside the hotspot got through")
 	}

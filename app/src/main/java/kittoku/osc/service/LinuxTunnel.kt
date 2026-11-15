@@ -237,6 +237,8 @@ internal class LinuxTunnel(
             var failures = 0
             while (isActive && !closed) {
                 delay(CHECK_EVERY_MS)
+                // a hotspot turned on (or off) after connecting
+                if (BrandSession.shareEnabled(prefs)) BrandSession.updateShareNets(service)
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
                 failures = if (ms < 0) failures + 1 else 0
                 if (failures >= CHECK_FAILURES) {
@@ -274,6 +276,7 @@ internal class LinuxTunnel(
         if (!BrandSession.shareEnabled(prefs)) return
         val cm = service.getSystemService(android.net.ConnectivityManager::class.java)
         val uplink = runCatching { cm.getLinkProperties(cm.activeNetwork)?.interfaceName }.getOrNull() ?: ""
+        BrandSession.updateShareNets(service)
         runCatching { Pvcore.startShare(BrandSession.SHARE_PORT.toLong(), uplink) }
             .onFailure { service.logWriter?.report("share: ${it.message}") }
     }

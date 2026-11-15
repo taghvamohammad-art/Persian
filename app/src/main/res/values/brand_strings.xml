@@ -66,7 +66,8 @@
     <string name="brand_share_title">اشتراک VPN با هات‌اسپات</string>
     <string name="brand_share_switch">اشتراک VPN برای دستگاه‌های وصل به هات‌اسپات این گوشی</string>
     <string name="brand_share_status_off">اشتراک خاموش است.</string>
-    <string name="brand_share_status_no_vpn">اشتراک روشن است؛ وقتی VPN وصل شود فعال می‌شود.</string>
+    <string name="brand_share_status_no_vpn">اشتراک روشن است؛ وقتی VPN وصل شود فعال می‌شود. (اول VPN را از صفحه‌ی اصلی وصل کنید.)</string>
+    <string name="brand_share_status_not_this_server">VPN الان از مسیر پشتیبان (SSTP) وصل است و اشتراک با این مسیر کار نمی‌کند. VPN را یک بار قطع و دوباره وصل کنید.</string>
     <string name="brand_share_status_reconnect">برای فعال شدن اشتراک، یک بار VPN را قطع و دوباره وصل کنید.</string>
     <string name="brand_share_status_no_hotspot">اشتراک فعال است، ولی هات‌اسپات گوشی روشن نیست. هات‌اسپات (نقطه‌ی اتصال) را از تنظیمات گوشی روشن کنید.</string>
     <string name="brand_share_status_ready">اشتراک فعال است. در دستگاه دیگر این را به‌عنوان پروکسی وارد کنید:</string>

@@ -30,7 +30,24 @@ var (
 	shareLn     net.Listener
 	shareUplink string
 	sharePort   int
+	shareGiven  []*net.IPNet // from the app (Android 11+ hides interfaces from Go)
 )
+
+// SetShareNets: the phone's hotspot / tethering networks as the app sees
+// them, one "ip/prefix" per line. Android 11+ does not let Go list network
+// interfaces, so the app passes them in (and again when they change).
+func SetShareNets(spec string) {
+	var nets []*net.IPNet
+	for _, l := range strings.Fields(spec) {
+		if ip, n, err := net.ParseCIDR(l); err == nil && ip.To4() != nil && ip.IsPrivate() {
+			n.IP = ip
+			nets = append(nets, n)
+		}
+	}
+	shareMu.Lock()
+	shareGiven = nets
+	shareMu.Unlock()
+}
 
 // StartShare opens the proxy on port (all local addresses; access checked
 // per connection). uplink: the interface the phone reaches the internet
@@ -93,11 +110,13 @@ func ShareAddresses() string {
 // localNets: private IPv4 networks of the phone's interfaces that are not
 // the uplink, loopback or a tunnel: the hotspot / USB / Bluetooth tethering.
 func localNets(uplink string) []*net.IPNet {
+	shareMu.Lock()
+	out := append([]*net.IPNet(nil), shareGiven...)
+	shareMu.Unlock()
 	ifs, err := net.Interfaces()
 	if err != nil {
-		return nil
+		return out
 	}
-	var out []*net.IPNet
 	for _, i := range ifs {
 		name := strings.ToLower(i.Name)
 		if i.Flags&net.FlagUp == 0 || i.Flags&net.FlagLoopback != 0 || i.Name == uplink ||
@@ -110,7 +129,7 @@ func localNets(uplink string) []*net.IPNet {
 			continue
 		}
 		for _, a := range addrs {
-			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && n.IP.IsPrivate() {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && n.IP.IsPrivate() && !hasNet(out, n) {
 				out = append(out, n)
 			}
 		}
@@ -119,6 +138,15 @@ func localNets(uplink string) []*net.IPNet {
 }
 
 var shareAnyone = false // tests: allow loopback clients
+
+func hasNet(list []*net.IPNet, n *net.IPNet) bool {
+	for _, x := range list {
+		if x.IP.Equal(n.IP) {
+			return true
+		}
+	}
+	return false
+}
 
 func shareAllowed(remote net.Addr) bool {
 	ta, ok := remote.(*net.TCPAddr)

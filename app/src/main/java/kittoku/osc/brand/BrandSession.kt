@@ -87,6 +87,34 @@ internal object BrandSession {
     /** Package names kept outside the tunnel. Stored where the engine reads them. */
     internal const val SHARE_PORT = 8080
 
+    /**
+     * Hand the engine this phone's hotspot / tethering networks ("ip/prefix"
+     * lines): private IPv4 addresses on interfaces other than the internet
+     * uplink, mobile data and tunnels. Android 11+ hides them from Go.
+     */
+    internal fun updateShareNets(context: android.content.Context) {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val uplink = runCatching { cm.getLinkProperties(cm.activeNetwork)?.interfaceName }.getOrNull() ?: ""
+        val lines = mutableListOf<String>()
+        runCatching {
+            for (ni in java.net.NetworkInterface.getNetworkInterfaces().toList()) {
+                val name = ni.name.lowercase()
+                if (!ni.isUp || ni.isLoopback || ni.name == uplink ||
+                    listOf("tun", "rmnet", "ccmni", "dummy", "p2p", "ppp").any { name.startsWith(it) }) continue
+                for (ia in ni.interfaceAddresses) {
+                    val a = ia.address
+                    if (a is java.net.Inet4Address && a.isSiteLocalAddress) {
+                        lines += "${a.hostAddress}/${ia.networkPrefixLength}"
+                    }
+                }
+            }
+        }
+        runCatching {
+            ir.persianvpn.pvcore.Pvcore.setShareNets(lines.joinToString("\n"))
+            ir.persianvpn.pvcore.Pvcore.setShareUplink(uplink)
+        }
+    }
+
     /** Hotspot sharing (a proxy for devices on this phone's hotspot). */
     internal fun shareEnabled(prefs: SharedPreferences) = prefs.getBoolean("pv_share", false)
 
