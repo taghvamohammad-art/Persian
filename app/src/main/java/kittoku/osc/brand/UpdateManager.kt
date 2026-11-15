@@ -170,6 +170,23 @@ internal object UpdateManager {
         return false
     }
 
+    @Volatile private var installedSha: Pair<Long, String>? = null
+
+    /**
+     * What this phone will actually download: the patch from the installed
+     * APK when the config has one, else the whole APK. Hashes the installed
+     * APK (cached), so call it off the main thread.
+     */
+    internal fun downloadSize(context: Context, update: AppUpdate): Long {
+        if (update.patches.isEmpty()) return update.size
+        val installed = File(context.applicationInfo.sourceDir)
+        val mine = installedSha?.takeIf { it.first == installed.lastModified() }?.second
+            ?: try { sha256File(installed) } catch (e: IOException) { return update.size }
+                .also { installedSha = installed.lastModified() to it }
+        return update.patches.firstOrNull { it.fromSha256.equals(mine, ignoreCase = true) && it.size > 0 }?.size
+            ?: update.size
+    }
+
     private fun sha256File(f: File): String {
         val md = MessageDigest.getInstance("SHA-256")
         f.inputStream().use { input ->

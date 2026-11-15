@@ -437,11 +437,24 @@ class BrandActivity : AppCompatActivity() {
         binding.updateCard.visibility = View.VISIBLE
         binding.updateTitle.text = getString(R.string.brand_update_title,
             Fa.digits(upd.versionName.ifBlank { upd.versionCode.toString() }))
-        val size = getString(R.string.brand_update_size,
-            Fa.digits(String.format(java.util.Locale.US, "%.1f", upd.size / 1_048_576.0)))
         val notes = if (UpdateManager.isBeta(upd)) getString(R.string.brand_update_beta) + "\n" + upd.notes
                     else upd.notes
-        binding.updateNotes.text = if (notes.isBlank()) size else "${notes.trim()}\n$size"
+        fun show(bytes: Long) {
+            val size = getString(R.string.brand_update_size,
+                Fa.digits(String.format(java.util.Locale.US, "%.1f", bytes / 1_048_576.0)))
+            binding.updateNotes.text = if (notes.isBlank()) size else "${notes.trim()}\n$size"
+        }
+        show(upd.size)
+        if (upd.patches.isNotEmpty()) {
+            // the patch from this phone's version is usually much smaller
+            val app = applicationContext
+            io.execute {
+                val bytes = UpdateManager.downloadSize(app, upd)
+                runOnUiThread {
+                    if (UpdateManager.available(config, BrandSession.username(prefs)) == upd) show(bytes)
+                }
+            }
+        }
         if (!updateDownloading) {
             binding.updateButton.setText(
                 if (updateFile != null) R.string.brand_update_install else R.string.brand_update_button)
