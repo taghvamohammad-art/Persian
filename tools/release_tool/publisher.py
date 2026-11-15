@@ -154,13 +154,15 @@ def apk_history(ws):
 
 def make_patches(ws, build, log=print, only_current=False):
     """{from_sha256: patch bytes} from the kept older APKs to this build.
-    only_current: just from the public version (a test build: testers have
-    it, and the router's disk is spared)."""
+    only_current: a test build: just from the public version and from the
+    previous test build (what testers have; spares the router's disk)."""
     import apkdelta
     out = {}
     history = apk_history(ws)
     if only_current:
         history = [h for h in history if h[0] == -1]
+        if os.path.isfile(ws.path(BETA_APK)):
+            history.insert(0, (-2, ws.path(BETA_APK)))
     for _, path in history:
         try:
             with open(path, "rb") as f:

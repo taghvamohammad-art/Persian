@@ -93,6 +93,17 @@ class FakeGitHub:
         return pb.GitHubClient(token, repo, api="http://127.0.0.1:%d" % self.port)
 
 
+def apkdelta_apk(tag):
+    """A small valid APK-like zip with one changing entry."""
+    import io
+    import zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("lib/arm64-v8a/libgojni.so", b"\0" * 200_000)
+        z.writestr("classes.dex", tag * 1000)
+    return b.getvalue()
+
+
 class ReleaseFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -246,6 +257,16 @@ class ReleaseFlow(unittest.TestCase):
         finally:
             pb.RouterClient._call = real
         self.assertEqual(sent, [len(beta_apk)])           # the public APK was not sent again
+
+    def test_next_test_build_patches_from_the_previous_one(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        first = apkdelta_apk(b"one")
+        pb.release(self.ws, pb.Build(first, 17, "b"), 17, "", "", log=q, testers=["mohammad"])
+        second = apkdelta_apk(b"two")
+        pb.release(self.ws, pb.Build(second, 18, "b"), 18, "", "", log=q, testers=["mohammad"])
+        froms = {p["from_sha256"] for p in self.served()["app_update_beta"]["patches"]}
+        self.assertIn(hashlib.sha256(first).hexdigest(), froms)       # testers on the last test build
 
     def test_windows_test_build(self):
         q = lambda *_: None
