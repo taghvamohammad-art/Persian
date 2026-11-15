@@ -72,29 +72,19 @@
     <string name="brand_share_status_ready">اشتراک فعال است. در دستگاه دیگر این را به‌عنوان پروکسی وارد کنید:</string>
     <string name="brand_share_copy">کپی</string>
     <string name="brand_share_copied">کپی شد</string>
-    <string name="brand_share_help">"<b>چطور استفاده کنم؟</b>
-
-<b>۱. روی همین گوشی:</b>
-• VPN را وصل کنید و اشتراک را در بالا روشن کنید.
-• هات‌اسپات (نقطه‌ی اتصال Wi-Fi) گوشی را از تنظیمات روشن کنید.
-• آدرس و پورتی که بالا نشان داده می‌شود را یادداشت کنید (مثلاً 192.168.43.1 و پورت 8080).
-
-<b>۲. روی دستگاه دیگر:</b> به هات‌اسپات این گوشی وصل شوید، سپس پروکسی را تنظیم کنید:
-
-<b>ویندوز ۱۰ و ۱۱:</b> تنظیمات ← Network &amp; Internet ← Proxy ← بخش Manual proxy setup ← Set up (یا Use a proxy server را روشن کنید) ← آدرس و پورت را وارد کنید ← Save.
-
-<b>اندروید:</b> تنظیمات ← Wi-Fi ← روی نام هات‌اسپات نگه دارید یا چرخ‌دنده را بزنید ← ویرایش / گزینه‌های پیشرفته ← پروکسی: دستی ← نام میزبان پروکسی = آدرس، پورت = پورت ← ذخیره.
-
-<b>آیفون و آیپد:</b> Settings ← Wi-Fi ← دکمه‌ی ⓘ کنار نام هات‌اسپات ← Configure Proxy ← Manual ← Server = آدرس، Port = پورت ← Save.
-
-<b>مک:</b> System Settings ← Wi-Fi ← Details کنار هات‌اسپات ← Proxies ← Web Proxy (HTTP) و Secure Web Proxy (HTTPS) را روشن کنید و آدرس و پورت را بدهید.
-
-<b>نکته‌ها:</b>
-• مرورگرها، تلگرام، اینستاگرام، یوتیوب و بیشتر برنامه‌ها از این پروکسی استفاده می‌کنند. بعضی بازی‌ها و تماس‌های صوتی و تصویری از پروکسی پشتیبانی نمی‌کنند.
-• در تلگرام دسکتاپ اگر وصل نشد: Settings ← Advanced ← Connection type ← Use custom proxy ← نوع SOCKS5 یا HTTP با همین آدرس و پورت.
-• مصرف دستگاه‌های وصل‌شده از حجم حساب همین گوشی کم می‌شود.
-• وقتی کارتان تمام شد، پروکسی را در دستگاه دیگر خاموش کنید (Off / None)؛ وگرنه بدون این گوشی اینترنت آن دستگاه وصل نمی‌شود.
-• اگر VPN گوشی قطع شود، دستگاه‌های وصل‌شده هم اینترنت ندارند (برای امنیت، بدون VPN چیزی رد نمی‌شود)."</string>
+    <string name="brand_share_before"><![CDATA[<b>روی همین گوشی:</b><br/>۱. VPN را وصل کنید و اشتراک را در بالا روشن کنید.<br/>۲. هات‌اسپات (نقطه‌ی اتصال) گوشی را روشن کنید.<br/>۳. دستگاه دیگر را به این هات‌اسپات وصل کنید و از راهنمای زیر، دستگاهش را انتخاب کنید.]]></string>
+    <string name="brand_share_tab_windows">ویندوز</string>
+    <string name="brand_share_tab_android">اندروید</string>
+    <string name="brand_share_tab_iphone">آیفون</string>
+    <string name="brand_share_tab_mac">مک</string>
+    <string name="brand_share_tab_telegram">تلگرام</string>
+    <string name="brand_share_any_address">آدرسی که بالا نشان داده می‌شود</string>
+    <string name="brand_share_help_windows"><![CDATA[۱. <b>Settings</b> (تنظیمات) را باز کنید.<br/><br/>۲. <b>Network &amp; Internet</b> ← <b>Proxy</b>.<br/><br/>۳. در بخش <b>Manual proxy setup</b> دکمه‌ی <b>Set up</b> را بزنید.<br/><br/>۴. <b>Use a proxy server</b> را روشن کنید.<br/><br/>۵. <b>Proxy IP address:</b> <font color="#2EE6C5">%1$s</font><br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>Port:</b> <font color="#2EE6C5">%2$s</font><br/><br/>۶. <b>Save</b> را بزنید.<br/><br/><b>بعد از تمام شدن کار:</b> همین‌جا <b>Use a proxy server</b> را خاموش کنید.]]></string>
+    <string name="brand_share_help_android"><![CDATA[۱. <b>تنظیمات</b> ← <b>Wi-Fi</b>.<br/><br/>۲. روی نام هات‌اسپات (که به آن وصل هستید) بزنید یا چرخ‌دنده‌ی کنارش را بزنید.<br/><br/>۳. <b>ویرایش</b> یا <b>گزینه‌های پیشرفته</b> را باز کنید.<br/><br/>۴. <b>پروکسی</b> را روی <b>دستی</b> بگذارید.<br/><br/>۵. <b>نام میزبان پروکسی:</b> <font color="#2EE6C5">%1$s</font><br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>درگاه پروکسی:</b> <font color="#2EE6C5">%2$s</font><br/><br/>۶. <b>ذخیره</b> را بزنید.<br/><br/><b>بعد از تمام شدن کار:</b> پروکسی را دوباره روی <b>هیچ‌کدام</b> بگذارید.]]></string>
+    <string name="brand_share_help_iphone"><![CDATA[۱. <b>Settings</b> ← <b>Wi-Fi</b>.<br/><br/>۲. دکمه‌ی <b>ⓘ</b> کنار نام هات‌اسپات را بزنید.<br/><br/>۳. پایین صفحه <b>Configure Proxy</b> ← <b>Manual</b>.<br/><br/>۴. <b>Server:</b> <font color="#2EE6C5">%1$s</font><br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>Port:</b> <font color="#2EE6C5">%2$s</font><br/><br/>۵. <b>Save</b> را بزنید.<br/><br/><b>بعد از تمام شدن کار:</b> <b>Configure Proxy</b> را روی <b>Off</b> بگذارید.]]></string>
+    <string name="brand_share_help_mac"><![CDATA[۱. <b>System Settings</b> ← <b>Wi-Fi</b>.<br/><br/>۲. کنار نام هات‌اسپات <b>Details</b> را بزنید ← <b>Proxies</b>.<br/><br/>۳. <b>Web proxy (HTTP)</b> را روشن کنید:<br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>Server:</b> <font color="#2EE6C5">%1$s</font> &nbsp; <b>Port:</b> <font color="#2EE6C5">%2$s</font><br/><br/>۴. <b>Secure web proxy (HTTPS)</b> را هم با همین آدرس و پورت روشن کنید.<br/><br/>۵. <b>OK</b> را بزنید.<br/><br/><b>بعد از تمام شدن کار:</b> هر دو را خاموش کنید.]]></string>
+    <string name="brand_share_help_telegram"><![CDATA[اگر تلگرام دسکتاپ با تنظیم ویندوز یا مک وصل نشد:<br/><br/>۱. <b>Settings</b> ← <b>Advanced</b> ← <b>Connection type</b>.<br/><br/>۲. <b>Use custom proxy</b> ← <b>Add proxy</b>.<br/><br/>۳. نوع <b>SOCKS5</b> را انتخاب کنید.<br/><br/>۴. <b>Hostname:</b> <font color="#2EE6C5">%1$s</font><br/>&nbsp;&nbsp;&nbsp;&nbsp;<b>Port:</b> <font color="#2EE6C5">%2$s</font><br/>&nbsp;&nbsp;&nbsp;&nbsp;نام کاربری و رمز را خالی بگذارید.<br/><br/>۵. <b>Save</b> را بزنید.]]></string>
+    <string name="brand_share_notes"><![CDATA[<b>خوب است بدانید:</b><br/>• مرورگرها و بیشتر برنامه‌ها کار می‌کنند؛ بعضی بازی‌ها و تماس‌های صوتی و تصویری از پروکسی پشتیبانی نمی‌کنند.<br/>• مصرف دستگاه‌های وصل‌شده از حجم حساب همین گوشی کم می‌شود.<br/>• اگر VPN این گوشی قطع شود، دستگاه‌های وصل‌شده هم اینترنت ندارند.]]></string>
     <string name="brand_excluded_button">برنامه‌های خارج از VPN</string>
     <string name="brand_excluded_button_count">برنامه‌های خارج از VPN (%1$s)</string>
     <string name="brand_excluded_help">برنامه‌هایی که انتخاب کنید (مثلاً همراه‌بانک) مستقیم و بدون VPN به اینترنت وصل می‌شوند. بقیه‌ی برنامه‌ها از VPN استفاده می‌کنند.</string>

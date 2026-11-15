@@ -91,13 +91,55 @@
             </com.google.android.material.card.MaterialCardView>
 
             <TextView
-                android:id="@+id/shareHelp"
+                android:id="@+id/shareBefore"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:lineSpacingExtra="4dp"
                 android:textColor="@color/brand_text_dim"
                 android:textSize="13sp" />
+
+            <com.google.android.material.tabs.TabLayout
+                android:id="@+id/shareTabs"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@android:color/transparent"
+                app:tabGravity="fill"
+                app:tabIndicatorColor="@color/brand_accent"
+                app:tabMode="scrollable"
+                app:tabSelectedTextColor="@color/brand_accent"
+                app:tabTextColor="@color/brand_text_dim" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                app:cardBackgroundColor="@color/brand_glass"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/brand_glass_stroke"
+                app:strokeWidth="1dp">
+
+                <TextView
+                    android:id="@+id/shareSteps"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="3dp"
+                    android:padding="16dp"
+                    android:textColor="@color/brand_text"
+                    android:textIsSelectable="true"
+                    android:textSize="14sp" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:id="@+id/shareNotes"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:lineSpacingExtra="4dp"
+                android:textColor="@color/brand_text_faint"
+                android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>
