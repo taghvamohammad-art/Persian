@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -50,7 +51,7 @@ func fakeSocks(t *testing.T) int {
 				if host == "example.test" {
 					host = "127.0.0.1"
 				}
-				up, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, binary.BigEndian.Uint16(p[:])))
+				up, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(p[:])))))
 				if err != nil {
 					c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 					c.Close()
