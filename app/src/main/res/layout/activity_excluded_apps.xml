@@ -36,6 +36,19 @@
         android:inputType="text"
         android:maxLines="1" />
 
+    <CheckBox
+        android:id="@+id/excludedAll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        android:buttonTint="@color/brand_accent"
+        android:text="@string/brand_excluded_all"
+        android:textColor="@color/brand_text"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
     <ProgressBar
         android:id="@+id/excludedProgress"
         android:layout_width="wrap_content"

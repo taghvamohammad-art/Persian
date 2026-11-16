@@ -77,6 +77,15 @@ class ExcludedAppsActivity : AppCompatActivity() {
             if (!selected.remove(pkg)) selected.add(pkg)
             BrandSession.setExcludedApps(prefs, selected)
             adapter.notifyDataSetChanged()
+            syncAll()
+        }
+
+        // "select all": every app in the list (only the ones found while searching)
+        binding.excludedAll.setOnClickListener {
+            val pkgs = shown.map { it.packageName }
+            if (binding.excludedAll.isChecked) selected.addAll(pkgs) else selected.removeAll(pkgs.toSet())
+            BrandSession.setExcludedApps(prefs, selected)
+            adapter.notifyDataSetChanged()
         }
 
         binding.excludedSearch.addTextChangedListener(object : TextWatcher {
@@ -102,6 +111,7 @@ class ExcludedAppsActivity : AppCompatActivity() {
                 allApps = apps
                 binding.excludedProgress.visibility = View.GONE
                 binding.excludedList.visibility = View.VISIBLE
+                binding.excludedAll.visibility = View.VISIBLE
                 applyFilter()
             }
         }
@@ -113,6 +123,12 @@ class ExcludedAppsActivity : AppCompatActivity() {
             it.label.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true)
         }
         adapter.notifyDataSetChanged()
+        binding.excludedAll.setText(if (q.isEmpty()) R.string.brand_excluded_all else R.string.brand_excluded_all_found)
+        syncAll()
+    }
+
+    private fun syncAll() {
+        binding.excludedAll.isChecked = shown.isNotEmpty() && shown.all { it.packageName in selected }
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {

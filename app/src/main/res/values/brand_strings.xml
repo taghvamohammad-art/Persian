@@ -61,6 +61,8 @@
     <string name="brand_import_reconnect">برای استفاده از سرور جدید، یک بار قطع و دوباره وصل شوید.</string>
 
     <string name="brand_excluded_title">برنامه‌های خارج از VPN</string>
+    <string name="brand_excluded_all">انتخاب همه</string>
+    <string name="brand_excluded_all_found">انتخاب همه‌ی پیداشده‌ها</string>
     <string name="brand_share_button">📶 اشتراک VPN با هات‌اسپات</string>
     <string name="brand_share_button_on">📶 اشتراک با هات‌اسپات: روشن</string>
     <string name="brand_share_title">اشتراک VPN با هات‌اسپات</string>
