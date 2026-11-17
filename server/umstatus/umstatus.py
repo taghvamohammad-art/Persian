@@ -42,6 +42,12 @@ DEFAULTS = {
     "router_timeout": 6,
     "session_timeout": 30,
     "cache_seconds": 60,
+    # an answer older than cache_seconds is still given at once (and renewed
+    # in the background) for up to this long: the app never waits for the
+    # slow router queries after the first time
+    "stale_seconds": 3600,
+    # profiles, their limits and the router's clock change rarely
+    "profile_cache_seconds": 600,
     "app_config_file": "/app/app_config.signed.json",
     "app_apk_file": "/app/app.apk",
     # public half of the owner's config-signing key; enables /v1/publish
@@ -264,12 +270,14 @@ def profile_info(router, prof_name, cache):
 RUNNING_STATES = ("running-active", "running")
 
 
-def build_status(router, username, user_id, now=None):
-    """Everything the app shows, for one user. Password is NOT checked here."""
+def build_status(router, username, user_id, now=None, pcache=None):
+    """Everything the app shows, for one user. Password is NOT checked here.
+    pcache: profile details kept between calls (see Service)."""
     if now is None:
         now = parse_clock(router.clock())
     profiles = router.user_profiles(username)
-    pcache = {}
+    if pcache is None:
+        pcache = {}
 
     running = [p for p in profiles if p.get("state") in RUNNING_STATES]
     waiting = [p for p in profiles if p.get("state") == "waiting"]
@@ -684,7 +692,48 @@ class Service:
                                    cfg["fail_window_seconds"])
         self.cache = {}
         self.cache_lock = threading.Lock()
+        self.refreshing = set()
         self.publisher = Publisher(cfg)
+        self.pcache, self.pcache_at = {}, 0.0
+        self.clock_offset, self.clock_at = None, 0.0
+
+    def _router_now(self):
+        """The router's time without asking it every time (offset kept)."""
+        m = time.monotonic()
+        if self.clock_offset is None or m - self.clock_at > self.cfg.get("profile_cache_seconds", 600):
+            self.clock_offset = parse_clock(self.router.clock()) - datetime.now()
+            self.clock_at = m
+        return datetime.now() + self.clock_offset
+
+    def _profiles(self):
+        m = time.monotonic()
+        if m - self.pcache_at > self.cfg.get("profile_cache_seconds", 600):
+            self.pcache, self.pcache_at = {}, m
+        return self.pcache
+
+    def _build(self, username, rec):
+        body = build_status(self.router, username, rec.get(".id", username),
+                            now=self._router_now(), pcache=self._profiles())
+        body["disabled"] = is_true(rec.get("disabled"))
+        with self.cache_lock:
+            self.cache[username] = (time.monotonic(), body)
+        return body
+
+    def _refresh_later(self, username, rec):
+        with self.cache_lock:
+            if username in self.refreshing:
+                return
+            self.refreshing.add(username)
+
+        def run():
+            try:
+                self._build(username, rec)
+            except Exception as e:      # the next request tries again
+                log("background refresh: %s: %s" % (type(e).__name__, e))
+            finally:
+                with self.cache_lock:
+                    self.refreshing.discard(username)
+        threading.Thread(target=run, daemon=True).start()
 
     def handle(self, ip, username, password):
         """Returns (http_status, body_dict)."""
@@ -711,13 +760,15 @@ class Service:
             now_m = time.monotonic()
             with self.cache_lock:
                 hit = self.cache.get(username)
-            if hit and now_m - hit[0] < self.cfg["cache_seconds"]:
+            age = now_m - hit[0] if hit else None
+            if hit and age < self.cfg["cache_seconds"]:
                 body = hit[1]
+            elif hit and age < self.cfg.get("stale_seconds", 0):
+                # answer at once with the last figures, renew them meanwhile
+                body = dict(hit[1], disabled=is_true(rec.get("disabled")))
+                self._refresh_later(username, rec)
             else:
-                body = build_status(self.router, username, rec.get(".id", username))
-                body["disabled"] = is_true(rec.get("disabled"))
-                with self.cache_lock:
-                    self.cache[username] = (now_m, body)
+                body = self._build(username, rec)
             return 200, body
         except RouterError as e:
             log("router error: %s" % e)

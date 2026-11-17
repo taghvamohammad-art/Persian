@@ -195,6 +195,26 @@ class Auth(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertFalse(body["disabled"])
 
+    def test_fast_repeat_answers(self):
+        import time as _t
+        r = FakeRouter()
+        cfg = dict(CFG, cache_seconds=0, stale_seconds=3600)
+        svc = u.Service(r, cfg)
+        code, first = svc.handle("1.1.1.1", "25g8282", "ab12cd")
+        self.assertEqual(code, 200)
+        r.calls.clear()
+        code, again = svc.handle("1.1.1.1", "25g8282", "ab12cd")
+        self.assertEqual(code, 200)
+        self.assertEqual(again["current"], first["current"])          # answered from the last figures
+        # only the password check ran in this request; the rest renews in the background
+        deadline = _t.time() + 5
+        while svc.refreshing and _t.time() < deadline:
+            _t.sleep(0.01)
+        self.assertNotIn("/user-manager/profile", r.calls)           # profiles kept between calls
+        self.assertNotIn("/system/clock", r.calls)                   # clock offset kept
+        # a wrong password never gets the cached figures
+        self.assertEqual(svc.handle("1.1.1.1", "25g8282", "nope")[0], 401)
+
     def test_password_via_print(self):
         code, _ = u.Service(FakeRouter("print"), CFG).handle("1.1.1.1", "25g8282", "ab12cd")
         self.assertEqual(code, 200)
