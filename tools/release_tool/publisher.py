@@ -14,6 +14,7 @@ import shutil
 import socket
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -521,7 +522,8 @@ ROUTER_ERRORS = {
 class RouterClient:
     """Talks to umstatus over HTTPS, trusting only the pinned certificate."""
 
-    def __init__(self, config, timeout=30):
+    def __init__(self, config, timeout=30, log=None):
+        self.log = log
         urls = config.get("config_urls") or config.get("status_urls") or []
         if not urls:
             raise ReleaseError("آدرس سرویس روتر در config.json نیست.")
@@ -586,7 +588,7 @@ class RouterClient:
     def publish(self, envelope, apk, progress=None, need=None):
         # ask first (signature, version, router set up) so a rejection is
         # reported clearly instead of cutting a half-sent upload
-        probe = self._call(envelope, b"", dry_run=True)
+        probe = self._probe(envelope)
         if need and need not in (probe.get("features") or []):
             ex = ReleaseError(ROUTER_ERRORS["old_umstatus"])
             ex.code = "old_umstatus"
@@ -596,6 +598,23 @@ class RouterClient:
             have = set(probe.get("have") or [])
             apk = b"".join(p for p in apk.parts if hashlib.sha256(p).hexdigest() not in have)
         return self._call(envelope, apk, dry_run=False, progress=progress)
+
+    BUSY_WAIT = 10
+    BUSY_TRIES = 12
+
+    def _probe(self, envelope):
+        """The dry run; "busy" usually means an upload that was cut (lost
+        connection) still holds the router's lock until it times out (a
+        minute), so wait for it instead of failing."""
+        for i in range(self.BUSY_TRIES):
+            try:
+                return self._call(envelope, b"", dry_run=True)
+            except ReleaseError as e:
+                if getattr(e, "code", None) != "busy" or i == self.BUSY_TRIES - 1:
+                    raise
+                if self.log:
+                    self.log("روتر هنوز ارسال قطع‌شده‌ی قبلی را می‌بندد؛ %d ثانیه صبر…" % self.BUSY_WAIT)
+                time.sleep(self.BUSY_WAIT)
 
     def download(self, path, progress=None):
         """A file the router serves (/v1/app.apk ...), or None when it has none."""
@@ -811,7 +830,7 @@ def release(ws, build, version_code, version_name, notes,
         log("ارسال به روتر…")
         try:
             try:
-                body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
+                body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
             except ReleaseError as e:
                 ahead = router_ahead(e)
                 if not ahead:
@@ -819,7 +838,7 @@ def release(ws, build, version_code, version_name, notes,
                 log(AHEAD_MSG % (ahead, ahead + 1))
                 cfg, envelope = prepare_release(ws, build, version_code, version_name, notes, pub, patches,
                                                 testers, ahead + 1)
-                body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
+                body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg, patches), progress, need=_needs(cfg))
         except ReleaseError as e:
             if beta or not patches or getattr(e, "code", "") != "apk_size_mismatch":
                 raise
@@ -828,7 +847,7 @@ def release(ws, build, version_code, version_name, notes,
                 "این نسخه بدون وصله منتشر می‌شود.")
             patches = {}
             cfg, envelope = prepare_release(ws, build, version_code, version_name, notes, pub)
-            body = RouterClient(cfg).publish(envelope, body_for(cfg, patches), progress)
+            body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg, patches), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
     save_local(ws, cfg, envelope, build, patches, beta=beta)
@@ -883,7 +902,7 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
         log("ارسال به روتر %s…" % (cfg.get("config_urls") or ["?"])[0].split("/v1/")[0])
         try:
             try:
-                body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
+                body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
             except ReleaseError as e:
                 ahead = router_ahead(e)
                 if not ahead:
@@ -891,7 +910,7 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
                 log(AHEAD_MSG % (ahead, ahead + 1))
                 cfg, envelope = prepare_config_only(ws, pub, win=win, win_notes=win_notes,
                                                     win_testers=win_testers, min_version=ahead + 1)
-                body = RouterClient(cfg).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
+                body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg), progress, need=_needs(cfg))
         except ReleaseError as e:
             if not (cfg.get("app_update") or {}).get("patches") or \
                     getattr(e, "code", "") not in ("apk_size_mismatch", "apk_required"):
@@ -899,7 +918,7 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
             log("⚠ روتر وصله‌های به‌روزرسانی را نمی‌پذیرد یا ندارد؛ بدون وصله منتشر می‌شود.")
             cfg, envelope = prepare_config_only(ws, pub, with_patches=False, win=win, win_notes=win_notes,
                                                 win_testers=win_testers)
-            body = RouterClient(cfg).publish(envelope, body_for(cfg), progress)
+            body = RouterClient(cfg, log=log).publish(envelope, body_for(cfg), progress)
         log("✓ روتر نسخه‌ی %d را پذیرفت" % body["version"])
 
     if win is not None:

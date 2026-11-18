@@ -479,5 +479,40 @@ class SyncWorkspaceTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(d, "beta.apk")))   # wrong hash: not kept
         self.assertEqual(pb.sync_workspace(ws, log=lambda *_: None, client=c), [])
 
+
+class BusyRouterTests(unittest.TestCase):
+    """A cut upload keeps the router busy for a minute: wait instead of failing."""
+
+    def test_waits_for_busy(self):
+        c = pb.RouterClient({"status_urls": ["https://r.example:8443/v1/status"], "status_pins": []}, log=lambda *_: None)
+        c.BUSY_WAIT = 0
+        calls = []
+
+        def call(env, body, dry_run=False, progress=None):
+            calls.append(dry_run)
+            if len(calls) <= 2:
+                e = pb.ReleaseError(pb.ROUTER_ERRORS["busy"])
+                e.code = "busy"
+                raise e
+            return {"ok": True, "features": ["beta", "partial"], "have": []}
+        c._call = call
+        self.assertEqual(c.publish("env", b"x"), {"ok": True, "features": ["beta", "partial"], "have": []})
+        self.assertEqual(calls, [True, True, True, False])
+
+    def test_other_errors_not_retried(self):
+        c = pb.RouterClient({"status_urls": ["https://r.example:8443/v1/status"], "status_pins": []})
+        c.BUSY_WAIT = 0
+        n = []
+
+        def call(env, body, dry_run=False, progress=None):
+            n.append(1)
+            e = pb.ReleaseError("x")
+            e.code = "bad_signature"
+            raise e
+        c._call = call
+        with self.assertRaises(pb.ReleaseError):
+            c.publish("env", b"")
+        self.assertEqual(len(n), 1)
+
 if __name__ == "__main__":
     unittest.main()
