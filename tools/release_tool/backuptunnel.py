@@ -60,18 +60,20 @@ def _lines(out, kind):
 
 def read_router(r):
     """Raw facts: GRE interfaces, addresses, default routes, PPP profiles."""
+    # whole-item "get" arrays: a property that is not set (check-gateway,
+    # comment ...) is just missing there, while "get $i prop" would stop the script
     out = r.run(
-        ':foreach i in=[/interface gre find] do={:put ("g|" . [/interface gre get $i name] . "|" . '
-        '[:tostr [/interface gre get $i remote-address]] . "|" . [:tostr [/interface gre get $i keepalive]] . "|" . '
-        '[:tostr [/interface gre get $i running]])}; '
-        ':foreach i in=[/ip address find] do={:put ("a|" . [/ip address get $i interface] . "|" . '
-        '[/ip address get $i address])}; '
-        ':foreach i in=[/ip route find where dst-address=0.0.0.0/0 and disabled=no] do={:put ("r|" . $i . "|" . '
-        '[:tostr [/ip route get $i gateway]] . "|" . [:tostr [/ip route get $i routing-table]] . "|" . '
-        '[:tostr [/ip route get $i distance]] . "|" . [:tostr [/ip route get $i check-gateway]] . "|" . '
-        '[:tostr [/ip route get $i comment]] . "|" . [:tostr [/ip route get $i active]])}; '
-        ':foreach i in=[/ppp profile find] do={:put ("p|" . [/ppp profile get $i name] . "|" . '
-        '[:tostr [/ppp profile get $i dns-server]])}')
+        ':foreach i in=[/interface gre find] do={:local g [/interface gre get $i]; '
+        ':put ("g|" . ($g->"name") . "|" . [:tostr ($g->"remote-address")] . "|" . [:tostr ($g->"keepalive")] . '
+        '"|" . [:tostr ($g->"running")])}; '
+        ':foreach i in=[/ip address find] do={:local a [/ip address get $i]; '
+        ':put ("a|" . ($a->"interface") . "|" . ($a->"address"))}; '
+        ':foreach i in=[/ip route find where dst-address=0.0.0.0/0] do={:local x [/ip route get $i]; '
+        ':if (($x->"disabled") != true) do={:put ("r|" . $i . "|" . [:tostr ($x->"gateway")] . "|" . '
+        '[:tostr ($x->"routing-table")] . "|" . [:tostr ($x->"distance")] . "|" . [:tostr ($x->"check-gateway")] . '
+        '"|" . [:tostr ($x->"comment")] . "|" . [:tostr ($x->"active")])}}; '
+        ':foreach i in=[/ppp profile find] do={:local p [/ppp profile get $i]; '
+        ':put ("p|" . ($p->"name") . "|" . [:tostr ($p->"dns-server")])}')
     gres = {}
     for name, remote, keepalive, running in _lines(out, "g"):
         gres[name] = {"remote": remote, "keepalive": keepalive, "running": running == "true", "nets": []}
@@ -334,11 +336,11 @@ def status(r):
     if not out["installed"]:
         return out
     res = r.run(':local i [/interface wireguard peers find where interface=%s]; :if ([:len $i] > 0) do={'
-                ':put ("h|" . [:tostr [/interface wireguard peers get ($i->0) last-handshake]] . "|" . '
-                '[/interface wireguard peers get ($i->0) rx] . "|" . [/interface wireguard peers get ($i->0) tx])}; '
-                ':foreach i in=[/ip route find where dst-address=0.0.0.0/0 and active] do={:put ("r|" . '
-                '[:tostr [/ip route get $i routing-table]] . "|" . [:tostr [/ip route get $i gateway]] . "|" . '
-                '[:tostr [/ip route get $i comment]])}' % q(WG))
+                ':local p [/interface wireguard peers get ($i->0)]; '
+                ':put ("h|" . [:tostr ($p->"last-handshake")] . "|" . [:tostr ($p->"rx")] . "|" . [:tostr ($p->"tx")])}; '
+                ':foreach i in=[/ip route find where dst-address=0.0.0.0/0 and active] do={:local x [/ip route get $i]; '
+                ':put ("r|" . [:tostr ($x->"routing-table")] . "|" . [:tostr ($x->"gateway")] . "|" . '
+                '[:tostr ($x->"comment")])}' % q(WG))
     for hs, rx, tx in _lines(res, "h"):
         import monitor
         out.update(handshake=hs, rx=monitor._size(rx or 0), tx=monitor._size(tx or 0))

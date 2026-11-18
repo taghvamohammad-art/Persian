@@ -322,7 +322,7 @@ def backup_tunnel_test(params, connect_linux, server_ip):
                 problems.append("backup tunnel: no ping through AmneziaWG")
             if st.get("using", {}).get("to-gre") != "AmneziaWG":
                 problems.append("backup tunnel: to-gre does not use the backup (%s)" % st.get("using"))
-            if not r.run(":put [/ip route get [find where gateway=10.99.0.2] check-gateway]").strip():
+            if not r.run(":put [:tostr ([/ip route get [find where gateway=10.99.0.2]]->\"check-gateway\")]").strip():
                 problems.append("backup tunnel: no health check on the GRE route")
             time.sleep(25)                      # a pv-agent round: the router's peer must stay
             if pub not in sh("sudo awg show awg0 peers", check=False):
@@ -330,7 +330,7 @@ def backup_tunnel_test(params, connect_linux, server_ip):
             bt.remove(r, log=print)
             left = sum(int(r.run(":put [:len [%s find where comment=%s]]" % (m, bt.TAG)).strip() or 0)
                        for m in ("/ip route", "/ip firewall nat", "/ip firewall mangle", "/ip address"))
-            if left or r.run(":put [/ip route get [find where gateway=10.99.0.2] check-gateway]").strip():
+            if left or r.run(":put [:tostr ([/ip route get [find where gateway=10.99.0.2]]->\"check-gateway\")]").strip():
                 problems.append("backup tunnel: remove() left %d items or the health check" % left)
         finally:
             relay.terminate()
