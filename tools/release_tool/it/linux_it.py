@@ -310,7 +310,7 @@ def backup_tunnel_test(params, connect_linux, server_ip):
             ok = False
             for _ in range(20):
                 time.sleep(3)
-                out = r.run("/ping 10.64.0.1 routing-table=to-gre count=3", check=False)
+                out = r.run("/ping 10.64.0.1 count=3 src-address=%s" % bt.TUN_ADDR, check=False)
                 print(out.strip().splitlines()[-2:])
                 if re.search(r"received=[123]", out):
                     ok = True
