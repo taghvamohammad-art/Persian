@@ -105,6 +105,16 @@ jobs:
           cd tools/admin_android
           flet build apk --yes --no-rich-output --build-number ${{ github.run_number }} --build-version 1.0.${{ github.run_number }} -v
 
+      - name: Check the files sent to routers and servers are in the app
+        run: |
+          set -e
+          app=tools/admin_android/build/python-app
+          ls "$app" | head -100
+          for f in umstatus.py pv_agent.py pvcreds.py awgrelay.py sign_config.py site/index.html BASE_ANDROID \
+                   admin_app.py libpvdiff-arm64.so; do
+            test -f "$app/$f" || { echo "::error::$f is missing from the app"; exit 1; }
+          done
+
       - name: Check the APK is its own app (not an update of the VPN app)
         run: |
           apk=$(ls tools/admin_android/build/apk/*.apk | head -1)
