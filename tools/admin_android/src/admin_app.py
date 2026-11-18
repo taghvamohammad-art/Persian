@@ -129,42 +129,104 @@ class Cancel(Exception):
     """A step was cancelled or failed (and already reported)."""
 
 
-# ====================================================================== small widgets
+# ====================================================================== look
+
+BRAND = "#0F766E"          # the teal of the icon
+BRAND_DARK = "#0B3B38"
+MINT = "#2DD4BF"
+ACCENT = "#F57C00"         # the ADMIN band of the icon
+BG = "#EEF3F2"
+LINE = "#DCE6E4"
+MUTED = "#5E716E"
+FIELD = "#F6F9F9"
+OK, BAD, WARN = "#16A34A", "#DC2626", "#D97706"
+CONSOLE = "#0F1F1E"
+BOLD = "VazirmatnBold"
+RADIUS = 14
+
+
+def rounded(r=RADIUS):
+    return ft.RoundedRectangleBorder(radius=r)
+
+
+def theme():
+    btn = ft.ButtonStyle(shape=rounded(12), padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                         text_style=ft.TextStyle(size=14))
+    return ft.Theme(
+        color_scheme_seed=BRAND, font_family="Vazirmatn", use_material3=True,
+        color_scheme=ft.ColorScheme(primary=BRAND, secondary=MINT, tertiary=ACCENT),
+        scaffold_bgcolor=BG,
+        card_theme=ft.CardTheme(color=ft.Colors.WHITE, elevation=0, shape=rounded(18), margin=0),
+        dialog_theme=ft.DialogTheme(bgcolor=ft.Colors.WHITE, shape=rounded(24),
+                                    inset_padding=ft.Padding.symmetric(horizontal=22, vertical=36)),
+        filled_button_theme=ft.FilledButtonTheme(style=btn),
+        outlined_button_theme=ft.OutlinedButtonTheme(style=btn),
+        navigation_bar_theme=ft.NavigationBarTheme(bgcolor=ft.Colors.WHITE, height=70, elevation=0,
+                                                   indicator_color=ft.Colors.with_opacity(0.14, BRAND)))
+
 
 def title(text):
-    return ft.Text(text, size=16, weight=ft.FontWeight.BOLD)
+    return ft.Text(text, size=15, font_family=BOLD, color=BRAND_DARK)
 
 
 def hint(text):
-    return ft.Text(text, size=12, color=ft.Colors.GREY_600)
+    return ft.Text(text, size=12, color=MUTED)
 
 
-def card(head, *controls):
-    return ft.Card(content=ft.Container(padding=ft.Padding.all(14),
-                                        content=ft.Column([title(head)] + list(controls), spacing=10)))
+def badge(icon, color=BRAND, size=36):
+    return ft.Container(width=size, height=size, border_radius=size / 2, alignment=ft.Alignment.CENTER,
+                        bgcolor=ft.Colors.with_opacity(0.12, color), content=ft.Icon(icon, size=size * 0.55,
+                                                                                    color=color))
+
+
+def chip(text, color=BRAND):
+    return ft.Container(padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=20,
+                        bgcolor=ft.Colors.with_opacity(0.10, color),
+                        content=ft.Text(text, size=12, color=color))
+
+
+def card(head, *controls, icon=ft.Icons.TUNE, color=BRAND):
+    return ft.Container(
+        bgcolor=ft.Colors.WHITE, border_radius=18, border=ft.Border.all(1, LINE),
+        padding=ft.Padding.all(16),
+        content=ft.Column([ft.Row([badge(icon, color), title(head)], spacing=10)] + list(controls), spacing=12))
+
+
+def button_row(*buttons):
+    return ft.Row(list(buttons), wrap=True, spacing=8, run_spacing=8)
 
 
 def ltr_field(label, value="", password=False, **kw):
     return ft.TextField(label=label, value=str(value or ""), password=password, can_reveal_password=password,
-                        rtl=False, text_align=ft.TextAlign.LEFT, **kw)
+                        rtl=False, text_align=ft.TextAlign.LEFT, border_radius=12, filled=True,
+                        fill_color=FIELD, border_color=LINE, focused_border_color=BRAND, **kw)
+
+
+def text_field(label, value="", **kw):
+    return ft.TextField(label=label, value=str(value or ""), border_radius=12, filled=True, fill_color=FIELD,
+                        border_color=LINE, focused_border_color=BRAND, **kw)
 
 
 def dropdown(label, items, value=None, on_select=None):
     """items: [(key, text)]"""
     d = ft.Dropdown(label=label, options=[ft.DropdownOption(key=k, text=t) for k, t in items],
                     value=value if value in [k for k, _ in items] else (items[0][0] if items else None),
-                    expand=True, on_select=on_select)
+                    expand=True, on_select=on_select, border_radius=12, filled=True, fill_color=FIELD,
+                    border_color=LINE, focused_border_color=BRAND)
     return d
 
 
 class Panel:
-    """Progress bar and log of one page; safe to feed from the worker thread."""
+    """Progress bar and a small console of one page; safe to feed from the worker thread."""
 
-    def __init__(self, app, height=220):
+    def __init__(self, app, height=200):
         self.app = app
-        self.bar = ft.ProgressBar(visible=False)
-        self.lines = ft.ListView(spacing=2, auto_scroll=True, height=height)
-        self.view = ft.Column([self.bar, self.lines], spacing=6)
+        self.bar = ft.ProgressBar(visible=False, color=BRAND, bgcolor=ft.Colors.with_opacity(0.15, BRAND),
+                                  border_radius=4, bar_height=5)
+        self.lines = ft.ListView(spacing=3, auto_scroll=True, height=height)
+        self.console = ft.Container(content=self.lines, bgcolor=CONSOLE, border_radius=14,
+                                    padding=ft.Padding.all(12), visible=False)
+        self.view = ft.Column([self.bar, self.console], spacing=8)
 
     def _call(self, fn, *args):
         try:
@@ -174,9 +236,11 @@ class Panel:
 
     def add(self, text):
         for line in str(text).splitlines() or [""]:
-            self.lines.controls.append(ft.Text(line, size=12, selectable=True))
+            color = "#86EFAC" if line.startswith("✓") else ("#FCA5A5" if line.startswith(("✗", "⚠")) else "#D7ECE9")
+            self.lines.controls.append(ft.Text(line, size=12, selectable=True, color=color))
         del self.lines.controls[:-400]
-        refresh(self.lines)
+        self.console.visible = True
+        refresh(self.view)
 
     def set_progress(self, done, total):
         if total:
@@ -193,6 +257,7 @@ class Panel:
     def start(self, clear=True):
         if clear:
             self.lines.controls.clear()
+            self.console.visible = False
         self.bar.value = None
         self.bar.visible = True
         refresh(self.view)
@@ -203,7 +268,46 @@ class Panel:
 
     def clear(self):
         self.lines.controls.clear()
-        refresh(self.lines)
+        self.console.visible = False
+        refresh(self.view)
+
+
+def metric(label, value, percent):
+    """A small tile: label, big value and (for percentages) a thin bar."""
+    color = BAD if (percent or 0) >= 85 else (WARN if (percent or 0) >= 65 else BRAND)
+    parts = [ft.Text(label, size=11, color=MUTED), ft.Text(value, size=17, font_family=BOLD, color=BRAND_DARK)]
+    if percent is not None:
+        parts.append(ft.ProgressBar(value=min(1.0, (percent or 0) / 100), color=color, bar_height=4,
+                                    border_radius=2, bgcolor=LINE))
+    return ft.Container(expand=True, bgcolor=FIELD, border_radius=12, padding=ft.Padding.all(10),
+                        content=ft.Column(parts, spacing=3))
+
+
+def kind_of(head):
+    """Icon and colour of a dialog from its title."""
+    if head in ("خطا", "ناقص", "ممکن نیست"):
+        return ft.Icons.ERROR_OUTLINE, BAD
+    if head.startswith("انجام شد"):
+        return ft.Icons.CHECK_CIRCLE_OUTLINE, OK
+    if head in ("هشدار", "تأیید", "صبر کنید", "یک کار دستی") or head.startswith("برداشتن"):
+        return ft.Icons.WARNING_AMBER_ROUNDED, WARN
+    return ft.Icons.INFO_OUTLINE, BRAND
+
+
+def message(text):
+    """Dialog text; long logs and tracebacks in a small scrolling box."""
+    text = str(text)
+    if len(text) > 700 or "Traceback" in text:
+        return ft.Container(height=260, bgcolor=FIELD, border_radius=12, padding=ft.Padding.all(10),
+                            content=ft.Column([ft.Text(text, size=12, selectable=True)], scroll=ft.ScrollMode.AUTO))
+    return ft.Text(text, size=14, selectable=True, color="#24312F")
+
+
+NAV = [(ft.Icons.ROCKET_LAUNCH_OUTLINED, ft.Icons.ROCKET_LAUNCH, "انتشار"),
+       (ft.Icons.DNS_OUTLINED, ft.Icons.DNS, "سرورها"),
+       (ft.Icons.HUB_OUTLINED, ft.Icons.HUB, "سرویس‌ها"),
+       (ft.Icons.ADD_CIRCLE_OUTLINE, ft.Icons.ADD_CIRCLE, "سرور جدید"),
+       (ft.Icons.MONITOR_HEART_OUTLINED, ft.Icons.MONITOR_HEART, "وضعیت")]
 
 
 # ====================================================================== the app
@@ -226,23 +330,28 @@ class App:
                 if not fut.done():
                     fut.set_result(value() if callable(value) else value)
             return handler
-        buttons = [ft.TextButton(text, on_click=close(v)) if not primary else ft.FilledButton(text, on_click=close(v))
+        buttons = [ft.FilledButton(text, on_click=close(v)) if primary
+                   else ft.TextButton(text, on_click=close(v), style=ft.ButtonStyle(color=MUTED))
                    for text, v, primary in actions]
-        dlg = ft.AlertDialog(modal=True, title=ft.Text(head),
-                             content=ft.Column(body, tight=True, scroll=ft.ScrollMode.AUTO, width=520),
-                             actions=buttons, actions_alignment=ft.MainAxisAlignment.END)
+        icon, color = kind_of(head)
+        dlg = ft.AlertDialog(
+            modal=True, scrollable=True,
+            icon=badge(icon, color, 48),
+            title=ft.Text(head, font_family=BOLD, size=18, color=BRAND_DARK, text_align=ft.TextAlign.CENTER),
+            content=ft.Column(body, tight=True, spacing=12, width=440),
+            actions=buttons, actions_alignment=ft.MainAxisAlignment.END)
         self.page.show_dialog(dlg)
         return fut
 
     async def info(self, head, text):
-        await self._dialog(head, [ft.Text(text, selectable=True)], [("باشه", True, True)])
+        await self._dialog(head, [message(text)], [("باشه", True, True)])
 
     async def ask(self, head, text, yes="بله", no="خیر"):
-        return await self._dialog(head, [ft.Text(text, selectable=True)], [(no, False, False), (yes, True, True)])
+        return await self._dialog(head, [message(text)], [(no, False, False), (yes, True, True)])
 
     async def choose(self, head, text, options):
         """options: [(key, label)]; None when cancelled."""
-        return await self._dialog(head, [ft.Text(text)] if text else [],
+        return await self._dialog(head, [message(text)] if text else [],
                                   [("انصراف", None, False)] + [(label, key, True) for key, label in options])
 
     async def form(self, head, fields, note=None, ok="ذخیره"):
@@ -256,9 +365,9 @@ class App:
             elif isinstance(kind, list):
                 w = dropdown(label, kind, value)
             elif kind == "multiline":
-                w = ft.TextField(label=label, value=value or "", multiline=True, min_lines=3, max_lines=8)
+                w = text_field(label, value, multiline=True, min_lines=3, max_lines=8)
             elif kind == "text":
-                w = ft.TextField(label=label, value=str(value or ""))
+                w = text_field(label, value)
             else:
                 w = ltr_field(label, value, password=(kind == "password"),
                               keyboard_type=ft.KeyboardType.NUMBER if kind == "int" else ft.KeyboardType.TEXT)
@@ -285,7 +394,8 @@ class App:
         return None if res is None else res["v"]
 
     def toast(self, text):
-        self.page.show_dialog(ft.SnackBar(content=ft.Text(text)))
+        self.page.show_dialog(ft.SnackBar(content=ft.Text(text, color=ft.Colors.WHITE), bgcolor=BRAND_DARK,
+                                          behavior=ft.SnackBarBehavior.FLOATING, shape=rounded(12)))
 
     async def pick_file(self, extensions=None):
         """(name, bytes, path or None) of a picked file, or None."""
@@ -339,9 +449,19 @@ class App:
             self.page.update()
         return handler
 
-    def button(self, text, fn, primary=False, icon=None):
-        cls = ft.FilledButton if primary else ft.OutlinedButton
-        return cls(text, icon=icon, on_click=self.guard(fn))
+    def button(self, text, fn, primary=False, icon=None, danger=False):
+        """Primary: one wide filled button. Others: soft tonal buttons that sit side by side."""
+        if primary:
+            return ft.FilledButton(text, icon=icon, on_click=self.guard(fn), expand=True,
+                                   style=ft.ButtonStyle(shape=rounded(14), bgcolor=BRAND, color=ft.Colors.WHITE,
+                                                        padding=ft.Padding.symmetric(horizontal=18, vertical=16),
+                                                        text_style=ft.TextStyle(size=15, font_family=BOLD)))
+        color = BAD if danger else BRAND
+        return ft.FilledTonalButton(text, icon=icon, on_click=self.guard(fn),
+                                    style=ft.ButtonStyle(shape=rounded(12), color=color, icon_color=color,
+                                                         bgcolor=ft.Colors.with_opacity(0.09, color),
+                                                         padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                                                         text_style=ft.TextStyle(size=13)))
 
     # ------------------------------------------------------------ start
 
@@ -350,7 +470,9 @@ class App:
         p.title = "Persian Admin"
         p.rtl = True
         p.theme_mode = ft.ThemeMode.LIGHT
-        p.theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO)
+        p.fonts = {"Vazirmatn": "fonts/Vazirmatn-Regular.ttf", BOLD: "fonts/Vazirmatn-Bold.ttf"}
+        p.theme = theme()
+        p.bgcolor = BG
         p.padding = 0
         if st.has_app_password():
             self.show_lock()
@@ -358,14 +480,29 @@ class App:
             self.show_welcome()
 
     def _screen(self, *controls):
+        """Lock and welcome: the brand gradient with one white card in the middle."""
         p = self.page
         p.appbar = None
         p.navigation_bar = None
         p.controls.clear()
-        p.add(ft.SafeArea(expand=True, content=ft.Container(
-            padding=ft.Padding.all(20),
-            content=ft.Column(list(controls), spacing=16, scroll=ft.ScrollMode.AUTO,
-                              horizontal_alignment=ft.CrossAxisAlignment.STRETCH))))
+        logo = ft.Container(width=96, height=96, border_radius=28, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                            shadow=ft.BoxShadow(blur_radius=24, color=ft.Colors.with_opacity(0.35, "#000000")),
+                            content=ft.Image(src="icon.png", width=96, height=96, fit=ft.BoxFit.COVER))
+        head = ft.Column([logo, ft.Text("Persian Admin", size=26, font_family=BOLD, color=ft.Colors.WHITE),
+                          ft.Text("انتشار و مدیریت سرورها", size=13, color=ft.Colors.with_opacity(0.8, "#FFFFFF"))],
+                         horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+        box = ft.Container(bgcolor=ft.Colors.WHITE, border_radius=24, padding=ft.Padding.all(22),
+                           content=ft.Column(list(controls), spacing=14,
+                                             horizontal_alignment=ft.CrossAxisAlignment.STRETCH))
+        p.add(ft.Container(
+            expand=True,
+            gradient=ft.LinearGradient(begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER,
+                                       colors=[BRAND_DARK, BRAND, "#14A394"]),
+            content=ft.SafeArea(expand=True, content=ft.Container(
+                padding=ft.Padding.symmetric(horizontal=22, vertical=30),
+                content=ft.Column([head, box], spacing=28, scroll=ft.ScrollMode.AUTO,
+                                  horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                                  alignment=ft.MainAxisAlignment.CENTER)))))
         p.update()
 
     def show_lock(self):
@@ -385,9 +522,11 @@ class App:
             self.settings = st.Settings.load()
             self.show_main()
         pw.on_submit = go
-        self._screen(ft.Icon(ft.Icons.LOCK, size=56), ft.Text("Persian Admin", size=24, weight=ft.FontWeight.BOLD,
-                                                              text_align=ft.TextAlign.CENTER),
-                     pw, ft.FilledButton("باز کردن", on_click=go), msg)
+        self._screen(ft.Row([badge(ft.Icons.LOCK, BRAND, 40), title("برنامه قفل است")], spacing=10),
+                     pw, ft.FilledButton("باز کردن", icon=ft.Icons.LOCK_OPEN, on_click=go,
+                                         style=ft.ButtonStyle(shape=rounded(14), bgcolor=BRAND,
+                                                              padding=ft.Padding.symmetric(vertical=16))),
+                     msg)
 
     def show_welcome(self):
         msg = ft.Text("")
@@ -443,14 +582,17 @@ class App:
             self.settings.save()
             self.show_main()
 
+        steps = [("۱", "در برنامه‌ی ویندوز «📱 انتقال به گوشی» را بزنید."),
+                 ("۲", "فایل ساخته‌شده را به گوشی بفرستید (مثلاً تلگرام)."),
+                 ("۳", "این‌جا واردش کنید و رمزی را که ویندوز نشان داد بزنید.")]
         self._screen(
-            ft.Icon(ft.Icons.PHONE_ANDROID, size=56),
-            ft.Text("Persian Admin", size=24, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
-            ft.Text("ابزار انتشار و مدیریت سرورها روی گوشی.\n\n"
-                    "در برنامه‌ی ویندوز دکمه‌ی «📱 انتقال به گوشی» را بزنید، فایل ساخته‌شده را به گوشی بفرستید "
-                    "(مثلاً تلگرام) و این‌جا واردش کنید. رمز فایل را همان برنامه نشان می‌دهد."),
-            self.button("وارد کردن فایل انتقال از ویندوز", from_file, primary=True, icon=ft.Icons.FILE_OPEN),
-            self.button("شروع بدون فایل (تنظیم دستی)", empty),
+            title("خوش آمدید"),
+            *[ft.Row([ft.Container(width=28, height=28, border_radius=14, bgcolor=BRAND, alignment=ft.Alignment.CENTER,
+                                   content=ft.Text(n, color=ft.Colors.WHITE, size=13, font_family=BOLD)),
+                      ft.Text(t, size=13, expand=True)], spacing=10) for n, t in steps],
+            ft.Row([self.button("وارد کردن فایل انتقال", from_file, primary=True, icon=ft.Icons.FILE_OPEN)]),
+            ft.TextButton("شروع بدون فایل (تنظیم دستی)", on_click=self.guard(empty),
+                          style=ft.ButtonStyle(color=MUTED)),
             msg)
 
     def show_main(self):
@@ -458,27 +600,38 @@ class App:
         p.controls.clear()
         self.pages = [PublishPage(self), ServersPage(self), ServicesPage(self), NewServerPage(self),
                       MonitorPage(self)]
-        self.body = ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=12, vertical=8))
-        self.features_btn = ft.IconButton(ft.Icons.SYSTEM_UPDATE, tooltip="امکانات جدید",
-                                          on_click=self.guard(lambda: self.features(False)))
-        p.appbar = ft.AppBar(title=ft.Text("Persian Admin"), actions=[
-            self.features_btn,
-            ft.IconButton(ft.Icons.SETTINGS, tooltip="تنظیمات", on_click=self.guard(self.open_settings))])
+        self.body = ft.Container(expand=True, padding=ft.Padding.only(left=14, right=14, top=12))
+        icon_style = ft.ButtonStyle(bgcolor=ft.Colors.with_opacity(0.14, "#FFFFFF"), shape=rounded(12))
+        self.features_btn = ft.IconButton(ft.Icons.SYSTEM_UPDATE, tooltip="امکانات جدید", icon_color=ft.Colors.WHITE,
+                                          style=icon_style, on_click=self.guard(lambda: self.features(False)))
+        self.page_title = ft.Text("", size=13, color=ft.Colors.with_opacity(0.8, "#FFFFFF"))
+        header = ft.Container(
+            gradient=ft.LinearGradient(begin=ft.Alignment.TOP_RIGHT, end=ft.Alignment.BOTTOM_LEFT,
+                                       colors=[BRAND_DARK, BRAND]),
+            border_radius=ft.BorderRadius.only(bottom_left=26, bottom_right=26),
+            padding=ft.Padding.only(left=16, right=18, top=14, bottom=18),
+            content=ft.SafeArea(content=ft.Row([
+                ft.Container(width=42, height=42, border_radius=12, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                             content=ft.Image(src="icon.png", width=42, height=42, fit=ft.BoxFit.COVER)),
+                ft.Column([ft.Text("Persian Admin", size=19, font_family=BOLD, color=ft.Colors.WHITE),
+                           self.page_title], spacing=0, expand=True),
+                self.features_btn,
+                ft.IconButton(ft.Icons.SETTINGS, tooltip="تنظیمات", icon_color=ft.Colors.WHITE, style=icon_style,
+                              on_click=self.guard(self.open_settings))], spacing=12)))
         p.navigation_bar = ft.NavigationBar(
             selected_index=0, on_change=lambda e: self.select(e.control.selected_index),
-            destinations=[ft.NavigationBarDestination(icon=ft.Icons.ROCKET_LAUNCH, label="انتشار"),
-                          ft.NavigationBarDestination(icon=ft.Icons.BACKUP, label="سرورها"),
-                          ft.NavigationBarDestination(icon=ft.Icons.HUB, label="سرویس‌ها"),
-                          ft.NavigationBarDestination(icon=ft.Icons.ADD, label="سرور جدید"),
-                          ft.NavigationBarDestination(icon=ft.Icons.MONITOR_HEART, label="وضعیت")])
-        p.add(ft.SafeArea(expand=True, content=self.body))
+            destinations=[ft.NavigationBarDestination(icon=ic, selected_icon=sel, label=label)
+                          for ic, sel, label in NAV])
+        p.add(ft.Column([header, self.body], spacing=0, expand=True))
         self.select(0)
         p.run_task(self._quiet_features)
 
     def select(self, i):
         self.current = self.pages[i]
         self.current.reload()
-        self.body.content = ft.Column([self.current.view], scroll=ft.ScrollMode.AUTO, expand=True)
+        self.page_title.value = NAV[i][2]
+        self.body.content = ft.Column([self.current.view, ft.Container(height=20)], scroll=ft.ScrollMode.AUTO,
+                                      expand=True)
         self.page.update()
 
     def refresh_all(self):
@@ -590,32 +743,40 @@ class PublishPage:
         self.build = None
         self.panel = Panel(app)
         self.status = hint("")
-        self.build_text = ft.Text("فایلی انتخاب نشده")
+        self.build_text = ft.Text("فایلی انتخاب نشده", size=13, color=MUTED)
         self.code = ltr_field("شماره‌ی نسخه", keyboard_type=ft.KeyboardType.NUMBER, expand=True,
                               on_change=self._code_changed)
         self.name = ltr_field("نام نسخه", expand=True)
-        self.notes = ft.TextField(label="توضیحات نسخه (به کاربرها نمایش داده می‌شود)", multiline=True,
-                                  min_lines=2, max_lines=5)
+        self.notes = text_field("توضیحات نسخه (به کاربرها نمایش داده می‌شود)", multiline=True,
+                                min_lines=2, max_lines=5)
         self.chk_router = ft.Checkbox(label="ارسال به روتر", value=True)
         self.chk_github = ft.Checkbox(label="به‌روزرسانی GitHub", value=True)
         self.chk_beta = ft.Checkbox(label="🧪 آزمایشی: اول فقط برای یوزرهای تست", value=True)
-        self.beta_info = ft.Text("")
-        self.btn_promote = app.button("✅ انتشار عمومی آزمایشی اندروید", lambda: self.promote(False))
-        self.btn_promote_win = app.button("✅ انتشار عمومی آزمایشی ویندوز", lambda: self.promote(True))
-        self.beta_box = ft.Column([self.beta_info, self.btn_promote, self.btn_promote_win], visible=False)
+        self.beta_info = ft.Text("", size=13, color=ACCENT)
+        self.btn_promote = app.button("عمومی کردن اندروید", lambda: self.promote(False), icon=ft.Icons.VERIFIED)
+        self.btn_promote_win = app.button("عمومی کردن ویندوز", lambda: self.promote(True), icon=ft.Icons.VERIFIED)
+        self.beta_box = ft.Container(
+            visible=False, border_radius=14, padding=ft.Padding.all(12),
+            bgcolor=ft.Colors.with_opacity(0.08, ACCENT), border=ft.Border.all(1, ft.Colors.with_opacity(0.3, ACCENT)),
+            content=ft.Column([ft.Row([ft.Icon(ft.Icons.SCIENCE, color=ACCENT, size=20), self.beta_info]),
+                               button_row(self.btn_promote, self.btn_promote_win)], spacing=8))
         self.btn_go = app.button("امضا و انتشار", self.publish, primary=True, icon=ft.Icons.PUBLISH)
         self.view = ft.Column([
-            self.status,
-            card("۱. فایل برنامه", self.build_text,
-                 ft.Row([app.button("دریافت آخرین بیلد از GitHub", self.fetch_latest, icon=ft.Icons.CLOUD_DOWNLOAD),
-                         app.button("انتخاب فایل", self.pick_build, icon=ft.Icons.UPLOAD_FILE)], wrap=True),
-                 ft.Row([self.code, self.name])),
-            card("۲. توضیحات", self.notes),
-            card("۳. انتشار", ft.Row([self.chk_router, self.chk_github], wrap=True), self.chk_beta, self.beta_box,
-                 self.btn_go,
-                 app.button("⇄ انتشار فقط تنظیمات سرور", self.publish_config_only),
-                 app.button("🖥 انتشار نسخه‌ی ویندوز", self.publish_windows),
-                 self.panel.view)], spacing=10)
+            ft.Container(padding=ft.Padding.symmetric(horizontal=4), content=ft.Row([
+                ft.Icon(ft.Icons.NEW_RELEASES_OUTLINED, color=BRAND, size=18), self.status], spacing=6)),
+            self.beta_box,
+            card("فایل برنامه", ft.Container(content=self.build_text, padding=ft.Padding.all(10), border_radius=12,
+                                             bgcolor=FIELD),
+                 button_row(app.button("آخرین بیلد GitHub", self.fetch_latest, icon=ft.Icons.CLOUD_DOWNLOAD),
+                            app.button("انتخاب فایل", self.pick_build, icon=ft.Icons.UPLOAD_FILE)),
+                 ft.Row([self.code, self.name]), icon=ft.Icons.ANDROID),
+            card("توضیحات نسخه", self.notes, icon=ft.Icons.NOTES),
+            card("انتشار", ft.Row([self.chk_router, self.chk_github], wrap=True), self.chk_beta,
+                 ft.Row([self.btn_go]), self.panel.view, icon=ft.Icons.ROCKET_LAUNCH, color=ACCENT),
+            card("کارهای دیگر",
+                 button_row(app.button("فقط تنظیمات سرور", self.publish_config_only, icon=ft.Icons.SETTINGS_SUGGEST),
+                            app.button("نسخه‌ی ویندوز", self.publish_windows, icon=ft.Icons.DESKTOP_WINDOWS)),
+                 icon=ft.Icons.MORE_HORIZ)], spacing=12)
 
     def _code_changed(self, e):
         v = (self.code.value or "").strip()
@@ -865,15 +1026,22 @@ class ServersPage:
         self.backups = ft.Column(spacing=2)
         self.view = ft.Column([
             card("سرورها و روترها", hint("روی هر مورد بزنید تا انتخاب شود."), self.list,
-                 ft.Row([app.button("＋ افزودن", self.add), app.button("ویرایش", self.edit),
-                         app.button("حذف", self.delete), app.button("بررسی اتصال", self.test)], wrap=True)),
-            card("بکاپ", ft.Row([app.button("بکاپ از همه", lambda: self.backup(False), primary=True),
-                                 app.button("بکاپ از همین مورد", lambda: self.backup(True))], wrap=True),
-                 self.backups, app.button("بررسی آخرین بکاپ این مورد", self.verify)),
+                 button_row(app.button("افزودن", self.add, icon=ft.Icons.ADD),
+                            app.button("ویرایش", self.edit, icon=ft.Icons.EDIT_OUTLINED),
+                            app.button("بررسی اتصال", self.test, icon=ft.Icons.WIFI_TETHERING),
+                            app.button("حذف", self.delete, icon=ft.Icons.DELETE_OUTLINE, danger=True)),
+                 icon=ft.Icons.DNS),
+            card("بکاپ", ft.Row([app.button("بکاپ از همه", lambda: self.backup(False), primary=True,
+                                            icon=ft.Icons.BACKUP)]),
+                 button_row(app.button("فقط همین مورد", lambda: self.backup(True), icon=ft.Icons.SAVE_ALT),
+                            app.button("بررسی آخرین بکاپ", self.verify, icon=ft.Icons.FACT_CHECK)),
+                 self.backups, icon=ft.Icons.CLOUD_UPLOAD),
             card("تنظیمات برنامه",
-                 ft.Row([app.button("خروجی تنظیمات", self.export_tool), app.button("وارد کردن دوباره", self.import_tool),
-                         app.button("تغییر رمز برنامه", self.change_password)], wrap=True)),
-            self.panel.view], spacing=10)
+                 button_row(app.button("خروجی تنظیمات", self.export_tool, icon=ft.Icons.IOS_SHARE),
+                            app.button("وارد کردن دوباره", self.import_tool, icon=ft.Icons.FILE_OPEN),
+                            app.button("رمز برنامه", self.change_password, icon=ft.Icons.PASSWORD)),
+                 icon=ft.Icons.PHONE_ANDROID),
+            self.panel.view], spacing=12)
 
     def current(self):
         return self.app.settings.router(self.selected) if self.selected else None
@@ -886,14 +1054,22 @@ class ServersPage:
         self.list.controls.clear()
         for r in s.routers:
             stt = status.get(r["id"], {})
-            mark = "✓" if stt.get("ok") else ("✗" if stt else "•")
+            color = OK if stt.get("ok") else (BAD if stt else MUTED)
             sel = r["id"] == self.selected
-            self.list.controls.append(ft.ListTile(
-                selected=sel, leading=ft.Icon(ft.Icons.ROUTER if r.get("role") != "linux" else ft.Icons.DNS),
-                title=ft.Text("%s %s" % (mark, r.get("name") or r["id"])),
-                subtitle=ft.Text("%s:%s — %s — بکاپ: %s" % (r["host"], fa(r.get("port", 22)),
-                                                           dict(ROLES).get(r.get("role"), ""), ago(stt.get("last_ok")))),
-                on_click=self._select(r["id"])))
+            self.list.controls.append(ft.Container(
+                on_click=self._select(r["id"]), ink=True, border_radius=14, padding=ft.Padding.all(10),
+                bgcolor=ft.Colors.with_opacity(0.08, BRAND) if sel else FIELD,
+                border=ft.Border.all(1.5 if sel else 1, BRAND if sel else LINE),
+                content=ft.Row([
+                    badge(ft.Icons.ROUTER if r.get("role") != "linux" else ft.Icons.TERMINAL,
+                          BRAND if r.get("role") != "linux" else ACCENT, 40),
+                    ft.Column([ft.Text(r.get("name") or r["id"], font_family=BOLD, size=14, color=BRAND_DARK),
+                               ft.Text("%s  •  %s" % (r["host"], ROLE_SHORT.get(r.get("role"), "")), size=12,
+                                       color=MUTED),
+                               ft.Text("بکاپ: %s" % ago(stt.get("last_ok")), size=11, color=color)],
+                              spacing=1, expand=True),
+                    ft.Icon(ft.Icons.CHECK_CIRCLE if sel else ft.Icons.CIRCLE_OUTLINED,
+                            color=BRAND if sel else LINE, size=22)], spacing=10)))
         if not s.routers:
             self.list.controls.append(hint("هنوز سروری تعریف نشده است."))
         self.backups.controls.clear()
@@ -901,7 +1077,8 @@ class ServersPage:
         if r:
             names = bk.LocalStore(s.backup_dir()).list(r["id"])
             for name in names[:6]:
-                self.backups.controls.append(ft.Text(name, size=12, selectable=True))
+                self.backups.controls.append(ft.Row([ft.Icon(ft.Icons.INVENTORY_2_OUTLINED, size=16, color=MUTED),
+                                                     ft.Text(name, size=12, selectable=True, expand=True)]))
             if not names:
                 self.backups.controls.append(hint("بکاپی روی این گوشی نیست."))
 
@@ -1077,27 +1254,34 @@ class ServicesPage:
         self.target = dropdown("روتر اصلی", [])
         self.um2 = dropdown("روتر دوم", [])
         self.bt = dropdown("سرور لینوکس", [])
-        self.bot_state = ft.Text("")
-        self.bt_state = ft.Text("")
+        self.bot_state = ft.Text("", size=13)
+        self.bt_state = ft.Text("", size=13)
         b = app.button
         self.view = ft.Column([
-            card("روتر", ft.Row([self.target])),
+            card("روتر", ft.Row([self.target]), icon=ft.Icons.ROUTER),
             card("سرویس وضعیت (umstatus)",
                  hint("نسخه‌ی همراه برنامه و کلید عمومی امضا را روی روتر می‌گذارد و سرویس را دوباره راه می‌اندازد."),
-                 b("به‌روزرسانی umstatus", self.update_umstatus)),
+                 button_row(b("به‌روزرسانی umstatus", self.update_umstatus, icon=ft.Icons.SYNC)),
+                 icon=ft.Icons.SPEED),
             card("بات تلگرام", self.bot_state,
-                 ft.Row([b("وضعیت و گزارش", self.bot_refresh), b("راه‌اندازی دوباره", self.bot_restart),
-                         b("تنظیمات بات", self.bot_settings), b("به‌روزرسانی کد از GitHub", self.bot_update)], wrap=True),
-                 b("نصب بات روی روتر / انتقال دیتابیس", self.bot_install, primary=True)),
-            card("یوزر منیجر دوم (پشتیبان)", ft.Row([self.um2]),
+                 button_row(b("وضعیت و گزارش", self.bot_refresh, icon=ft.Icons.RECEIPT_LONG),
+                            b("راه‌اندازی دوباره", self.bot_restart, icon=ft.Icons.RESTART_ALT),
+                            b("تنظیمات", self.bot_settings, icon=ft.Icons.TUNE),
+                            b("کد جدید از GitHub", self.bot_update, icon=ft.Icons.DOWNLOAD)),
+                 ft.Row([b("نصب بات / انتقال دیتابیس", self.bot_install, primary=True, icon=ft.Icons.SMART_TOY)]),
+                 icon=ft.Icons.SMART_TOY),
+            card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
-                 b("راه‌اندازی / تازه کردن همگام‌سازی", self.setup_um2)),
-            card("تانل پشتیبان SSTP (AmneziaWG)", ft.Row([self.bt]),
+                 button_row(b("راه‌اندازی همگام‌سازی", self.setup_um2, icon=ft.Icons.SYNC_ALT)),
+                 icon=ft.Icons.PEOPLE_ALT),
+            card("تانل پشتیبان SSTP", ft.Row([self.bt]),
                  hint("ترافیک SSTP از GRE می‌رود؛ اگر GRE قطع شد خودکار از AmneziaWG به سرور لینوکس می‌رود."),
                  self.bt_state,
-                 ft.Row([b("بررسی و راه‌اندازی", self.backup_setup, primary=True), b("وضعیت", self.backup_status),
-                         b("برداشتن", self.backup_remove)], wrap=True)),
-            self.panel.view], spacing=10)
+                 ft.Row([b("بررسی و راه‌اندازی", self.backup_setup, primary=True, icon=ft.Icons.SHIELD)]),
+                 button_row(b("وضعیت", self.backup_status, icon=ft.Icons.INSIGHTS),
+                            b("برداشتن", self.backup_remove, icon=ft.Icons.LINK_OFF, danger=True)),
+                 icon=ft.Icons.ALT_ROUTE, color=ACCENT),
+            self.panel.view], spacing=12)
 
     def _fill(self, d, roles):
         items = self.app.router_items(roles)
@@ -1339,15 +1523,16 @@ class NewServerPage:
         self.domain = ltr_field("دامنه (Cloudflare؛ خالی = بدون CDN)")
         self.cf_token = ltr_field("توکن Cloudflare", password=True)
         self.chk_bot = ft.Checkbox(label="بات روی سرور قدیم متوقف شود (اگر در دسترس است)", value=True)
-        self.btn_cfg = app.button("به‌روزرسانی سرورهای اپ و انتشار", self.publish_servers)
+        self.btn_cfg = app.button("به‌روزرسانی سرورهای اپ و انتشار", self.publish_servers, icon=ft.Icons.PUBLISH)
         self.btn_cfg.disabled = True
-        self.fresh = app.button("بکاپ تازه از سرور اصلی", self.fresh_backup)
+        self.fresh = app.button("بکاپ تازه از سرور اصلی", self.fresh_backup, icon=ft.Icons.BACKUP)
         self.view = ft.Column([
-            card("۱. نوع سرور", self.mode, hint("سرور جدید را اول در «سرورها» اضافه کنید.")),
-            card("۲. مشخصات", ft.Row([self.target]), ft.Row([self.source]), ft.Row([self.backup]), self.ip,
-                 self.domain, self.cf_token, self.chk_bot, self.fresh),
-            card("۳. اجرا", app.button("شروع / ادامه", self.go, primary=True), self.btn_cfg, self.panel.view)],
-            spacing=10)
+            card("نوع سرور", self.mode, hint("سرور جدید را اول در «سرورها» اضافه کنید."), icon=ft.Icons.CATEGORY),
+            card("مشخصات", ft.Row([self.target]), ft.Row([self.source]), ft.Row([self.backup]), self.ip,
+                 self.domain, self.cf_token, self.chk_bot, button_row(self.fresh), icon=ft.Icons.EDIT_NOTE),
+            card("اجرا", ft.Row([app.button("شروع / ادامه", self.go, primary=True, icon=ft.Icons.PLAY_ARROW)]),
+                 button_row(self.btn_cfg), self.panel.view, icon=ft.Icons.ROCKET_LAUNCH, color=ACCENT)],
+            spacing=12)
 
     def _fill(self, d, items):
         d.options = [ft.DropdownOption(key=k, text=t) for k, t in items]
@@ -1566,13 +1751,24 @@ class MonitorPage:
         self.app = app
         self.status = {}
         self.panel = Panel(app, height=60)
-        self.total = hint("")
-        self.cards = ft.Column(spacing=6)
-        self.auto = ft.Switch(label="خودکار هر ۶۰ ثانیه", value=False, on_change=self.toggle_auto)
+        self.total_num = ft.Text("—", size=34, font_family=BOLD, color=ft.Colors.WHITE)
+        self.total = ft.Text("برای دیدن وضعیت «به‌روزرسانی» را بزنید", size=12,
+                             color=ft.Colors.with_opacity(0.85, "#FFFFFF"))
+        self.cards = ft.Column(spacing=10)
+        self.auto = ft.Switch(label="خودکار هر ۶۰ ثانیه", value=False, on_change=self.toggle_auto,
+                              active_color=BRAND)
         self._task = None
+        summary = ft.Container(
+            border_radius=20, padding=ft.Padding.all(18),
+            gradient=ft.LinearGradient(begin=ft.Alignment.TOP_RIGHT, end=ft.Alignment.BOTTOM_LEFT,
+                                       colors=[BRAND, "#14A394"]),
+            content=ft.Row([ft.Column([ft.Text("کاربران آنلاین", size=13, color=ft.Colors.WHITE),
+                                       self.total_num, self.total], spacing=2, expand=True),
+                            ft.Icon(ft.Icons.GROUPS, size=54, color=ft.Colors.with_opacity(0.35, "#FFFFFF"))]))
         self.view = ft.Column([
-            ft.Row([app.button("🔄 به‌روزرسانی", self.refresh, primary=True), self.auto], wrap=True),
-            self.total, self.cards, self.panel.view], spacing=10)
+            summary,
+            ft.Row([app.button("به‌روزرسانی", self.refresh, primary=True, icon=ft.Icons.REFRESH)]),
+            self.auto, self.cards, self.panel.view], spacing=12)
 
     def reload(self):
         self.fill()
@@ -1607,28 +1803,38 @@ class MonitorPage:
         for r in self.app.settings.routers:
             s = self.status.get(r["id"], {})
             ok = s.get("ok")
-            head = "%s  %s — %s" % ("🟢" if ok else ("🔴" if s else "⚪"), r.get("name") or r["host"],
-                                   ROLE_SHORT.get(r.get("role"), r.get("role", "")))
-            lines = []
+            color = OK if ok else (BAD if s else MUTED)
+            rows = []
             if ok:
                 total += s.get("users_online", 0)
-                lines.append("CPU %s٪   حافظه %s   روشن از %s" % (
-                    fa(s.get("cpu", 0)), ("%s٪" % fa(s["mem"])) if s.get("mem") is not None else "—", s.get("uptime", "")))
-                by = "  ".join("%s: %s" % (monitor.proto_name(k), fa(v))
-                               for k, v in sorted(s.get("by_protocol", {}).items(), key=lambda kv: -kv[1]))
-                lines.append("آنلاین: %s   %s" % (fa(s.get("users_online", 0)), by))
-                svc = "  ".join("%s %s" % (k, STATE_FA.get(v, v)) for k, v in s.get("services", {}).items())
-                if svc:
-                    lines.append("سرویس‌ها: " + svc)
+                rows.append(ft.Row([
+                    metric("CPU", "%s٪" % fa(s.get("cpu", 0)), s.get("cpu", 0)),
+                    metric("حافظه", ("%s٪" % fa(s["mem"])) if s.get("mem") is not None else "—", s.get("mem") or 0),
+                    metric("آنلاین", fa(s.get("users_online", 0)), None)], spacing=8))
+                protos = [chip("%s %s" % (monitor.proto_name(k), fa(v)))
+                          for k, v in sorted(s.get("by_protocol", {}).items(), key=lambda kv: -kv[1])]
+                svcs = [chip("%s %s" % (k, STATE_FA.get(v, v)), OK if v in ("running", "active") else BAD)
+                        for k, v in s.get("services", {}).items()]
+                if protos or svcs:
+                    rows.append(ft.Row(protos + svcs, wrap=True, spacing=6, run_spacing=6))
+                if s.get("uptime"):
+                    rows.append(hint("روشن از %s" % s["uptime"]))
             elif s:
-                lines.append(s.get("error", "در دسترس نیست"))
-            self.cards.controls.append(ft.Card(content=ft.Container(
-                padding=ft.Padding.all(12), on_click=self._users(r), ink=True,
-                content=ft.Column([ft.Text(head, weight=ft.FontWeight.BOLD)] + [ft.Text(x, size=12) for x in lines],
-                                  spacing=4))))
+                rows.append(ft.Text(s.get("error", "در دسترس نیست"), size=12, color=BAD))
+            else:
+                rows.append(hint("هنوز بررسی نشده"))
+            self.cards.controls.append(ft.Container(
+                bgcolor=ft.Colors.WHITE, border_radius=18, padding=ft.Padding.all(14), ink=True,
+                border=ft.Border.all(1, LINE), on_click=self._users(r),
+                content=ft.Column([ft.Row([
+                    ft.Container(width=10, height=10, border_radius=5, bgcolor=color),
+                    ft.Text(r.get("name") or r["host"], font_family=BOLD, size=15, color=BRAND_DARK, expand=True),
+                    chip(ROLE_SHORT.get(r.get("role"), r.get("role", "")), MUTED)], spacing=8)] + rows,
+                    spacing=10)))
         if self.status:
-            self.total.value = "مجموع آنلاین: %s — به‌روزرسانی: %s" % (
-                fa(total), fa(_dt.datetime.now().strftime("%H:%M:%S")))
+            self.total_num.value = fa(total)
+            self.total.value = "آخرین به‌روزرسانی %s — روی هر سرور بزنید تا آنلاین‌ها را ببینید" % fa(
+                _dt.datetime.now().strftime("%H:%M"))
 
     def _users(self, r):
         async def handler(e):

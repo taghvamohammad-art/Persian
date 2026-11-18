@@ -39,7 +39,7 @@ jobs:
              ../../../server/linux/pvcreds.py ../../../server/mikrotik/awgrelay.py .
           cp -r ../../../server/linux/site site
           cp ../BASE BASE_ANDROID
-          mkdir -p assets && cp ../icon.png assets/icon.png
+          mkdir -p assets/fonts && cp ../icon.png assets/icon.png && cp ../fonts/*.ttf assets/fonts/
           ls
 
       - uses: actions/setup-go@v5
