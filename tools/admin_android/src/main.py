@@ -15,6 +15,7 @@ os.environ["APPDATA"] = DATA                      # settings.py / selfupdate.py 
 os.environ["PV_ENTRY"] = "admin_app"
 os.environ["PV_BASE_FILE"] = "BASE_ANDROID"
 os.environ["PV_WORKFLOW"] = "admin-android.yml"
+os.environ["PV_NATIVE_DIR"] = HERE                # libpvdiff-<abi>.so: bsdiff for small update patches
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 

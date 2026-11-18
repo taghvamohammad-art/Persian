@@ -14,6 +14,7 @@ on:
       - "server/umstatus/umstatus.py"
       - "server/linux/**"
       - "server/mikrotik/**"
+      - "mobile/pvdiff/**"
       - ".github/workflows/admin-android.yml"
   workflow_dispatch:
 
@@ -40,6 +41,34 @@ jobs:
           cp ../BASE BASE_ANDROID
           mkdir -p assets && cp ../../icon/icon-512.png assets/icon.png
           ls
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: bsdiff library for the phone (small updates published from the phone)
+        run: |
+          set -e
+          cd mobile/pvdiff
+          go vet ./... && go test ./...
+          NDK="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          out=../../tools/admin_android/src
+          flags='-s -w -extldflags=-Wl,-z,max-page-size=16384'
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$NDK/aarch64-linux-android24-clang" \
+            go build -buildmode=c-shared -trimpath -ldflags "$flags" -o $out/libpvdiff-arm64.so ./cmd/libpvdiff
+          CGO_ENABLED=1 GOOS=android GOARCH=arm GOARM=7 CC="$NDK/armv7a-linux-androideabi24-clang" \
+            go build -buildmode=c-shared -trimpath -ldflags "$flags" -o $out/libpvdiff-arm.so ./cmd/libpvdiff
+          CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC="$NDK/x86_64-linux-android24-clang" \
+            go build -buildmode=c-shared -trimpath -ldflags "$flags" -o $out/libpvdiff-x86_64.so ./cmd/libpvdiff
+          rm -f $out/libpvdiff-*.h
+          # the same code on this runner: its patches must be what bsdiff4 and the app read
+          mkdir -p "$RUNNER_TEMP/native"
+          go build -buildmode=c-shared -o "$RUNNER_TEMP/native/libpvdiff-x86_64.so" ./cmd/libpvdiff
+          python -m pip install --disable-pip-version-check bsdiff4
+          cd ../../tools/release_tool
+          PV_NATIVE_DIR="$RUNNER_TEMP/native" python -m unittest test_apkdelta -v
+          ls -la ../admin_android/src/*.so
 
       - name: Smoke test (every screen and dialog)
         run: |

@@ -55,5 +55,46 @@ class Delta(unittest.TestCase):
         self.assertFalse(apkdelta.make_best_patch(plain_old, new).startswith(apkdelta.BSDIFF_MAGIC))
 
 
+
+def naive_diff(a, b):
+    """Stand-in for the Go library: same-offset diff for the common prefix, the rest as extra."""
+    n = min(len(a), len(b))
+    return [n, len(b) - n, 0], bytes((b[i] - a[i]) & 255 for i in range(n)), b[n:]
+
+
+class ByEntry(unittest.TestCase):
+    """BSDIFF40 made one zip entry at a time (the phone, without bsdiff4)."""
+
+    def pair(self):
+        lib = os.urandom(200000)
+        lib2 = bytearray(lib)
+        lib2[5000:5010] = os.urandom(10)
+        lib2[150000:150000] = os.urandom(333)                    # inserted bytes: offsets shift
+        old = apk(os.urandom(3000), lib, extra=b"same" * 100, bsdiff=True)
+        new = apk(os.urandom(3100), bytes(lib2), extra=b"same" * 100 + b"more",
+                  bsdiff=True)
+        return old, new
+
+    def test_assembly_is_standard_bsdiff(self):
+        old, new = self.pair()
+        patch = apkdelta.bsdiff_by_entry(old, new, naive_diff)
+        self.assertTrue(patch.startswith(apkdelta.BSDIFF_MAGIC))
+        self.assertEqual(apkdelta.bspatch(old, patch), new)
+
+    @unittest.skipUnless(os.environ.get("PV_NATIVE_DIR"), "Go library (mobile/pvdiff) not built")
+    def test_go_library(self):
+        apkdelta._NATIVE.clear()
+        native = apkdelta.native_diff()
+        self.assertIsNotNone(native)
+        old, new = self.pair()
+        patch = apkdelta.bsdiff_by_entry(old, new, native)
+        self.assertEqual(apkdelta.bspatch(old, patch), new)
+        self.assertLess(len(patch), 12000)                       # the 200 KB library: only what changed
+        try:
+            import bsdiff4
+        except ImportError:
+            return
+        self.assertEqual(bsdiff4.patch(old, patch), new)         # the format the app reads
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,3 +6,4 @@ src/site/
 src/BASE_ANDROID
 src/assets/
 build/
+src/*.so
