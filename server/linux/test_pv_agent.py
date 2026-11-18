@@ -249,5 +249,33 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(srv.accounting, [])
 
 
+
+class StaticPeerTests(unittest.TestCase):
+    """The router's backup-tunnel peer stays when the users change."""
+
+    def test_static_peer_kept_and_address_reserved(self):
+        calls = []
+        state = {"peers": {"OLDUSER=": "10.70.0.9", "ROUTER=": "10.64.0.2"}}
+        awg = pa.Awg({"static": {"ROUTER=": "10.64.0.2"}}, {})
+
+        def run(*args, input=None):
+            calls.append(args)
+            if args[:3] == ("show", "awg0", "peers"):
+                return "\n".join(state["peers"])
+            if args[0] == "pubkey":
+                return "PUB-" + input.strip()[:6]
+            return ""
+        awg._run = run
+        orig = pvcreds.awg_address
+        pvcreds.awg_address = lambda n: "10.64.0.2" if n == "clash" else orig(n)
+        try:
+            want = awg.apply({"alice": "pw", "clash": "pw"})
+        finally:
+            pvcreds.awg_address = orig
+        self.assertEqual([v[0] for v in want.values()], ["alice"])          # router address is not given away
+        removed = [a[3] for a in calls if a[-1:] == ("remove",)]
+        self.assertEqual(removed, ["OLDUSER="])
+        self.assertFalse(any(a[3] == "ROUTER=" for a in calls if a[0] == "set"))
+
 if __name__ == "__main__":
     unittest.main()

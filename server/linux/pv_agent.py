@@ -379,6 +379,8 @@ class Awg:
         self.iface = cfg.get("iface", "awg0")
         self.bin = cfg.get("bin", "awg")
         self.cache = keycache                 # {private: public}
+        # peers that are not users, e.g. the main router's backup tunnel: {public key: address}
+        self.static = dict(cfg.get("static") or {})
 
     def _run(self, *args, input=None):
         p = subprocess.run([self.bin] + list(args), capture_output=True, text=True, input=input, timeout=30)
@@ -396,7 +398,7 @@ class Awg:
     def peers(self, users):
         """{public key: (username, address)} for the allowed users; a username
         whose address is already taken (hash collision) is left out."""
-        out, used = {}, {}
+        out, used = {}, {a: "(static)" for a in self.static.values()}
         for name in sorted(users, key=str.lower):
             addr = pvcreds.awg_address(name)
             if addr in used:
@@ -408,11 +410,13 @@ class Awg:
 
     def apply(self, users):
         want = self.peers(users)
+        addrs = {pub: v[1] for pub, v in want.items()}
+        addrs.update(self.static)
         have = set(self._run("show", self.iface, "peers").split())
-        for pub in have - set(want):
+        for pub in have - set(addrs):
             self._run("set", self.iface, "peer", pub, "remove")
-        for pub in set(want) - have:
-            self._run("set", self.iface, "peer", pub, "allowed-ips", want[pub][1] + "/32")
+        for pub in set(addrs) - have:
+            self._run("set", self.iface, "peer", pub, "allowed-ips", addrs[pub] + "/32")
         return want
 
     def handshakes(self):

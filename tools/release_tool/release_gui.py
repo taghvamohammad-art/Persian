@@ -902,6 +902,14 @@ def router_connector(r):
     return connect
 
 
+def human_size(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d %s" if unit == "B" else "%.1f %s") % (n, unit)
+        n /= 1024
+
+
 def router_label(r):
     return "%s  (%s)" % (r.get("name") or r["id"], r["host"])
 
@@ -1094,6 +1102,28 @@ class ServicesPage(RouterPage):
         l4.addWidget(self.button("راه‌اندازی / تازه کردن همگام‌سازی", self.setup_um2))
         lay.addWidget(c4)
 
+        c5, l5 = card("تانل پشتیبان SSTP (AmneziaWG)")
+        r5 = QHBoxLayout()
+        r5.addWidget(QLabel("سرور لینوکس:"))
+        self.bt_combo = self.router_combo(("linux",))
+        r5.addWidget(self.bt_combo, 1)
+        l5.addLayout(r5)
+        hint5 = QLabel("ترافیک کاربران SSTP مثل الان از تانل GRE می‌رود؛ اگر GRE قطع شد خودکار از AmneziaWG به این "
+                       "سرور لینوکس می‌رود و با برگشتن GRE، برمی‌گردد. چیزی از تنظیمات فعلی پاک نمی‌شود؛ قبل از "
+                       "اعمال، تغییرات نشان داده می‌شود.")
+        hint5.setObjectName("Hint")
+        hint5.setWordWrap(True)
+        l5.addWidget(hint5)
+        self.bt_state = QLabel("")
+        self.bt_state.setWordWrap(True)
+        l5.addWidget(self.bt_state)
+        r5b = QHBoxLayout()
+        r5b.addWidget(self.button("بررسی و راه‌اندازی", self.backup_setup, primary=True))
+        r5b.addWidget(self.button("وضعیت", self.backup_status))
+        r5b.addWidget(self.button("برداشتن", self.backup_remove))
+        l5.addLayout(r5b)
+        lay.addWidget(c5)
+
         c3, l3 = card("گزارش")
         l3.addWidget(self.bar)
         l3.addWidget(self.log)
@@ -1103,6 +1133,93 @@ class ServicesPage(RouterPage):
     def reload(self):
         self.fill_routers(self.combo)
         self.fill_routers(self.um2_combo)
+        self.fill_routers(self.bt_combo)
+
+    def backup_setup(self):
+        import backuptunnel as bt
+        r = self.target()
+        if not r:
+            return
+        tgt = self.chosen(self.bt_combo)
+        if not tgt:
+            return self.fail("در تب «سرورها و بکاپ» سرور لینوکس را تعریف و از تب «سرور جدید» نصب کنید.")
+        params = st.decrypt_blob(tgt.get("params")) or {}
+        if not (params.get("awg") or {}).get("priv"):
+            return self.fail("روی این سرور لینوکس AmneziaWG نصب نشده است (از تب «سرور جدید» نصبش کنید).")
+
+        def look(log, progress):
+            with router_connector(r)() as c:
+                return bt.inspect(c)
+
+        def confirm(plan):
+            if not plan.ok:
+                return self.fail("راه‌اندازی خودکار ممکن نیست:\n" + "\n".join(plan.problems))
+            if QMessageBox.question(self, "تانل پشتیبان", bt.describe(plan, tgt["host"]) + "\n\nادامه؟") \
+                    != QMessageBox.Yes:
+                return
+
+            def job(log, progress):
+                with router_connector(r)() as c:
+                    return bt.setup(c, linux_connector(tgt), params, tgt["host"], log=log)
+
+            def done(p):
+                tgt["params"] = st.encrypt_blob(p)
+                self.settings.save()
+                QMessageBox.information(self, "انجام شد", "تانل پشتیبان آماده است. «وضعیت» را بزنید تا اتصال "
+                                        "به سرور لینوکس (handshake) را ببینید.")
+                self.backup_status()
+            self.run(job, done, clear=False)
+        self.run(look, confirm)
+
+    def backup_status(self):
+        import backuptunnel as bt
+        r = self.target()
+        if not r:
+            return
+        tgt = self.chosen(self.bt_combo)
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                s = bt.status(c)
+            if s.get("installed") and tgt:
+                params = st.decrypt_blob(tgt.get("params")) or {}
+                static = (params.get("awg") or {}).get("static") or {}
+                if static:
+                    with linux_connector(tgt)() as h:
+                        s["linux"] = linux.static_peer_status(h, next(iter(static)))
+            return s
+
+        def done(s):
+            if not s.get("installed"):
+                self.bt_state.setText("تانل پشتیبان راه‌اندازی نشده است.")
+                return
+            lines = []
+            hs = s.get("handshake")
+            lines.append("اتصال به سرور لینوکس: %s" % ("✓ آخرین handshake %s پیش" % hs if hs else "✗ هنوز وصل نشده"))
+            lines.append("حجم از تانل پشتیبان: دریافت %s، ارسال %s" % (human_size(s.get("rx", 0)),
+                                                                  human_size(s.get("tx", 0))))
+            for table, via in sorted((s.get("using") or {}).items()):
+                if table != "main":
+                    lines.append("جدول %s الان از: %s" % (table, "AmneziaWG (پشتیبان)" if via == "AmneziaWG"
+                                                           else "GRE (%s)" % via))
+            lines.append("کانتینر رله: %s" % s.get("relay"))
+            self.bt_state.setText("\n".join(lines))
+        self.run(job, done)
+
+    def backup_remove(self):
+        import backuptunnel as bt
+        r = self.target()
+        if not r:
+            return
+        if QMessageBox.question(self, "برداشتن تانل پشتیبان",
+                                "همه‌ی چیزهایی که تانل پشتیبان ساخته از روتر برداشته می‌شود و تنظیمات GRE مثل "
+                                "قبل می‌شود. ادامه؟") != QMessageBox.Yes:
+            return
+
+        def job(log, progress):
+            with router_connector(r)() as c:
+                bt.remove(c, log)
+        self.run(job, lambda _: self.bt_state.setText("تانل پشتیبان برداشته شد."))
 
     def setup_um2(self):
         import um2

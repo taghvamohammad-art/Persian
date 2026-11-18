@@ -1,0 +1,377 @@
+"""Backup tunnel of the main router: SSTP users' traffic goes over the GRE
+tunnel to the router abroad as before; when GRE stops answering, it goes
+over AmneziaWG to a Linux server instead, and back when GRE returns.
+
+    SSTP user -> main router -[GRE]-> router abroad -> internet      (normal)
+    SSTP user -> main router -[WireGuard]-> relay container
+                 -[AmneziaWG]-> Linux server -> internet             (backup)
+
+RouterOS only speaks plain WireGuard, which Iran's filtering drops, so a
+small relay in a container (server/mikrotik/awgrelay.py) turns it into
+AmneziaWG. The existing setup is only added to: a route with a higher
+distance in the same routing table as the GRE route, and a health check
+(check-gateway=ping) on the GRE route so RouterOS notices it is down.
+Everything added carries the comment "pv-backup"; remove() takes it out.
+"""
+
+import ipaddress
+import json
+import os
+import re
+import sys
+
+import services as sv
+from publisher import ReleaseError
+from routeros import RouterOSError, q
+
+TAG = "pv-backup"
+WG = "wg-pvbackup"
+WG_PORT = 13233
+MTU = 1380
+TUN_ADDR = "10.64.0.2"            # the router inside the Linux server's AmneziaWG network
+TUN_GW = "10.64.0.1"
+RELAY_PORT = 51820
+RELAY = {"comment": "pvawg", "veth": "veth-pvawg", "ip": "172.17.0.4", "dir": "pvawg",
+         "cmd": "python3 /app/awgrelay.py /app/relay.json"}
+STATE = "pvawg/state.json"         # what was changed on the existing setup, to undo it
+MIN_FREE = 80 * 1024 * 1024        # the Python image of the relay container
+
+
+class Plan:
+    def __init__(self):
+        self.routes = []           # GRE default routes: dict(id, table, gateway, distance, check, gre)
+        self.gres = {}             # name -> dict(remote, keepalive, nets)
+        self.problems = []         # why it cannot be set up automatically
+        self.warnings = []
+        self.changes = []          # what will be changed on the existing setup (text)
+        self.tables = []
+
+    @property
+    def ok(self):
+        return not self.problems and bool(self.routes)
+
+
+def _lines(out, kind):
+    for line in out.splitlines():
+        parts = line.strip().split("|")
+        if parts and parts[0] == kind:
+            yield parts[1:]
+
+
+def read_router(r):
+    """Raw facts: GRE interfaces, addresses, default routes, PPP profiles."""
+    out = r.run(
+        ':foreach i in=[/interface gre find] do={:put ("g|" . [/interface gre get $i name] . "|" . '
+        '[:tostr [/interface gre get $i remote-address]] . "|" . [:tostr [/interface gre get $i keepalive]] . "|" . '
+        '[:tostr [/interface gre get $i running]])}; '
+        ':foreach i in=[/ip address find] do={:put ("a|" . [/ip address get $i interface] . "|" . '
+        '[/ip address get $i address])}; '
+        ':foreach i in=[/ip route find where dst-address=0.0.0.0/0 and disabled=no] do={:put ("r|" . $i . "|" . '
+        '[:tostr [/ip route get $i gateway]] . "|" . [:tostr [/ip route get $i routing-table]] . "|" . '
+        '[:tostr [/ip route get $i distance]] . "|" . [:tostr [/ip route get $i check-gateway]] . "|" . '
+        '[:tostr [/ip route get $i comment]] . "|" . [:tostr [/ip route get $i active]])}; '
+        ':foreach i in=[/ppp profile find] do={:put ("p|" . [/ppp profile get $i name] . "|" . '
+        '[:tostr [/ppp profile get $i dns-server]])}')
+    gres = {}
+    for name, remote, keepalive, running in _lines(out, "g"):
+        gres[name] = {"remote": remote, "keepalive": keepalive, "running": running == "true", "nets": []}
+    addrs = []
+    for iface, addr in _lines(out, "a"):
+        addrs.append((iface, addr))
+        if iface in gres:
+            try:
+                gres[iface]["nets"].append(ipaddress.ip_interface(addr).network)
+            except ValueError:
+                pass
+    routes = []
+    for parts in _lines(out, "r"):
+        if len(parts) < 7:
+            continue
+        rid, gw, table, dist, check, comment, active = parts[:7]
+        routes.append({"id": rid, "gateway": gw, "table": table or "main", "distance": int(dist or 1),
+                       "check": check, "comment": comment, "active": active == "true"})
+    profiles = [(n, d) for n, d in _lines(out, "p")]
+    return gres, addrs, routes, profiles
+
+
+def gre_of(gateway, gres):
+    """The GRE interface a route's gateway goes through, or None."""
+    for gw in sv.addr_list(gateway):
+        ip, _, iface = gw.partition("%")
+        if ip in gres:
+            return ip
+        if iface in gres:
+            return iface
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        for name, g in gres.items():
+            if any(a in n for n in g["nets"]):
+                return name
+    return None
+
+
+def make_plan(gres, addrs, routes, profiles):
+    plan = Plan()
+    plan.gres = gres
+    if not gres:
+        plan.problems.append("روی این روتر تانل GRE پیدا نشد.")
+        return plan
+    for rt in routes:
+        if rt["comment"] == TAG:
+            continue
+        g = gre_of(rt["gateway"], gres)
+        if g:
+            rt["gre"] = g
+            plan.routes.append(rt)
+    if not plan.routes:
+        plan.problems.append("مسیر پیش‌فرضی (0.0.0.0/0) که از GRE برود پیدا نشد. مسیرهای پیش‌فرض روتر: %s"
+                             % ("، ".join("%s (جدول %s)" % (r["gateway"], r["table"]) for r in routes) or "هیچ"))
+        return plan
+    if any(rt["table"] == "main" for rt in plan.routes):
+        plan.problems.append("مسیر پیش‌فرض جدول main از GRE می‌رود (همه‌ی ترافیک خود روتر). این حالت خودکار "
+                             "پشتیبانی نمی‌شود چون تانل پشتیبان هم باید از اینترنت ایران برود.")
+    plan.tables = sorted({rt["table"] for rt in plan.routes})
+    for rt in plan.routes:
+        ip = sv.addr_list(rt["gateway"])[0].partition("%")[0]
+        is_ip = bool(re.fullmatch(r"[\d.]+", ip))
+        if is_ip and not rt["check"]:
+            plan.changes.append("روی مسیر %s (جدول %s) بررسی سلامت check-gateway=ping گذاشته می‌شود."
+                                % (rt["gateway"], rt["table"]))
+        elif not is_ip and not gres[rt["gre"]]["keepalive"]:
+            plan.changes.append("روی تانل %s گزینه‌ی keepalive=10s,3 فعال می‌شود تا قطعی را بفهمد." % rt["gre"])
+    nets = [n for g in gres.values() for n in g["nets"]]
+    for name, dns in profiles:
+        for d in sv.addr_list(dns):
+            try:
+                if any(ipaddress.ip_address(d) in n for n in nets):
+                    plan.warnings.append("DNS پروفایل PPP «%s» (%s) آن طرف GRE است؛ وقتی GRE قطع است کاربران "
+                                         "نام‌ها را باز نمی‌کنند. بهتر است DNS عمومی (مثل 1.1.1.1) یا خود روتر باشد."
+                                         % (name, d))
+            except ValueError:
+                pass
+    used = [a for i, a in addrs if i != WG and a.split("/")[0] in (TUN_ADDR, RELAY["ip"])]
+    if used:
+        plan.problems.append("آدرس %s روی روتر استفاده شده است." % "، ".join(used))
+    return plan
+
+
+def inspect(r):
+    return make_plan(*read_router(r))
+
+
+def describe(plan, server):
+    lines = ["تانل پشتیبان AmneziaWG به %s:" % server, ""]
+    for rt in plan.routes:
+        lines.append("• ترافیکی که الان از %s (جدول %s، فاصله %d) می‌رود، اگر GRE قطع شد از AmneziaWG می‌رود."
+                     % (rt["gateway"], rt["table"], rt["distance"]))
+    lines += ["• یک کانتینر کوچک (رله) و اینترفیس %s ساخته می‌شود؛ همه با توضیح %s." % (WG, TAG)]
+    lines += ["• " + c for c in plan.changes]
+    if plan.warnings:
+        lines += [""] + ["⚠ " + w for w in plan.warnings]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- router side
+
+def relay_source():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (here, getattr(sys, "_MEIPASS", None), os.path.join(here, "..", "..", "server", "mikrotik")):
+        if d and os.path.isfile(os.path.join(d, "awgrelay.py")):
+            with open(os.path.join(d, "awgrelay.py"), "rb") as f:
+                return f.read()
+    raise ReleaseError("فایل awgrelay.py همراه برنامه پیدا نشد.")
+
+
+def ensure_wireguard(r, log=print):
+    """The router's WireGuard interface; returns its public key."""
+    if sv.count(r, "/interface wireguard", "name=%s" % q(WG)) == 0:
+        log("ساخت اینترفیس %s…" % WG)
+        r.run("/interface wireguard add name=%s listen-port=%d mtu=%d comment=%s" % (WG, WG_PORT, MTU, TAG))
+    if sv.count(r, "/ip address", "interface=%s" % q(WG)) == 0:
+        r.run("/ip address add address=%s/32 network=%s interface=%s comment=%s" % (TUN_ADDR, TUN_GW, WG, TAG))
+    return r.run(":put [/interface wireguard get [find where name=%s] public-key]" % q(WG)).strip()
+
+
+def ensure_peer(r, server_public, endpoint, port, log=print):
+    where = "interface=%s" % q(WG)
+    if sv.count(r, "/interface wireguard peers", where) == 0:
+        r.run("/interface wireguard peers add interface=%s public-key=%s endpoint-address=%s endpoint-port=%d "
+              "allowed-address=0.0.0.0/0 persistent-keepalive=25s comment=%s"
+              % (WG, q(server_public), endpoint, port, TAG))
+    else:
+        r.run("/interface wireguard peers set [find where %s] public-key=%s endpoint-address=%s endpoint-port=%d "
+              "allowed-address=0.0.0.0/0 persistent-keepalive=25s" % (where, q(server_public), endpoint, port))
+
+
+def relay_config(server_ip, awg, router_public):
+    cfg = {k: awg[k] for k in ("port", "jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4")}
+    cfg.update(server=server_ip, server_public=awg["public"], router_public=router_public, listen=RELAY_PORT)
+    return cfg
+
+
+def free_space(r):
+    try:
+        return int(r.run(":put [/system resource get free-hdd-space]").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+
+
+def install_relay(r, cfg, log=print):
+    exists = sv.count(r, "/container", "comment=%s" % q(RELAY["comment"])) > 0
+    if not exists:
+        free = free_space(r)
+        if free is not None and free < MIN_FREE:
+            raise RouterOSError("فضای خالی روتر %d مگابایت است؛ برای کانتینر رله حدود ۸۰ مگابایت لازم است."
+                                % (free // 2 ** 20))
+    sv.ensure_network(r, RELAY, log)
+    sv.ensure_dir(r, RELAY["dir"])
+    r.put(RELAY["dir"] + "/awgrelay.py", relay_source())
+    r.put(RELAY["dir"] + "/relay.json", json.dumps(cfg, indent=1).encode())
+    log("کانتینر رله…")
+    sv.ensure_container(r, RELAY, log)
+    if exists:
+        sv.restart(r, RELAY, log)
+
+
+def _place(r, menu):
+    return " place-before=0" if sv.count(r, menu) else ""
+
+
+def _add_once(r, menu, where, cmd):
+    if sv.count(r, menu, where) == 0:
+        r.run("%s add %s%s" % (menu, cmd, _place(r, menu)))
+
+
+def configure_routes(r, plan, relay_ip=RELAY["ip"], log=print):
+    """Backup route next to each GRE route, health checks, NAT and MSS."""
+    state = {"check": [], "keepalive": []}
+    old = sv.file_text(r, STATE)
+    if old:
+        try:
+            state.update(json.loads(old))
+        except ValueError:
+            pass
+    if relay_ip:
+        # the relay's own packets must leave through the Iranian internet,
+        # whatever marks the existing setup puts on the router's traffic
+        _add_once(r, "/routing rule", "comment=%s" % q(TAG),
+                  "src-address=%s/32 action=lookup-only-in-table table=main comment=%s" % (relay_ip, TAG))
+    for table in plan.tables:
+        dist = max(rt["distance"] for rt in plan.routes if rt["table"] == table) + 1
+        where = "comment=%s and routing-table=%s" % (q(TAG), q(table))
+        if sv.count(r, "/ip route", where) == 0:
+            log("مسیر پشتیبان در جدول %s (فاصله %d)…" % (table, dist))
+            r.run("/ip route add dst-address=0.0.0.0/0 gateway=%s routing-table=%s distance=%d comment=%s"
+                  % (WG, q(table), dist, TAG))
+        else:
+            r.run("/ip route set [find where %s] gateway=%s distance=%d" % (where, WG, dist))
+    for rt in plan.routes:
+        gw = sv.addr_list(rt["gateway"])[0].partition("%")[0]
+        if re.fullmatch(r"[\d.]+", gw):
+            if not rt["check"]:
+                log("بررسی سلامت روی مسیر %s…" % rt["gateway"])
+                r.run("/ip route set %s check-gateway=ping" % rt["id"])
+                state["check"].append([rt["table"], rt["gateway"]])
+        elif not plan.gres[rt["gre"]]["keepalive"]:
+            log("keepalive روی %s…" % rt["gre"])
+            r.run("/interface gre set [find where name=%s] keepalive=10s,3" % q(rt["gre"]))
+            state["keepalive"].append(rt["gre"])
+    _add_once(r, "/ip firewall nat", "comment=%s" % q(TAG),
+              "chain=srcnat out-interface=%s action=masquerade comment=%s" % (WG, TAG))
+    _add_once(r, "/ip firewall mangle", "comment=%s and chain=forward" % q(TAG),
+              "chain=forward out-interface=%s protocol=tcp tcp-flags=syn action=change-mss "
+              "new-mss=clamp-to-pmtu passthrough=yes comment=%s" % (WG, TAG))
+    if sv.count(r, "/ip firewall filter", "chain=forward"):
+        _add_once(r, "/ip firewall filter", "comment=%s and out-interface=%s" % (q(TAG), WG),
+                  "chain=forward out-interface=%s action=accept comment=%s" % (WG, TAG))
+        _add_once(r, "/ip firewall filter", "comment=%s and in-interface=%s" % (q(TAG), WG),
+                  "chain=forward in-interface=%s connection-state=established,related action=accept comment=%s"
+                  % (WG, TAG))
+    if relay_ip:
+        sv.ensure_input_accept(r, relay_ip, "udp", str(WG_PORT), TAG)
+    state["check"] = [list(x) for x in {tuple(x) for x in state["check"]}]
+    state["keepalive"] = sorted(set(state["keepalive"]))
+    sv.ensure_dir(r, RELAY["dir"])
+    r.put(STATE, json.dumps(state).encode())
+
+
+def setup(r, linux_connect, p, server_ip, log=print, relay_endpoint=None):
+    """Everything, on the router r and the Linux server; p are the server's
+    params (updated with the router's peer, to be saved by the caller).
+    relay_endpoint: (host, port) of a relay that runs elsewhere (tests)."""
+    import linux
+    plan = inspect(r)
+    if not plan.ok:
+        raise RouterOSError("\n".join(plan.problems) or "مسیر GRE پیدا نشد.")
+    awg = p.get("awg") or {}
+    if not awg.get("priv"):
+        raise ReleaseError("این سرور لینوکس AmneziaWG ندارد.")
+    pub = ensure_wireguard(r, log)
+    h = linux_connect()
+    try:
+        p = linux.add_static_peer(h, p, pub, TUN_ADDR, log)
+    finally:
+        h.close()
+    awg = p["awg"]
+    if relay_endpoint:
+        ensure_peer(r, awg["public"], relay_endpoint[0], relay_endpoint[1], log)
+    else:
+        install_relay(r, relay_config(server_ip, awg, pub), log)
+        ensure_peer(r, awg["public"], RELAY["ip"], RELAY_PORT, log)
+    configure_routes(r, plan, relay_ip=None if relay_endpoint else RELAY["ip"], log=log)
+    log("✓ تانل پشتیبان آماده است")
+    return p
+
+
+# ---------------------------------------------------------------- status and removal
+
+def status(r):
+    """dict: installed, handshake (RouterOS text or ""), rx, tx, using (per table: "GRE"/"AmneziaWG"/"-"),
+    relay (container state)."""
+    out = {"installed": sv.count(r, "/interface wireguard", "name=%s" % q(WG)) > 0}
+    if not out["installed"]:
+        return out
+    res = r.run(':local i [/interface wireguard peers find where interface=%s]; :if ([:len $i] > 0) do={'
+                ':put ("h|" . [:tostr [/interface wireguard peers get ($i->0) last-handshake]] . "|" . '
+                '[/interface wireguard peers get ($i->0) rx] . "|" . [/interface wireguard peers get ($i->0) tx])}; '
+                ':foreach i in=[/ip route find where dst-address=0.0.0.0/0 and active] do={:put ("r|" . '
+                '[:tostr [/ip route get $i routing-table]] . "|" . [:tostr [/ip route get $i gateway]] . "|" . '
+                '[:tostr [/ip route get $i comment]])}' % q(WG))
+    for hs, rx, tx in _lines(res, "h"):
+        import monitor
+        out.update(handshake=hs, rx=monitor._size(rx or 0), tx=monitor._size(tx or 0))
+    using = {}
+    for table, gw, comment in _lines(res, "r"):
+        using[table or "main"] = "AmneziaWG" if comment == TAG or gw == WG else gw
+    out["using"] = using
+    out["relay"] = sv.container_status(r, RELAY) if sv.has_package(r, "container") else "none"
+    return out
+
+
+def remove(r, log=print):
+    state = {"check": [], "keepalive": []}
+    try:
+        state.update(json.loads(sv.file_text(r, STATE) or "{}"))
+    except ValueError:
+        pass
+    for table, gw in state["check"]:
+        r.run("/ip route unset [find where routing-table=%s and gateway=%s and dst-address=0.0.0.0/0] "
+              "check-gateway" % (q(table), q(gw)), check=False)
+    for gre in state["keepalive"]:
+        r.run("/interface gre set [find where name=%s] !keepalive" % q(gre), check=False)
+    for menu in ("/ip route", "/ip firewall nat", "/ip firewall mangle", "/ip firewall filter", "/routing rule",
+                 "/ip address"):
+        r.run("%s remove [find where comment=%s]" % (menu, q(TAG)), check=False)
+    if sv.has_package(r, "container"):
+        if sv.count(r, "/container", "comment=%s" % q(RELAY["comment"])):
+            sv.stop(r, RELAY, log)
+            r.run("/container remove [find where comment=%s]" % q(RELAY["comment"]))
+        r.run("/container mounts remove [find where list=%s]" % q(RELAY["dir"]), check=False)
+    r.run("/interface wireguard peers remove [find where interface=%s]" % q(WG), check=False)
+    r.run("/interface wireguard remove [find where name=%s]" % q(WG), check=False)
+    r.run("/interface bridge port remove [find where interface=%s]" % q(RELAY["veth"]), check=False)
+    r.run("/interface veth remove [find where name=%s]" % q(RELAY["veth"]), check=False)
+    r.remove(STATE)
+    log("✓ تانل پشتیبان برداشته شد")

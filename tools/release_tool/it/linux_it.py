@@ -245,6 +245,8 @@ def main():
             problems.append("awg peer missing")
         else:
             problems += awg_client_test(entry)
+            step("backup tunnel: RouterOS WireGuard -> relay -> AmneziaWG")
+            problems += backup_tunnel_test(params, connect_linux, ip)
     else:
         # Launchpad (the AmneziaWG PPA) is sometimes unreachable from GitHub's
         # runners; that is their outage, not ours
@@ -275,6 +277,68 @@ def main():
     if problems:
         raise SystemExit("PROBLEMS:\n  " + "\n  ".join(problems))
     print("\nLINUX ALL OK")
+
+
+def backup_tunnel_test(params, connect_linux, server_ip):
+    """GRE route on UM1 that goes nowhere; the backup takes over through the
+    relay (run here on the runner: the CHR reaches it at 10.0.2.2)."""
+    import backuptunnel as bt
+    relay_dir = os.path.join(HERE, "..", "..", "..", "server", "mikrotik")
+    problems = []
+    with base.connector("A")() as r:
+        for c in ["/routing table add name=to-gre fib",
+                  "/interface gre add name=gre-test remote-address=192.0.2.1",
+                  "/interface gre set [find where name=gre-test] !keepalive",
+                  "/ip address add address=10.99.0.1/30 interface=gre-test",
+                  "/ip route add dst-address=0.0.0.0/0 gateway=10.99.0.2 routing-table=to-gre"]:
+            print(">", c)
+            r.run(c)
+        plan = bt.inspect(r)
+        print(bt.describe(plan, server_ip), plan.problems)
+        if not plan.ok or not plan.changes:
+            return ["backup plan: %s %s" % (plan.problems, plan.changes)]
+        # the relay's view: the router's public key is known once its interface exists
+        pub = bt.ensure_wireguard(r)
+        cfg = bt.relay_config("127.0.0.1", params["awg"], pub)
+        cfg.update(listen=51899)
+        with open("/tmp/relay.json", "w") as f:
+            json.dump(cfg, f)
+        relay = subprocess.Popen([sys.executable, os.path.join(relay_dir, "awgrelay.py"), "/tmp/relay.json"],
+                                 stdout=open("/tmp/relay.log", "w"), stderr=subprocess.STDOUT)
+        try:
+            bt.setup(r, connect_linux, params, server_ip, log=print, relay_endpoint=(base.SLIRP_HOST, 51899))
+            ok = False
+            for _ in range(20):
+                time.sleep(3)
+                out = r.run("/ping 10.64.0.1 routing-table=to-gre count=3", check=False)
+                print(out.strip().splitlines()[-2:])
+                if re.search(r"received=[123]", out):
+                    ok = True
+                    break
+            st = bt.status(r)
+            print(st)
+            print(r.run("/ip route print where routing-table=to-gre", check=False))
+            if not ok:
+                problems.append("backup tunnel: no ping through AmneziaWG")
+            if st.get("using", {}).get("to-gre") != "AmneziaWG":
+                problems.append("backup tunnel: to-gre does not use the backup (%s)" % st.get("using"))
+            if not r.run(":put [/ip route get [find where gateway=10.99.0.2] check-gateway]").strip():
+                problems.append("backup tunnel: no health check on the GRE route")
+            time.sleep(25)                      # a pv-agent round: the router's peer must stay
+            if pub not in sh("sudo awg show awg0 peers", check=False):
+                problems.append("backup tunnel: pv-agent removed the router's peer")
+            bt.remove(r, log=print)
+            left = sum(int(r.run(":put [:len [%s find where comment=%s]]" % (m, bt.TAG)).strip() or 0)
+                       for m in ("/ip route", "/ip firewall nat", "/ip firewall mangle", "/ip address"))
+            if left or r.run(":put [/ip route get [find where gateway=10.99.0.2] check-gateway]").strip():
+                problems.append("backup tunnel: remove() left %d items or the health check" % left)
+        finally:
+            relay.terminate()
+            print(open("/tmp/relay.log").read()[-1500:])
+        for c in ["/ip route remove [find where gateway=10.99.0.2]", "/ip address remove [find where interface=gre-test]",
+                  "/interface gre remove [find where name=gre-test]", "/routing table remove [find where name=to-gre]"]:
+            r.run(c, check=False)
+    return problems
 
 
 DOWNLOADS = ["https://speed.cloudflare.com/__down?bytes=8000000", "https://proof.ovh.net/files/10Mb.dat"]

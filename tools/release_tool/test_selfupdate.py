@@ -80,6 +80,7 @@ class SelfUpdateTests(unittest.TestCase):
         self.assertEqual(su.overlay_name("server/linux/site/index.html"), "site/index.html")
         self.assertEqual(su.overlay_name("server/umstatus/umstatus.py"), "umstatus.py")
         self.assertIsNone(su.overlay_name("server/umstatus/test_umstatus.py"))
+        self.assertEqual(su.overlay_name("server/mikrotik/awgrelay.py"), "awgrelay.py")
 
     def test_first_then_only_changes(self):
         gh = FakeGitHub(repo_files())

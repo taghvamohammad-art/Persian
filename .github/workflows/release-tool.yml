@@ -9,6 +9,7 @@ on:
       - "tools/icon/**"
       - "server/umstatus/umstatus.py"
       - "server/linux/**"
+      - "server/mikrotik/**"
       - "mobile/**"
       - ".github/workflows/release-tool.yml"
   workflow_dispatch:
@@ -35,7 +36,7 @@ jobs:
 
       - name: Unit tests
         working-directory: tools/release_tool
-        run: python -m unittest test_backup test_provision -v
+        run: python -m unittest test_backup test_provision test_backuptunnel -v
 
       - name: Download RouterOS ${{ env.ROS_VERSION }}
         run: |
@@ -115,9 +116,10 @@ jobs:
               print("seed", seed, "ok:", len(new), "bytes from a", os.path.getsize("/tmp/p"), "byte patch")
           PY
 
-      - name: Unit tests (agent)
-        working-directory: server/linux
-        run: python -m unittest test_pv_agent -v
+      - name: Unit tests (agent and relay)
+        run: |
+          (cd server/linux && python -m unittest test_pv_agent -v)
+          (cd server/mikrotik && python -m unittest test_awgrelay -v)
 
       - name: Root SSH to this runner
         run: |
@@ -173,7 +175,7 @@ jobs:
             --icon tools/icon/app.ico `
             --add-data "tools/icon/icon-512.png;." `
             --add-data "tools/release_tool/BASE;." `
-            --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" `
+            --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/site;site" --add-data "server/mikrotik/awgrelay.py;." `
             --paths tools --paths tools/release_tool `
             --hidden-import release_gui --hidden-import bsdiff4 @hidden `
             tools/release_tool/launcher.py

@@ -44,7 +44,8 @@ def overlay_name(path):
         return None
     if path.startswith("tools/") and path.count("/") == 1 and name.endswith(".py"):
         return name
-    if path in ("server/umstatus/umstatus.py", "server/linux/pv_agent.py", "server/linux/pvcreds.py"):
+    if path in ("server/umstatus/umstatus.py", "server/linux/pv_agent.py", "server/linux/pvcreds.py",
+                "server/mikrotik/awgrelay.py"):
         return name
     if path.startswith("server/linux/site/"):
         return "site/" + path[len("server/linux/site/"):]

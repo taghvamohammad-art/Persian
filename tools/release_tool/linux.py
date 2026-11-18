@@ -489,6 +489,44 @@ PostDown = iptables -t nat -D POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERA
     return True
 
 
+def add_static_peer(h, p, public, address, log=print):
+    """A non-user AmneziaWG peer (the main router's backup tunnel) that
+    pv-agent keeps; saved in the params too, so a re-install keeps it."""
+    if not h.run("test -f /etc/amnezia/amneziawg/awg0.conf && echo Y || true").strip():
+        raise LinuxError("AmneziaWG روی این سرور نصب نیست؛ اول سرور را از تب «سرور جدید» نصب کنید.")
+    static = p["awg"].setdefault("static", {})
+    for k in [k for k, v in static.items() if v == address and k != public]:
+        del static[k]                       # an earlier key of the same router
+    static[public] = address
+    cfg = json.loads(h.run("cat /etc/pv-agent/config.json"))
+    cfg.setdefault("awg", {"iface": "awg0"})["static"] = dict(static)
+    log("ثبت روتر روی AmneziaWG سرور لینوکس…")
+    h.write(AGENT_DIR + "/pv_agent.py", source("pv_agent.py"))
+    h.write(AGENT_DIR + "/pvcreds.py", source("pvcreds.py"))
+    h.write("/etc/pv-agent/config.json", json.dumps(cfg, indent=1), "600")
+    h.run("awg set awg0 peer %s allowed-ips %s/32" % (shell_quote(public), address))
+    h.run("systemctl restart pv-agent")
+    if not p["awg"].get("public"):
+        p["awg"]["public"] = h.run("echo %s | awg pubkey" % p["awg"]["priv"]).strip()
+    return p
+
+
+def static_peer_status(h, public):
+    """(seconds since the last handshake or None, received, sent) of one peer."""
+    hs = h.run("awg show awg0 latest-handshakes", check=False)
+    tr = h.run("awg show awg0 transfer", check=False)
+    age, rx, tx = None, 0, 0
+    for line in hs.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == public and parts[1].isdigit() and int(parts[1]):
+            age = max(0, int(time.time()) - int(parts[1]))
+    for line in tr.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[0] == public:
+            rx, tx = int(parts[1]), int(parts[2])
+    return age, rx, tx
+
+
 def awg_params():
     hs = set()
     while len(hs) < 4:
@@ -666,7 +704,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
             "interval": p.get("interval", 60),
         }
         if awg:
-            agent_cfg["awg"] = {"iface": "awg0"}
+            agent_cfg["awg"] = {"iface": "awg0", "static": dict(p["awg"].get("static") or {})}
         h.write("/etc/pv-agent/config.json", json.dumps(agent_cfg, indent=1), "600")
         h.write("/etc/systemd/system/pv-agent.service", """[Unit]
 Description=Persian VPN agent (User Manager sync and accounting)
