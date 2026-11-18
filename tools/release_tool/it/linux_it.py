@@ -315,7 +315,11 @@ def backup_tunnel_test(params, connect_linux, server_ip):
                 if re.search(r"received=[123]", out):
                     ok = True
                     break
-            st = bt.status(r)
+            for _ in range(30):                 # check-gateway needs a few failed pings to drop the GRE route
+                st = bt.status(r)
+                if st.get("using", {}).get("to-gre") == "AmneziaWG":
+                    break
+                time.sleep(5)
             print(st)
             print(r.run("/ip route print where routing-table=to-gre", check=False))
             if not ok:
