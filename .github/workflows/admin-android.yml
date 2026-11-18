@@ -39,7 +39,7 @@ jobs:
              ../../../server/linux/pvcreds.py ../../../server/mikrotik/awgrelay.py .
           cp -r ../../../server/linux/site site
           cp ../BASE BASE_ANDROID
-          mkdir -p assets && cp ../../icon/icon-512.png assets/icon.png
+          mkdir -p assets && cp ../icon.png assets/icon.png
           ls
 
       - uses: actions/setup-go@v5
@@ -104,6 +104,13 @@ jobs:
           python -m pip install --disable-pip-version-check "flet-cli==1.1.2"
           cd tools/admin_android
           flet build apk --yes --no-rich-output --build-number ${{ github.run_number }} --build-version 1.0.${{ github.run_number }} -v
+
+      - name: Check the APK is its own app (not an update of the VPN app)
+        run: |
+          apk=$(ls tools/admin_android/build/apk/*.apk | head -1)
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$aapt2" dump badging "$apk" | grep -E "^package:|^application-label:" | tee badging.txt
+          grep -q "name='ir.persianvpn.admin'" badging.txt
 
       - name: Remove keystore
         if: always()
