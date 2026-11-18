@@ -448,5 +448,36 @@ class ReleaseFlow(unittest.TestCase):
         self.assertIn("توکن", str(ctx.exception))
 
 
+
+class SyncWorkspaceTests(unittest.TestCase):
+    """A new device fetches the published files it lacks from the router."""
+
+    def test_fetches_only_missing_and_checks_hash(self):
+        import hashlib, json, tempfile, shutil
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        apk, win = b"PK-apk-bytes", b"MZ-win"
+        cfg = {"app_update": {"sha256": hashlib.sha256(apk).hexdigest()},
+               "windows_update": {"sha256": hashlib.sha256(win).hexdigest()},
+               "app_update_beta": {"sha256": "00" * 32}}
+        with open(os.path.join(d, "config.json"), "w") as f:
+            json.dump(cfg, f)
+        with open(os.path.join(d, "win.exe"), "wb") as f:
+            f.write(win)
+
+        class Client:
+            calls = []
+
+            def download(self, path, progress=None):
+                self.calls.append(path)
+                return {"/v1/app.apk": apk, "/v1/beta.apk": b"other"}.get(path)
+        c = Client()
+        ws = pb.Workspace(d)
+        got = pb.sync_workspace(ws, log=lambda *_: None, client=c)
+        self.assertEqual(got, ["app.apk"])
+        self.assertEqual(c.calls, ["/v1/app.apk", "/v1/beta.apk"])     # win.exe already right
+        self.assertFalse(os.path.exists(os.path.join(d, "beta.apk")))   # wrong hash: not kept
+        self.assertEqual(pb.sync_workspace(ws, log=lambda *_: None, client=c), [])
+
 if __name__ == "__main__":
     unittest.main()

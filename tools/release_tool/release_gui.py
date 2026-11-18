@@ -1972,6 +1972,10 @@ class MainWindow(QMainWindow, FeaturesMixin):
         self.btn_new.clicked.connect(lambda: self.check_features(False))
         head.addWidget(self.btn_new, 0, Qt.AlignTop)
         QTimer.singleShot(2000, lambda: self.check_features(True))
+        phone = QPushButton("📱 انتقال به گوشی")
+        phone.setToolTip("همه‌ی تنظیمات، رمزها و کلید امضا در یک فایل رمزدار برای برنامه‌ی اندروید «Persian Admin»")
+        phone.clicked.connect(self.transfer_to_phone)
+        head.addWidget(phone, 0, Qt.AlignTop)
         gear = QPushButton("⚙")
         gear.setObjectName("Gear")
         gear.setToolTip("تنظیمات")
@@ -2162,6 +2166,36 @@ class MainWindow(QMainWindow, FeaturesMixin):
             self.refresh_state()
             self.servers.reload()
             self.check_backups()
+
+    def transfer_to_phone(self):
+        """Everything the phone version needs, in one file locked with a fresh
+        password that is shown here (and never stored)."""
+        import secrets as _secrets
+        import toolbackup
+        alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+        pw = "-".join("".join(_secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
+        start = os.path.join(os.path.expanduser("~"), "Desktop", "persian-admin%s" % bk.EXT)
+        path, _ = QFileDialog.getSaveFileName(self, "فایل انتقال به گوشی", start, "Persian VPN (*%s)" % bk.EXT)
+        if not path:
+            return
+        try:
+            blob = toolbackup.export_bytes(self.settings, pw)
+            with open(path, "wb") as f:
+                f.write(blob)
+        except (pb.ReleaseError, OSError) as e:
+            return self.fail(str(e))
+        box = QMessageBox(self)
+        box.setWindowTitle("انتقال به گوشی")
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.setText(
+            "فایل ساخته شد:\n%s\n\n"
+            "رمز فایل (فقط همین‌جا نشان داده می‌شود؛ جایی ذخیره نمی‌شود):\n\n    %s\n\n"
+            "۱. برنامه‌ی Persian Admin را روی گوشی نصب و باز کنید.\n"
+            "۲. این فایل را به گوشی بفرستید (مثلاً تلگرام ← Saved Messages، یا کابل).\n"
+            "۳. در برنامه «وارد کردن از فایل» را بزنید، فایل را انتخاب کنید و این رمز را وارد کنید.\n"
+            "۴. بعد از وارد کردن، فایل را از تلگرام و این کامپیوتر پاک کنید.\n\n"
+            "در فایل: تنظیمات، رمز روترها و سرورها، توکن GitHub، config.json و کلید امضا." % (path, pw))
+        box.exec()
 
     def check_backups(self):
         """Warn when a scheduled backup failed or none is recent."""

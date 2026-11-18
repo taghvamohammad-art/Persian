@@ -39,8 +39,10 @@ def main():
         sys.meta_path.insert(0, finder)
         os.environ["PV_CODE_DIR"] = folder
         sys.modules.pop("selfupdate", None)          # the new copy from now on
+    import importlib
+    entry = os.environ.get("PV_ENTRY", "release_gui")     # admin_app on the phone
     try:
-        import release_gui
+        app = importlib.import_module(entry)
     except Exception:
         if not finder:
             raise
@@ -49,8 +51,8 @@ def main():
         sys.meta_path.remove(finder)
         os.environ.pop("PV_CODE_DIR", None)
         _forget(folder)
-        import release_gui
-    return release_gui.main()
+        app = importlib.import_module(entry)
+    return app.main()
 
 
 if __name__ == "__main__":

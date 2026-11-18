@@ -10,6 +10,7 @@ import os
 import sys
 
 APP_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "PersianVPNRelease")
+UNLOCK_FILE = os.path.join(APP_DIR, "unlock.json")
 FILE = os.path.join(APP_DIR, "settings.json")
 DEFAULT_REPO = "taghvamohammad-art/Persian"
 DEFAULT_PUBLIC_REPO = "taghvamohammad-art/pv-config"
@@ -38,10 +39,25 @@ def _dpapi(data, protect):
         ctypes.windll.kernel32.LocalFree(out.pbData)
 
 
+# Android (the phone version): there is no DPAPI; secrets are locked with a
+# key derived from the app password the user types when the app opens.
+MASTER_KEY = None
+
+
+def _aes(raw, decrypt=False):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if decrypt:
+        return AESGCM(MASTER_KEY).decrypt(raw[:12], raw[12:], b"pv-settings")
+    nonce = os.urandom(12)
+    return nonce + AESGCM(MASTER_KEY).encrypt(nonce, raw, b"pv-settings")
+
+
 def _encrypt(text):
     if not text:
         return ""
     raw = text.encode()
+    if MASTER_KEY:
+        return "aes:" + base64.b64encode(_aes(raw)).decode()
     if sys.platform == "win32":
         return "dpapi:" + base64.b64encode(_dpapi(raw, True)).decode()
     return "plain:" + base64.b64encode(raw).decode()   # non-Windows (tests only)
@@ -54,6 +70,10 @@ def _decrypt(value):
     raw = base64.b64decode(b64)
     if kind == "dpapi":
         return _dpapi(raw, False).decode()
+    if kind == "aes":
+        if not MASTER_KEY:
+            raise ValueError("locked")
+        return _aes(raw, decrypt=True).decode()
     return raw.decode()
 
 
@@ -154,3 +174,45 @@ def decrypt_blob(value):
         return json.loads(_decrypt(value)) if value else None
     except (ValueError, OSError):
         return None
+
+
+# ---------------------------------------------------------------- app password (phone)
+
+def has_app_password():
+    return os.path.isfile(UNLOCK_FILE)
+
+
+def _derive(password, salt):
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    return Scrypt(salt=salt, length=32, n=2 ** 15, r=8, p=1).derive(password.encode("utf-8"))
+
+
+def set_app_password(password):
+    """A new app password: the settings are written again locked with it."""
+    global MASTER_KEY
+    salt = os.urandom(16)
+    key = _derive(password, salt)
+    old, MASTER_KEY = MASTER_KEY, key
+    check = _aes(b"pv-unlock-ok")
+    os.makedirs(APP_DIR, exist_ok=True)
+    with open(UNLOCK_FILE + ".tmp", "w") as f:
+        json.dump({"salt": base64.b64encode(salt).decode(), "check": base64.b64encode(check).decode()}, f)
+    os.replace(UNLOCK_FILE + ".tmp", UNLOCK_FILE)
+    return old
+
+
+def unlock(password):
+    """True and the key set when the password is right."""
+    global MASTER_KEY
+    try:
+        with open(UNLOCK_FILE) as f:
+            d = json.load(f)
+        key = _derive(password, base64.b64decode(d["salt"]))
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        raw = base64.b64decode(d["check"])
+        if AESGCM(key).decrypt(raw[:12], raw[12:], b"pv-settings") != b"pv-unlock-ok":
+            return False
+    except Exception:
+        return False
+    MASTER_KEY = key
+    return True

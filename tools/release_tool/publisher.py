@@ -597,6 +597,68 @@ class RouterClient:
             apk = b"".join(p for p in apk.parts if hashlib.sha256(p).hexdigest() not in have)
         return self._call(envelope, apk, dry_run=False, progress=progress)
 
+    def download(self, path, progress=None):
+        """A file the router serves (/v1/app.apk ...), or None when it has none."""
+        conn = self._connect()
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            if resp.status != 200:
+                resp.read()
+                return None
+            total = int(resp.getheader("Content-Length") or 0)
+            chunks, got = [], 0
+            while True:
+                b = resp.read(256 * 1024)
+                if not b:
+                    break
+                chunks.append(b)
+                got += len(b)
+                if progress and total:
+                    progress(got, total)
+            return b"".join(chunks)
+        except (OSError, socket.timeout) as e:
+            raise ReleaseError("دریافت %s از روتر قطع شد: %s" % (path, e))
+        finally:
+            conn.close()
+
+
+def sync_workspace(ws, log=print, progress=None, client=None):
+    """The published files the config names but this workspace lacks (a
+    new computer or the phone), from the router: patches for the next
+    version are made from them, so users keep small downloads.
+    Returns the names fetched."""
+    cfg = ws.load_config()
+    items = [("app_update", "app.apk", "/v1/app.apk"), ("app_update_beta", BETA_APK, "/v1/beta.apk"),
+             ("windows_update", "win.exe", "/v1/win.exe"), ("windows_update_beta", BETA_WIN, "/v1/beta-win.exe")]
+    want = []
+    for key, name, path in items:
+        sha = (cfg.get(key) or {}).get("sha256")
+        if not sha:
+            continue
+        try:
+            with open(ws.path(name), "rb") as f:
+                if hashlib.sha256(f.read()).hexdigest() == sha:
+                    continue
+        except OSError:
+            pass
+        want.append((name, path, sha))
+    if not want:
+        return []
+    client = client or RouterClient(cfg, timeout=120)
+    got = []
+    for name, path, sha in want:
+        log("دریافت %s از روتر (پایه‌ی وصله‌ها)…" % name)
+        data = client.download(path, progress)
+        if data is None or hashlib.sha256(data).hexdigest() != sha:
+            log("⚠ %s روی روتر نبود یا با تنظیمات یکی نیست." % name)
+            continue
+        with open(ws.path(name) + ".tmp", "wb") as f:
+            f.write(data)
+        os.replace(ws.path(name) + ".tmp", ws.path(name))
+        got.append(name)
+    return got
+
 
 # ------------------------------------------------------------------ GitHub
 

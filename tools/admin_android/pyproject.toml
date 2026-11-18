@@ -1,0 +1,25 @@
+[project]
+name = "persian-admin"
+version = "1.0.0"
+description = "Persian VPN release and server tool for Android"
+requires-python = ">=3.12"
+dependencies = [
+  "flet==1.1.2",
+  "paramiko>=3.4,<4",
+  "cryptography",
+  "bcrypt",
+  "pynacl",
+  "certifi",
+]
+
+[tool.flet]
+org = "ir.persianvpn"
+product = "Persian Admin"
+company = "Persian VPN"
+copyright = "Persian VPN"
+
+[tool.flet.app]
+path = "src"
+
+[tool.flet.android]
+split_per_abi = false

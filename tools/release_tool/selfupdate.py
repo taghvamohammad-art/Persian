@@ -27,7 +27,10 @@ APP_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Pe
 CODE_DIR = os.path.join(APP_DIR, "code")
 MANIFEST = "manifest.json"
 BAD = "BAD"
-WORKFLOW = "release-tool.yml"
+WORKFLOW = os.environ.get("PV_WORKFLOW", "release-tool.yml")
+# the phone version shares the code but has its own entry and compatibility number
+ENTRY = os.environ.get("PV_ENTRY", "release_gui")
+BASE_FILE = os.environ.get("PV_BASE_FILE", "BASE")
 API = "https://api.github.com"
 
 
@@ -47,6 +50,10 @@ def overlay_name(path):
     if path in ("server/umstatus/umstatus.py", "server/linux/pv_agent.py", "server/linux/pvcreds.py",
                 "server/mikrotik/awgrelay.py"):
         return name
+    if path == "tools/admin_android/BASE":
+        return "BASE_ANDROID"
+    if path == "tools/admin_android/src/admin_app.py":
+        return "admin_app.py"
     if path.startswith("server/linux/site/"):
         return "site/" + path[len("server/linux/site/"):]
     return None
@@ -58,8 +65,8 @@ def git_blob_sha(data):
 
 def bundled_base():
     for d in (getattr(sys, "_MEIPASS", None), HERE):
-        if d and os.path.isfile(os.path.join(d, "BASE")):
-            with open(os.path.join(d, "BASE")) as f:
+        if d and os.path.isfile(os.path.join(d, BASE_FILE)):
+            with open(os.path.join(d, BASE_FILE)) as f:
                 return f.read().strip()
     return "0"
 
@@ -79,7 +86,7 @@ def usable(code_dir=CODE_DIR, base=None):
         return None
     if m.get("base") != (base or bundled_base()):
         return None                           # made for another .exe
-    if not os.path.isfile(os.path.join(code_dir, "release_gui.py")):
+    if not os.path.isfile(os.path.join(code_dir, ENTRY + ".py")):
         return None
     return code_dir
 
@@ -168,9 +175,9 @@ class Updater:
             name = overlay_name(e.get("path", "")) if e.get("type") == "blob" else None
             if name:
                 files[name] = (e["path"], e["sha"], int(e.get("size") or 0))
-        if "release_gui.py" not in files or "BASE" not in files:
+        if ENTRY + ".py" not in files or BASE_FILE not in files:
             raise UpdateError("کد ابزار در این نسخه‌ی مخزن پیدا نشد.")
-        base = self._get("/repos/%s/git/blobs/%s" % (self.repo, files["BASE"][1]), raw=True).decode().strip()
+        base = self._get("/repos/%s/git/blobs/%s" % (self.repo, files[BASE_FILE][1]), raw=True).decode().strip()
         current = manifest(self.code_dir) if usable(self.code_dir) else None
         have = (current or {}).get("files", {})
         changes = [(p, n, s, size) for n, (p, s, size) in sorted(files.items()) if have.get(n) != s]

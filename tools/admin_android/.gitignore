@@ -1,0 +1,8 @@
+# copied in by the workflow from tools/release_tool and server/
+src/*.py
+!src/main.py
+!src/admin_app.py
+src/site/
+src/BASE_ANDROID
+src/assets/
+build/
