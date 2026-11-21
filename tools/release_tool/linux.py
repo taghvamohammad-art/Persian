@@ -489,6 +489,25 @@ PostDown = iptables -t nat -D POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERA
     return True
 
 
+def update_agent(h, log=print):
+    """Only the pv-agent code (users, settings and Xray stay as they are)."""
+    if not h.run("test -f /etc/pv-agent/config.json && echo Y || true").strip():
+        raise LinuxError("pv-agent روی این سرور نصب نیست؛ اول سرور را از تب «سرور جدید» نصب کنید.")
+    log("نوشتن کد جدید pv-agent…")
+    h.write(AGENT_DIR + "/pv_agent.py", source("pv_agent.py"))
+    h.write(AGENT_DIR + "/pvcreds.py", source("pvcreds.py"))
+    h.run("systemctl restart pv-agent")
+    for _ in range(10):
+        state = h.run("systemctl is-active pv-agent || true").strip()
+        if state == "active":
+            break
+        time.sleep(1)
+    if state != "active":
+        raise LinuxError("pv-agent بعد از به‌روزرسانی اجرا نشد (%s):\n%s" % (
+            state, h.run("journalctl -u pv-agent -n 15 --no-pager || true")))
+    log("pv-agent به‌روز شد ✓")
+
+
 def add_static_peer(h, p, public, address, log=print):
     """A non-user AmneziaWG peer (the main router's backup tunnel) that
     pv-agent keeps; saved in the params too, so a re-install keeps it."""

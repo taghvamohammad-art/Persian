@@ -1270,6 +1270,10 @@ class ServicesPage:
                             b("کد جدید از GitHub", self.bot_update, icon=ft.Icons.DOWNLOAD)),
                  ft.Row([b("نصب بات / انتقال دیتابیس", self.bot_install, primary=True, icon=ft.Icons.SMART_TOY)]),
                  icon=ft.Icons.SMART_TOY),
+            card("سرورهای لینوکس (pv-agent)",
+                 hint("کد جدید pv-agent را روی همه‌ی سرورهای لینوکس می‌گذارد؛ یوزرها و تنظیمات دست نمی‌خورند."),
+                 button_row(b("به‌روزرسانی pv-agent همه", self.update_agents, icon=ft.Icons.SYNC)),
+                 icon=ft.Icons.DNS),
             card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
                  button_row(b("راه‌اندازی همگام‌سازی", self.setup_um2, icon=ft.Icons.SYNC_ALT)),
@@ -1318,6 +1322,27 @@ class ServicesPage:
                 sv.update_umstatus(c, key, log)
         await self.app.run(self.panel, job)
         await self.app.info("انجام شد", "umstatus به‌روز شد.")
+
+    async def update_agents(self):
+        servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return await self.app.info("خطا", "سرور لینوکسی تعریف نشده است.")
+
+        def job(log, progress):
+            bad = []
+            for r in servers:
+                log("— %s" % r["host"])
+                try:
+                    with linux_connector(r)() as h:
+                        linux.update_agent(h, log)
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    bad.append(r["host"])
+            return bad
+        bad = await self.app.run(self.panel, job)
+        await self.app.info("انجام شد" if not bad else "ناقص",
+                            "pv-agent همه‌ی سرورها به‌روز شد." if not bad
+                            else "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
 
     async def bot_refresh(self):
         r = await self.chosen(self.target, "روتر اصلی")

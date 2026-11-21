@@ -1087,6 +1087,14 @@ class ServicesPage(RouterPage):
         l2.addWidget(self.button("نصب بات روی روتر / انتقال از سرور ویندوز", self.bot_install, primary=True))
         lay.addWidget(c2)
 
+        c6, l6 = card("سرورهای لینوکس (pv-agent)")
+        hint6 = QLabel("کد جدید pv-agent را روی همه‌ی سرورهای لینوکس می‌گذارد؛ یوزرها و تنظیمات دست نمی‌خورند.")
+        hint6.setObjectName("Hint")
+        hint6.setWordWrap(True)
+        l6.addWidget(hint6)
+        l6.addWidget(self.button("به‌روزرسانی pv-agent همه‌ی سرورها", self.update_agents))
+        lay.addWidget(c6)
+
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
         r4 = QHBoxLayout()
         r4.addWidget(QLabel("روتر دوم:"))
@@ -1265,6 +1273,30 @@ class ServicesPage(RouterPage):
             with router_connector(r)() as c:
                 sv.update_umstatus(c, key, log)
         self.run(job, lambda _: QMessageBox.information(self, "انجام شد", "umstatus به‌روز شد."))
+
+    def update_agents(self):
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+
+        def job(log, progress):
+            bad = []
+            for r in servers:
+                log("— %s" % r["host"])
+                try:
+                    with linux_connector(r)() as h:
+                        linux.update_agent(h, log)
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    bad.append(r["host"])
+            return bad
+
+        def done(bad):
+            if bad:
+                QMessageBox.warning(self, "ناقص", "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
+            else:
+                QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
+        self.run(job, done)
 
     def bot_refresh(self):
         r = self.target()
