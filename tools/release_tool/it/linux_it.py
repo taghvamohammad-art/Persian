@@ -157,10 +157,16 @@ def main():
     with connect_linux() as h:
         st = monitor.linux_status(h)
     print(json.dumps(st, ensure_ascii=False, indent=1)[:2000])
-    for tag in ("vless-vision", "vless-xhttp", "hy2", "ss"):
-        if st["by_protocol"].get(tag, 0) < 1:
-            problems.append("monitor: no %s user online" % tag)
+    if st["users_online"] < 1:
+        problems.append("monitor: nobody online")
     stat = sh("curl -s --max-time 10 http://127.0.0.1/pvs/%s" % params["status_token"], check=False)
+    try:
+        tried = json.loads(stat).get("seen_by_protocol", {})
+    except ValueError:
+        tried = {}
+    for tag in ("vless-vision", "vless-xhttp", "hy2", "ss"):     # one user on all: counted once online
+        if tried.get(tag, 0) < 1:
+            problems.append("status: %s use not seen" % tag)
     try:
         json.loads(stat)["online"]
     except (ValueError, KeyError):

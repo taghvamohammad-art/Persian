@@ -236,6 +236,35 @@ class AgentTests(unittest.TestCase):
         st = agent.write_status(1000 + pa.ONLINE_WINDOW + 1)              # nobody seen since
         self.assertEqual(st["users_online"], 0)
 
+    def test_user_trying_every_protocol_counts_once(self):
+        """The app probes all protocols when connecting: only the one it stays on counts."""
+        agent, srv = self.make({})
+        log_path = os.path.join(os.path.dirname(agent.state_path), "access.log")
+        agent.cfg["access_log"] = log_path
+        agent.cfg["status_file"] = os.path.join(os.path.dirname(agent.state_path), "status.json")
+
+        def lines(*protos):
+            with open(log_path, "a") as f:
+                for p in protos:
+                    f.write("2026/11/09 20:11:23.6 from tcp:1.2.3.4:5 accepted tcp:a:443 "
+                            "[%s >> direct] email: 25g00001@%s\n" % (p, p))
+
+        lines("vless-vision", "vless-xhttp", "ss", "hy2", "vless-xhttp", "vless-xhttp")
+        st = agent.write_status(1000)                 # same round: the most used wins
+        self.assertEqual(st["users_online"], 1)
+        self.assertEqual([o["protocol"] for o in st["online"]], ["vless-xhttp"])
+        lines("vless-vision")
+        st = agent.write_status(1030)                 # later round: the one still in use wins
+        self.assertEqual(st["by_protocol"], {"vless-vision": 1})
+
+    def test_old_seen_state_is_read(self):
+        agent, srv = self.make({})
+        agent.cfg["access_log"] = os.path.join(os.path.dirname(agent.state_path), "none.log")
+        agent.cfg["status_file"] = os.path.join(os.path.dirname(agent.state_path), "status.json")
+        agent.state["seen"] = {"25g00001|hy2": 990}
+        st = agent.write_status(1000)
+        self.assertEqual(st["by_protocol"], {"hy2": 1})
+
     def test_rejected_user_is_removed(self):
         agent, srv = self.make({})                         # User Manager says no (e.g. volume used up)
         router_users = {"25g00001": "abc123"}

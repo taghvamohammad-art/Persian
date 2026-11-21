@@ -577,10 +577,16 @@ class Agent:
     # ---------------------------------------------------------------- who is connected
 
     def read_access_log(self, now):
-        """Who used which inbound, from Xray's access log; the log is emptied
-        after reading so it never grows."""
+        """Who used which inbound, from Xray's access log (emptied after reading
+        so it never grows) and AmneziaWG's byte counters.
+        Returns {"user|protocol": [last time, hits]}: hits grows with use, so the
+        protocol the user really runs on wins over the ones the app only tried
+        while choosing (it probes every protocol when connecting)."""
         path = self.cfg.get("access_log", ACCESS_LOG)
-        seen = self.state.setdefault("seen", {})        # "user|protocol" -> last time
+        seen = self.state.setdefault("seen", {})
+        for k, v in list(seen.items()):              # older state kept only the time
+            if not isinstance(v, list):
+                seen[k] = [v, 1]
         try:
             with open(path, "r+", encoding="utf-8", errors="replace") as f:
                 text = f.read()
@@ -589,28 +595,51 @@ class Agent:
         except OSError:
             text = ""
         for m in ACCESS_RE.finditer(text):
-            seen["%s|%s" % (split_email(m.group(2))[0], m.group(1))] = now
+            key = "%s|%s" % (split_email(m.group(2))[0], m.group(1))
+            hit = seen.setdefault(key, [now, 0])
+            hit[0] = now
+            hit[1] += 1
         if self.awg:
+            peers = getattr(self, "awg_peers", {})
             try:
-                peers = getattr(self, "awg_peers", {})
-                for pub, t in self.awg.handshakes().items():
-                    if pub in peers and t and now - t < ONLINE_WINDOW:
-                        seen["%s|amneziawg" % peers[pub][0].lower()] = t
-            except (RuntimeError, OSError, subprocess.TimeoutExpired):
+                moved = self.state.setdefault("awg_seen_bytes", {})
+                for pub, (rx, tx) in self.awg.transfer().items():
+                    if pub not in peers:
+                        continue
+                    before = moved.get(pub)
+                    moved[pub] = rx + tx
+                    if before is not None and rx + tx > before:
+                        hit = seen.setdefault("%s|amneziawg" % peers[pub][0].lower(), [now, 0])
+                        hit[0] = now
+                        hit[1] += 1 + (rx + tx - before) // 16384
+            except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError):
                 pass
-        for key in [k for k, t in seen.items() if now - t > ONLINE_WINDOW]:
+        for key in [k for k, v in seen.items() if now - v[0] > ONLINE_WINDOW]:
             del seen[key]
         return seen
 
+    @staticmethod
+    def main_protocols(seen):
+        """One entry per user: the protocol used last (most used on a tie);
+        the others are the ones the app tried while connecting."""
+        best = {}
+        for key, (t, hits) in seen.items():
+            user, protocol = key.split("|", 1)
+            if user not in best or (t, hits) > (best[user]["last"], best[user]["hits"]):
+                best[user] = {"user": user, "protocol": protocol, "last": int(t), "hits": hits}
+        return best
+
     def write_status(self, now):
         seen = self.read_access_log(now)
-        online = sorted(({"user": k.split("|")[0], "protocol": k.split("|")[1], "last": int(t)}
-                         for k, t in seen.items()), key=lambda x: (x["protocol"], x["user"]))
-        by_proto = {}
+        online = sorted(self.main_protocols(seen).values(), key=lambda x: (x["protocol"], x["user"]))
+        by_proto, tried = {}, {}
         for o in online:
             by_proto[o["protocol"]] = by_proto.get(o["protocol"], 0) + 1
-        status = {"time": int(now), "allowed": len(self.users), "online": online, "by_protocol": by_proto,
-                  "users_online": len({o["user"] for o in online}), "um_source": getattr(self, "source", ""),
+        for key in seen:                              # every protocol used, probes included
+            p = key.split("|", 1)[1]
+            tried[p] = tried.get(p, 0) + 1
+        status = {"seen_by_protocol": tried, "time": int(now), "allowed": len(self.users), "online": online, "by_protocol": by_proto,
+                  "users_online": len(online), "um_source": getattr(self, "source", ""),
                   "blocked": len(self.state.get("blocked", {}))}
         path = self.cfg.get("status_file", STATUS_FILE)
         try:
