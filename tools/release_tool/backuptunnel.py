@@ -383,21 +383,24 @@ def status(r):
     out["using"] = using
     out["relay"] = sv.container_status(r, RELAY) if sv.has_package(r, "container") else "none"
     out["carrier"] = (sv.file_text(r, RELAY["dir"] + "/mode.txt") or "").strip().upper() or "UDP"
-    # why nothing reaches the relay, if that is the case
-    diag = r.run(':put ("ping|" . [/ping %(ip)s count=2 interval=300ms]); '
-                 ':foreach i in=[/interface veth find] do={:local v [/interface veth get $i]; '
-                 ':put ("veth|" . ($v->"name") . "|" . [:tostr ($v->"address")])}; '
-                 ':local i [/interface wireguard peers find where interface=%(wg)s]; :if ([:len $i] > 0) do={'
-                 ':local p [/interface wireguard peers get ($i->0)]; :put ("peer|" . [:tostr ($p->"endpoint-address")] . '
-                 '"|" . [:tostr ($p->"endpoint-port")] . "|" . [:tostr ($p->"current-endpoint-address")] . "|" . '
-                 '[:tostr ($p->"current-endpoint-port")])}; '
-                 ':foreach i in=[/ip route find where dst-address~"^172.17.0." and active] do={'
-                 ':local x [/ip route get $i]; :put ("route|" . ($x->"dst-address") . "|" . [:tostr ($x->"gateway")] '
-                 '. "|" . [:tostr ($x->"routing-table")])}; '
-                 ':put ("rules|" . [:len [/routing rule find]] . "|" . [:len [/ip firewall mangle find where chain=output]] '
-                 '. "|" . [:len [/ip firewall filter find where chain=output]])'
-                 % {"ip": RELAY["ip"], "wg": q(WG)}, check=False)
-    out["diag"] = [l.strip() for l in diag.splitlines() if l.strip()]
+    # why nothing reaches the relay, if that is the case (each part alone:
+    # a missing menu must not hide the others)
+    parts = [
+        ':put ("ping|" . [/ping %(ip)s count=2 interval=300ms])',
+        ':foreach i in=[/interface veth find] do={:local v [/interface veth get $i]; '
+        ':put ("veth|" . ($v->"name") . "|" . [:tostr ($v->"address")])}',
+        ':local i [/interface wireguard peers find where interface=%(wg)s]; :if ([:len $i] > 0) do={'
+        ':local p [/interface wireguard peers get ($i->0)]; :put ("peer|" . [:tostr ($p->"endpoint-address")] . '
+        '"|" . [:tostr ($p->"endpoint-port")] . "|" . [:tostr ($p->"current-endpoint-address")] . "|" . '
+        '[:tostr ($p->"current-endpoint-port")])}',
+        ':foreach i in=[/ip route find where dst-address~"^172.17.0." and active] do={'
+        ':local x [/ip route get $i]; :put ("route|" . ($x->"dst-address") . "|" . [:tostr ($x->"gateway")] '
+        '. "|" . [:tostr ($x->"routing-table")])}',
+        ':put ("rules|" . [:len [/routing rule find]] . "|" . [:len [/ip firewall mangle find where chain=output]] '
+        '. "|" . [:len [/ip firewall filter find where chain=output]])']
+    diag = "\n".join(r.run(c % {"ip": RELAY["ip"], "wg": q(WG)}, check=False) for c in parts)
+    out["diag"] = [l.strip() for l in diag.splitlines()
+                   if l.strip().split("|")[0] in ("ping", "veth", "peer", "route", "rules")]
     logs = r.run(':foreach i in=[/log find where message~"awgrelay"] do={:put [/log get $i message]}', check=False)
     out["log"] = [l.strip() for l in logs.splitlines() if l.strip()][-4:]
     return out
