@@ -513,6 +513,13 @@
                             android:textColor="@color/brand_text"
                             android:textSize="13sp"
                             app:cornerRadius="25dp"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            app:autoSizeTextType="uniform"
+                            app:autoSizeMinTextSize="10sp"
+                            app:autoSizeMaxTextSize="13sp"
                             app:strokeColor="@color/brand_glass_stroke" />
 
                         <com.google.android.material.button.MaterialButton
@@ -526,20 +533,27 @@
                             android:textColor="@color/brand_text"
                             android:textSize="13sp"
                             app:cornerRadius="25dp"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            app:autoSizeTextType="uniform"
+                            app:autoSizeMinTextSize="10sp"
+                            app:autoSizeMaxTextSize="13sp"
                             app:strokeColor="@color/brand_glass_stroke" />
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/logoutButton"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="50dp"
-                            android:layout_marginStart="8dp"
-                            android:text="@string/brand_logout_short"
-                            android:textColor="@color/brand_text_dim"
-                            android:textSize="13sp"
-                            app:cornerRadius="25dp"
-                            app:strokeColor="@color/brand_glass_stroke" />
+
                     </LinearLayout>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/logoutButton"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="44dp"
+                        android:layout_gravity="center_horizontal"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/brand_logout_short"
+                        android:textColor="@color/brand_text_dim"
+                        android:textSize="13sp" />
                 </LinearLayout>
             </FrameLayout>
         </LinearLayout>
