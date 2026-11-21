@@ -140,7 +140,7 @@ internal class SstpVpnService : VpnService() {
             builder.setBlocking(true)
             apps.forEach { builder.addAllowedApplication(it) }
         } catch (e: Exception) {
-            logWriter?.report("shield builder: $e")
+            logWriter?.write("shield builder: $e")
             closeShield()
             return false
         }
