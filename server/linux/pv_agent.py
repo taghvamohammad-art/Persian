@@ -317,7 +317,26 @@ class Xray:
             json.dump(cfg, f, indent=1)
         os.replace(tmp, self.config)
 
-    def restart(self, users):
+    def running_same(self, users):
+        """Xray already runs with exactly this config (an agent restart or
+        update must not cut everyone's connection for nothing)."""
+        try:
+            with open(self.config) as f:
+                on_disk = json.load(f)
+        except (OSError, ValueError):
+            return False
+        if on_disk != json.loads(json.dumps(self.render(users))):
+            return False
+        try:
+            return subprocess.run(["systemctl", "is-active", "--quiet", self.service],
+                                  check=False, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def restart(self, users, if_changed=False):
+        if if_changed and self.running_same(users):
+            log.info("xray already runs with these %d users; not restarted", len(users))
+            return
         self.write(users)
         subprocess.run(["systemctl", "restart", self.service], check=False, timeout=60)
         self.last_restart = time.time()
@@ -485,7 +504,7 @@ class Agent:
         new = self.allowed_now(users)
         if self.xray:
             if self.first:
-                self.xray.restart(new)
+                self.xray.restart(new, if_changed=True)
             elif not self.xray.apply(self.users, new):
                 return             # try again next round with the old set as "current"
         if self.awg:

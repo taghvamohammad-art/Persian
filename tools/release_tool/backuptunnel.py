@@ -304,6 +304,14 @@ def configure_routes(r, plan, relay_ip=RELAY["ip"], log=print):
     r.put(STATE, json.dumps(state).encode())
 
 
+def _ssh_errors():
+    try:
+        import paramiko
+        return (paramiko.SSHException,)
+    except ImportError:
+        return ()
+
+
 def setup(r, linux_connect, p, server_ip, log=print, relay_endpoint=None):
     """Everything, on the router r and the Linux server; p are the server's
     params (updated with the router's peer, to be saved by the caller).
@@ -316,12 +324,27 @@ def setup(r, linux_connect, p, server_ip, log=print, relay_endpoint=None):
     if not awg.get("priv"):
         raise ReleaseError("این سرور لینوکس AmneziaWG ندارد.")
     pub = ensure_wireguard(r, log)
-    h = linux_connect()
-    try:
-        p = linux.add_static_peer(h, p, pub, TUN_ADDR, log)
-        p = linux.ensure_icmp(h, p, log)
-    finally:
-        h.close()
+    # the ICMP carrier first (touches nothing users use), the peer last (it
+    # restarts pv-agent); if the SSH connection drops (e.g. the phone's own VPN
+    # goes through this server), connect again: both steps can be repeated
+    for attempt in range(3):
+        try:
+            h = linux_connect()
+            try:
+                p = linux.ensure_icmp(h, p, log)
+                p = linux.add_static_peer(h, p, pub, TUN_ADDR, log)
+            finally:
+                try:
+                    h.close()
+                except Exception:   # noqa: BLE001
+                    pass
+            break
+        except (OSError, EOFError) + _ssh_errors() as e:
+            if attempt == 2:
+                raise
+            log("ارتباط با سرور لینوکس قطع شد (%s)؛ دوباره…" % e)
+            import time
+            time.sleep(5)
     awg = p["awg"]
     if relay_endpoint:
         ensure_peer(r, awg["public"], relay_endpoint[0], relay_endpoint[1], log)

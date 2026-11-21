@@ -155,7 +155,7 @@ class FakeXray:
     def __init__(self):
         self.users, self.pending = {}, {}
 
-    def restart(self, users):
+    def restart(self, users, if_changed=False):
         self.users = dict(users)
 
     def apply(self, old, new):
@@ -165,6 +165,29 @@ class FakeXray:
     def traffic(self):
         out, self.pending = self.pending, {}
         return out
+
+
+class XrayRestartTests(unittest.TestCase):
+    def test_agent_restart_does_not_restart_unchanged_xray(self):
+        from unittest import mock
+        tmp = tempfile.mkdtemp()
+        tpl = {"inbounds": [{"tag": "vless-vision", "protocol": "vless", "settings": {"clients": []}}]}
+        with open(os.path.join(tmp, "t.json"), "w") as f:
+            json.dump(tpl, f)
+        x = pa.Xray({"template": os.path.join(tmp, "t.json"), "config": os.path.join(tmp, "c.json"),
+                    "inbounds": {"vless-vision": "vless-vision"}})
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return mock.Mock(returncode=0)
+        with mock.patch.object(pa.subprocess, "run", run):
+            x.restart({"25g00001": "a"}, if_changed=True)          # no config yet: restart
+            self.assertEqual(sum("restart" in c for c in calls), 1)
+            x.restart({"25g00001": "a"}, if_changed=True)          # same: left running
+            self.assertEqual(sum("restart" in c for c in calls), 1)
+            x.restart({"25g00002": "b"}, if_changed=True)          # users changed: restart
+            self.assertEqual(sum("restart" in c for c in calls), 2)
 
 
 class AgentTests(unittest.TestCase):
