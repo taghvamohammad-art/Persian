@@ -128,4 +128,6 @@
 
     <string name="brand_notif_connected">متصل</string>
     <string name="brand_notif_usage">دانلود %1$s  •  آپلود %2$s</string>
+    <string name="brand_vpn_nodialog_title">این دستگاه پنجره‌ی اجازه‌ی VPN را نشان نداد</string>
+    <string name="brand_vpn_nodialog_text">بعضی تلویزیون‌ها و باکس‌ها پنجره‌ی «اجازه‌ی VPN» ندارند. یک بار این کار را بکنید، بعد همیشه وصل می‌شود:\n\n۱. تنظیمات تلویزیون ← درباره (About) ← هفت بار روی «Build» بزنید تا «گزینه‌های توسعه‌دهنده» باز شود.\n۲. در گزینه‌های توسعه‌دهنده «USB debugging» یا «Network debugging» را روشن کنید و IP تلویزیون را از تنظیمات شبکه بردارید.\n۳. از کامپیوتر (یا با برنامه‌ای مثل Remote ADB Shell روی گوشی) بزنید:\n\nadb connect IP-تلویزیون\nadb shell appops set %1$s ACTIVATE_VPN allow\n\n۴. روی تلویزیون پیام «اجازه دادن» را تأیید کنید، بعد دوباره دکمه‌ی اتصال را بزنید.</string>
 </resources>

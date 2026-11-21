@@ -69,9 +69,34 @@ class BrandActivity : AppCompatActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             startVpn(ACTION_VPN_CONNECT)
+        } else if (android.os.SystemClock.elapsedRealtime() - vpnAskedAt < 1500 || Tv.isTv(this)) {
+            // answered before anyone could press anything: this device (often a TV) has no
+            // VPN permission window at all
+            showConnError(getString(R.string.brand_vpn_denied))
+            showNoVpnDialogHelp()
         } else {
             showConnError(getString(R.string.brand_vpn_denied))
         }
+    }
+
+    private var vpnAskedAt = 0L
+
+    private fun askVpnPermission(intent: Intent) {
+        vpnAskedAt = android.os.SystemClock.elapsedRealtime()
+        try {
+            vpnPermission.launch(intent)
+        } catch (_: android.content.ActivityNotFoundException) {
+            showConnError(getString(R.string.brand_vpn_denied))
+            showNoVpnDialogHelp()
+        }
+    }
+
+    private fun showNoVpnDialogHelp() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.brand_vpn_nodialog_title)
+            .setMessage(getString(R.string.brand_vpn_nodialog_text, packageName))
+            .setPositiveButton(R.string.brand_ok, null)
+            .show()
     }
 
     private val pickConfigFile = registerForActivityResult(
@@ -426,7 +451,7 @@ class BrandActivity : AppCompatActivity() {
         binding.connError.visibility = View.GONE
 
         val intent = VpnService.prepare(this)
-        if (intent != null) vpnPermission.launch(intent) else startVpn(ACTION_VPN_CONNECT)
+        if (intent != null) askVpnPermission(intent) else startVpn(ACTION_VPN_CONNECT)
     }
 
     private fun startVpn(action: String) {
