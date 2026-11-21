@@ -28,6 +28,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Disk space and the NDK Flutter asks for
+        # Gradle installing the NDK by itself was cut off half way on some runs
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/node_modules/@angular "$AGENT_TOOLSDIRECTORY/CodeQL" || true
+          df -h / | tail -1
+          for i in 1 2 3; do
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358" >/dev/null && break
+            sleep 10
+          done
+          ls "$ANDROID_HOME/ndk"
+
       - name: Collect the tool's code
         run: |
           set -e
