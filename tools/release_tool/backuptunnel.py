@@ -46,6 +46,7 @@ class Plan:
         self.warnings = []
         self.changes = []          # what will be changed on the existing setup (text)
         self.tables = []
+        self.relay_ip = RELAY["ip"]
 
     @property
     def ok(self):
@@ -115,6 +116,25 @@ def gre_of(gateway, gres):
     return None
 
 
+def free_relay_ip(veths, addrs):
+    """The relay's address in the containers' network: its current one if no
+    other container has it, else the first free one (another container may
+    already use 172.17.0.4)."""
+    def ip(a):
+        return str(a).split("/")[0].strip()
+    taken = {ip(a) for n, a in veths if n != RELAY["veth"]} | {ip(a) for _, a in addrs} | {sv.GW}
+    own = next((ip(a) for n, a in veths if n == RELAY["veth"]), None)
+    if own and own not in taken:
+        return own
+    if RELAY["ip"] not in taken:
+        return RELAY["ip"]
+    for n in range(5, 255):
+        cand = "172.17.0.%d" % n
+        if cand not in taken:
+            return cand
+    return None
+
+
 def make_plan(gres, addrs, routes, profiles, veths=()):
     plan = Plan()
     plan.gres = gres
@@ -154,8 +174,13 @@ def make_plan(gres, addrs, routes, profiles, veths=()):
                                          % (name, d))
             except ValueError:
                 pass
-    used = [a for i, a in addrs if i != WG and a.split("/")[0] in (TUN_ADDR, RELAY["ip"])]
-    used += ["%s (%s)" % (a, n) for n, a in veths if n != RELAY["veth"] and a.split("/")[0] == RELAY["ip"]]
+    used = [a for i, a in addrs if i != WG and a.split("/")[0] == TUN_ADDR]
+    plan.relay_ip = free_relay_ip(veths, addrs)
+    if plan.relay_ip is None:
+        plan.problems.append("در شبکه‌ی کانتینرها (172.17.0.0/24) آدرس آزادی برای رله نمانده است.")
+    elif plan.relay_ip != RELAY["ip"]:
+        plan.changes.append("آدرس %s مال کانتینر دیگری است؛ رله آدرس %s را می‌گیرد."
+                            % (RELAY["ip"], plan.relay_ip))
     if used:
         plan.problems.append("آدرس %s روی روتر استفاده شده است." % "، ".join(used))
     return plan
@@ -229,21 +254,28 @@ def free_space(r):
         return None
 
 
-def install_relay(r, cfg, log=print):
+def relay_svc(ip):
+    return dict(RELAY, ip=ip)
+
+
+def install_relay(r, cfg, log=print, ip=RELAY["ip"]):
+    svc = relay_svc(ip)
     exists = sv.count(r, "/container", "comment=%s" % q(RELAY["comment"])) > 0
     if not exists:
         free = free_space(r)
         if free is not None and free < MIN_FREE:
             raise RouterOSError("فضای خالی روتر %d مگابایت است؛ برای کانتینر رله حدود ۸۰ مگابایت لازم است."
                                 % (free // 2 ** 20))
-    sv.ensure_network(r, RELAY, log)
+    if sv.count(r, "/interface veth", "name=%s" % q(RELAY["veth"])):
+        r.run("/interface veth set [find where name=%s] address=%s/24 gateway=%s" % (q(RELAY["veth"]), ip, sv.GW))
+    sv.ensure_network(r, svc, log)
     sv.ensure_dir(r, RELAY["dir"])
     r.put(RELAY["dir"] + "/awgrelay.py", relay_source())
     r.put(RELAY["dir"] + "/relay.json", json.dumps(cfg, indent=1).encode())
-    log("کانتینر رله…")
-    sv.ensure_container(r, RELAY, log)
+    log("کانتینر رله (%s)…" % ip)
+    sv.ensure_container(r, svc, log)
     if exists:
-        sv.restart(r, RELAY, log)
+        sv.restart(r, svc, log)
 
 
 def _place(r, menu):
@@ -269,6 +301,7 @@ def configure_routes(r, plan, relay_ip=RELAY["ip"], log=print):
         # whatever marks the existing setup puts on the router's traffic
         _add_once(r, "/routing rule", "comment=%s" % q(TAG),
                   "src-address=%s/32 action=lookup-only-in-table table=main comment=%s" % (relay_ip, TAG))
+        r.run("/routing rule set [find where comment=%s] src-address=%s/32" % (q(TAG), relay_ip))
     for table in plan.tables:
         dist = max(rt["distance"] for rt in plan.routes if rt["table"] == table) + 1
         where = "comment=%s and routing-table=%s" % (q(TAG), q(table))
@@ -302,6 +335,8 @@ def configure_routes(r, plan, relay_ip=RELAY["ip"], log=print):
                   % (WG, TAG))
     if relay_ip:
         sv.ensure_input_accept(r, relay_ip, "udp", str(WG_PORT), TAG)
+        r.run("/ip firewall filter set [find where comment=%s and chain=input] src-address=%s" % (q(TAG), relay_ip),
+              check=False)
     state["check"] = [list(x) for x in {tuple(x) for x in state["check"]}]
     state["keepalive"] = sorted(set(state["keepalive"]))
     sv.ensure_dir(r, RELAY["dir"])
@@ -353,9 +388,9 @@ def setup(r, linux_connect, p, server_ip, log=print, relay_endpoint=None):
     if relay_endpoint:
         ensure_peer(r, awg["public"], relay_endpoint[0], relay_endpoint[1], log)
     else:
-        install_relay(r, relay_config(server_ip, awg, pub), log)
-        ensure_peer(r, awg["public"], RELAY["ip"], RELAY_PORT, log)
-    configure_routes(r, plan, relay_ip=None if relay_endpoint else RELAY["ip"], log=log)
+        install_relay(r, relay_config(server_ip, awg, pub), log, ip=plan.relay_ip)
+        ensure_peer(r, awg["public"], plan.relay_ip, RELAY_PORT, log)
+    configure_routes(r, plan, relay_ip=None if relay_endpoint else plan.relay_ip, log=log)
     log("✓ تانل پشتیبان آماده است")
     return p
 
@@ -398,7 +433,9 @@ def status(r):
         '. "|" . [:tostr ($x->"routing-table")])}',
         ':put ("rules|" . [:len [/routing rule find]] . "|" . [:len [/ip firewall mangle find where chain=output]] '
         '. "|" . [:len [/ip firewall filter find where chain=output]])']
-    diag = "\n".join(r.run(c % {"ip": RELAY["ip"], "wg": q(WG)}, check=False) for c in parts)
+    ip = r.run(':put [/interface veth get [find where name=%s] address]' % q(RELAY["veth"]), check=False)
+    ip = ip.strip().split("/")[0] if re.match(r"\s*[\d.]+/", ip) else RELAY["ip"]
+    diag = "\n".join(r.run(c % {"ip": ip, "wg": q(WG)}, check=False) for c in parts)
     out["diag"] = [l.strip() for l in diag.splitlines()
                    if l.strip().split("|")[0] in ("ping", "veth", "peer", "route", "rules")]
     logs = r.run(':foreach i in=[/log find where message~"awgrelay"] do={:put [/log get $i message]}', check=False)

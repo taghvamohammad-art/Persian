@@ -50,7 +50,10 @@ class PlanTests(unittest.TestCase):
         p = bt.make_plan(gres, [], [route("10.10.10.2", table="main")], [])
         self.assertFalse(p.ok)                                 # the router's own default via GRE
         p = bt.make_plan(gres, [("ether2", "172.17.0.4/24")], [route("10.10.10.2")], [])
-        self.assertFalse(p.ok)                                 # the relay's address is taken
+        self.assertTrue(p.ok)                                  # the relay's usual address is taken:
+        self.assertEqual(p.relay_ip, "172.17.0.5")             # it takes another
+        p = bt.make_plan(gres, [("ether2", "10.64.0.2/24")], [route("10.10.10.2")], [])
+        self.assertFalse(p.ok)                                 # the tunnel address is taken
 
     def test_own_routes_ignored(self):
         gres = {"gre1": gre(["10.10.10.0/30"])}
@@ -84,6 +87,16 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("icmp_key", cfg)                      # older servers: UDP only
         cfg = bt.relay_config("5.6.7.8", dict(awg, icmp_key="ab" * 16), "RPUB")
         self.assertEqual((cfg["icmp_key"], cfg["transport"]), ("ab" * 16, "auto"))
+
+    def test_relay_address_avoids_other_containers(self):
+        veths = [("veth-umstatus", "172.17.0.2/24"), ("veth-umbot", "172.17.0.3/24")]
+        self.assertEqual(bt.free_relay_ip(veths, []), "172.17.0.4")
+        mine = veths + [("veth-abrak", "172.17.0.4/24"), ("veth-pvawg", "172.17.0.4/24")]
+        self.assertEqual(bt.free_relay_ip(mine, []), "172.17.0.5")          # the clash seen on a router
+        moved = veths + [("veth-abrak", "172.17.0.4/24"), ("veth-pvawg", "172.17.0.5/24")]
+        self.assertEqual(bt.free_relay_ip(moved, [("ether1", "172.17.0.6/24")]), "172.17.0.5")   # kept
+        self.assertEqual(bt.free_relay_ip(veths + [("x", "172.17.0.4/24"), ("y", "172.17.0.5/24")],
+                                          [("br", "172.17.0.6/24")]), "172.17.0.7")
 
     def test_icmp_carrier_installed_on_linux(self):
         import linux
