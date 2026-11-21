@@ -85,6 +85,8 @@ class BrandActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
         title = getString(R.string.app_name)
+        Tv.centre(binding.brandContent)
+        if (Tv.isTv(this)) binding.shareButton.visibility = View.GONE     // no hotspot on a TV
 
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
 
@@ -197,6 +199,13 @@ class BrandActivity : AppCompatActivity() {
         binding.loginGroup.visibility = if (loggedIn) View.GONE else View.VISIBLE
         binding.mainGroup.visibility = if (loggedIn) View.VISIBLE else View.GONE
 
+        if (Tv.isTv(this)) {                 // the remote starts on what matters
+            (if (loggedIn) binding.connectButton else binding.usernameInput).post {
+                if (currentFocus == null || currentFocus === binding.toolbar) {
+                    (if (loggedIn) binding.connectButton else binding.usernameInput).requestFocus()
+                }
+            }
+        }
         if (loggedIn) {
             binding.accountName.text = getString(R.string.brand_account_of, "\u2068" + BrandSession.username(prefs) + "\u2069")
             renderConnection()
@@ -380,7 +389,10 @@ class BrandActivity : AppCompatActivity() {
                         android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         Uri.parse("package:$packageName")))
                 } catch (_: Exception) {
-                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    try {   // some TVs have neither screen
+                        startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (_: Exception) {
+                    }
                 }
             }
             .setNegativeButton(R.string.brand_battery_later, null)

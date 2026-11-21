@@ -215,10 +215,18 @@ internal object UpdateManager {
     internal fun install(activity: Activity, apk: File): InstallStep {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !activity.packageManager.canRequestPackageInstalls()) {
-            activity.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${activity.packageName}"))
-            )
+            try {
+                activity.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${activity.packageName}"))
+                )
+            } catch (_: android.content.ActivityNotFoundException) {
+                // some TVs: no per-app screen; the general security settings instead
+                try {
+                    activity.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+                } catch (_: android.content.ActivityNotFoundException) {
+                }
+            }
             return InstallStep.NEEDS_PERMISSION
         }
 

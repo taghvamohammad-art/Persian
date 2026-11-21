@@ -63,6 +63,7 @@ class ExcludedAppsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityExcludedAppsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        Tv.centre(binding.root)
         setSupportActionBar(binding.toolbar)
         title = getString(R.string.brand_excluded_title)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -96,8 +97,10 @@ class ExcludedAppsActivity : AppCompatActivity() {
 
         io.execute {
             val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val tvLauncher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
             val collator = Collator.getInstance(Locale.forLanguageTag("fa"))
-            val apps = packageManager.queryIntentActivities(launcher, 0)
+            val apps = (packageManager.queryIntentActivities(launcher, 0) +
+                        packageManager.queryIntentActivities(tvLauncher, 0))   // TV apps
                 .map { it.activityInfo.applicationInfo }
                 .distinctBy { it.packageName }
                 .filter { it.packageName != packageName }

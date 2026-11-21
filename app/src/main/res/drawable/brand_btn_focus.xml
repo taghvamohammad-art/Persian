@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the remote's focus on the power button (TV); a touch keeps the ripple -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="oval">
+            <stroke android:width="4dp" android:color="#FF4FD1C5" />
+            <solid android:color="#224FD1C5" />
+        </shape>
+    </item>
+    <item>
+        <ripple android:color="#334FD1C5" />
+    </item>
+</selector>
