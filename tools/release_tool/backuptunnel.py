@@ -379,6 +379,8 @@ def status(r):
     out["using"] = using
     out["relay"] = sv.container_status(r, RELAY) if sv.has_package(r, "container") else "none"
     out["carrier"] = (sv.file_text(r, RELAY["dir"] + "/mode.txt") or "").strip().upper() or "UDP"
+    logs = r.run(':foreach i in=[/log find where message~"awgrelay"] do={:put [/log get $i message]}', check=False)
+    out["log"] = [l.strip() for l in logs.splitlines() if l.strip()][-4:]
     return out
 
 

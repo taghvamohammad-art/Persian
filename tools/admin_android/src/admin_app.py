@@ -1542,6 +1542,13 @@ class ServicesPage:
                 lines.append("جدول %s الان از: %s" % (table, "AmneziaWG (پشتیبان)" if via == "AmneziaWG"
                                                        else "GRE (%s)" % via))
         lines.append("کانتینر رله: %s" % s.get("relay"))
+        lx = s.get("linux")
+        if lx:
+            lines.append("سرور لینوکس از روتر: %s، دریافت %s، ارسال %s" % (
+                "✓ handshake %d ثانیه پیش" % lx[0] if lx[0] is not None else "✗ handshake نشده",
+                human_size(lx[1]), human_size(lx[2])))
+        for l in s.get("log") or []:
+            lines.append("رله: " + l)
         lines.append("راه رله به سرور لینوکس: %s" % ("پینگ (ICMP) — UDP بسته است" if s.get("carrier") == "ICMP"
                                                       else "UDP (عادی)"))
         if s.get("icmp"):

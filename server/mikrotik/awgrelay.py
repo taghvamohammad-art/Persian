@@ -233,7 +233,8 @@ class Carrier:
 
 def serve(cfg, log=print):
     relay = Relay(cfg)
-    server = (cfg["server"], int(cfg["port"]))
+    # answers are matched by address: a name must become the IP it comes from
+    server = (socket.gethostbyname(cfg["server"]), int(cfg["port"]))
     inside = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     inside.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     inside.bind((cfg.get("listen_host", "0.0.0.0"), int(cfg.get("listen", 51820))))
@@ -258,7 +259,8 @@ def serve(cfg, log=print):
                 pass
     router = None
     stats = {"up": 0, "down": 0, "handshakes": 0, "dropped": 0, "icmp_up": 0, "icmp_down": 0}
-    last_report = time.time()
+    last_report = time.time() - 540          # the first report after a minute
+    heard = set()
     mode = carrier.mode
     log("awgrelay: %s:%d -> %s:%d (%s)" % (inside.getsockname() + server + (carrier.transport,)))
 
@@ -308,6 +310,9 @@ def serve(cfg, log=print):
                 if addr[0] != server[0] or addr[1] != server[1] or router is None:
                     continue
                 carrier.heard_udp()
+                if "udp" not in heard:
+                    heard.add("udp")
+                    log("awgrelay: first answer from the server over UDP")
                 d = relay.incoming(data)
                 if d is None:
                     stats["dropped"] += 1
@@ -322,6 +327,9 @@ def serve(cfg, log=print):
                     continue
                 d = relay.incoming(pkt)
                 if d is not None:
+                    if "icmp" not in heard:
+                        heard.add("icmp")
+                        log("awgrelay: first answer from the server over ICMP")
                     stats["icmp_down"] += 1
                     to_router(d)
         if link is not None and carrier.mode == "icmp":
