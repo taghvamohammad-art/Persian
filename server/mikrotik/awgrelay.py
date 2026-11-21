@@ -11,10 +11,19 @@ again with the receiver's public key (both public keys are in the config).
 Transport packets are only relabelled; their contents are never touched or
 readable here.
 
+When Iran's filtering cuts UDP to the server while ping still passes, the
+same AmneziaWG packets go inside ICMP echo requests instead, to pv_icmp.py on
+the Linux server (config "icmp_key"); answers come back in echo replies.
+"transport": "auto" (default) uses UDP and moves to ICMP after handshakes
+stop getting answers, trying UDP again every UDP_RETRY seconds; "udp" and
+"icmp" force one (tests).
+
 Standard library only:  python3 awgrelay.py /app/relay.json
 """
 
+import collections
 import hashlib
+import hmac
 import json
 import os
 import select
@@ -93,6 +102,135 @@ class Relay:
         return None
 
 
+# ---------------------------------------------------------------- ICMP carrier
+# the wire format is the same as in server/linux/pv_icmp.py
+
+ICMP_MAGIC = b"PVI1"
+ICMP_TAG = 8
+POLL, MORE = 0x01, 0x02
+ECHO_REPLY, ECHO_REQUEST = 0, 8
+UDP_FAILED_INITS = 3       # handshakes sent over UDP without any answer -> ICMP
+UDP_RETRY = 120            # in ICMP mode, a handshake goes over UDP this often
+
+
+def checksum(data):
+    if len(data) % 2:
+        data += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    s = (s >> 16) + (s & 0xFFFF)
+    s += s >> 16
+    return ~s & 0xFFFF
+
+
+def icmp_packet(kind, ident, seq, payload):
+    head = struct.pack("!BBHHH", kind, 0, 0, ident, seq)
+    return struct.pack("!BBHHH", kind, 0, checksum(head + payload), ident, seq) + payload
+
+
+def parse_ip(packet):
+    if len(packet) < 20 or packet[0] >> 4 != 4:
+        return None
+    ihl = (packet[0] & 0x0F) * 4
+    if packet[9] != 1 or len(packet) < ihl + 8:
+        return None
+    kind, _code, _sum, ident, seq = struct.unpack("!BBHHH", packet[ihl:ihl + 8])
+    return socket.inet_ntoa(packet[12:16]), kind, ident, seq, packet[ihl + 8:]
+
+
+def _tag(key, direction, body):
+    return hmac.new(key, direction + body, hashlib.sha256).digest()[:ICMP_TAG]
+
+
+def seal(key, direction, flags, session, data=b""):
+    body = bytes([flags]) + session + data
+    return ICMP_MAGIC + _tag(key, direction, body) + body
+
+
+def unseal(key, direction, payload):
+    if len(payload) < len(ICMP_MAGIC) + ICMP_TAG + 5 or payload[:4] != ICMP_MAGIC:
+        return None
+    tag, body = payload[4:4 + ICMP_TAG], payload[4 + ICMP_TAG:]
+    if not hmac.compare_digest(tag, _tag(key, direction, body)):
+        return None
+    return body[0], body[1:5], body[5:]
+
+
+class IcmpLink:
+    """Client end: every request carries a packet or is an empty poll; the
+    server answers each one, with a packet when it has one. A few polls are
+    kept outstanding so the server always has a way to send."""
+    IDLE_POLLS, BUSY_POLLS, LOST = 1, 8, 2.0
+
+    def __init__(self, key, server, send_raw, rand=os.urandom, now=time.monotonic):
+        self.key, self.server, self.send_raw, self.now = key, server, send_raw, now
+        self.session = rand(4)
+        self.ident = int.from_bytes(rand(2), "big")
+        self.seq = 0
+        self.outstanding = collections.OrderedDict()   # seq -> sent at
+        self.busy_until = 0.0
+
+    def _request(self, flags, data=b""):
+        self.seq = (self.seq + 1) & 0xFFFF
+        self.outstanding[self.seq] = self.now()
+        self.send_raw(icmp_packet(ECHO_REQUEST, self.ident, self.seq, seal(self.key, b"C", flags, self.session, data)))
+
+    def send(self, data):
+        self.busy_until = self.now() + 2
+        self._request(0, data)
+
+    def reply(self, ident, seq, payload):
+        """An echo reply from the server -> AmneziaWG packet or None."""
+        got = unseal(self.key, b"S", payload)
+        if got is None or got[1] != self.session:
+            return None
+        flags, _, data = got
+        self.outstanding.pop(seq, None)
+        if data or flags & MORE:
+            self.busy_until = self.now() + 2
+        self.pump()
+        return data or None
+
+    def pump(self):
+        now = self.now()
+        while self.outstanding and now - next(iter(self.outstanding.values())) > self.LOST:
+            self.outstanding.popitem(last=False)
+        want = self.BUSY_POLLS if now < self.busy_until else self.IDLE_POLLS
+        while len(self.outstanding) < want:
+            self._request(POLL)
+
+
+class Carrier:
+    """Which way AmneziaWG packets go: UDP, or ICMP once UDP stops answering."""
+
+    def __init__(self, transport="auto", icmp_ok=True, now=time.monotonic):
+        self.transport = transport if icmp_ok else "udp"
+        self.mode = "icmp" if self.transport == "icmp" else "udp"
+        self.inits = 0                 # handshakes over UDP since the last UDP answer
+        self.retry_at = 0.0
+        self.now = now
+
+    def heard_udp(self):
+        self.inits = 0
+        if self.transport == "auto":
+            self.mode = "udp"
+
+    def route(self, is_init):
+        """'udp' or 'icmp' for a packet going to the server."""
+        if self.transport != "auto":
+            return self.mode
+        if self.mode == "udp":
+            if is_init:
+                self.inits += 1
+                if self.inits > UDP_FAILED_INITS:
+                    self.mode, self.retry_at, self.inits = "icmp", self.now() + UDP_RETRY, 0
+                    return "icmp"
+            return "udp"
+        if is_init and self.now() >= self.retry_at:        # is UDP back?
+            self.retry_at = self.now() + UDP_RETRY
+            return "udp"
+        return "icmp"
+
+
 def serve(cfg, log=print):
     relay = Relay(cfg)
     server = (cfg["server"], int(cfg["port"]))
@@ -100,18 +238,48 @@ def serve(cfg, log=print):
     inside.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     inside.bind((cfg.get("listen_host", "0.0.0.0"), int(cfg.get("listen", 51820))))
     outside = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    for s in (inside, outside):
+    socks = [inside, outside]
+    raw = link = None
+    if cfg.get("icmp_key") and cfg.get("transport", "auto") != "udp":
+        try:
+            raw = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+            link = IcmpLink(bytes.fromhex(cfg["icmp_key"]), server[0],
+                            lambda pkt: raw.sendto(pkt, (server[0], 0)))
+            socks.append(raw)
+        except OSError as e:
+            log("awgrelay: no ICMP carrier (%s); UDP only" % e)
+            raw = link = None
+    carrier = Carrier(cfg.get("transport", "auto"), icmp_ok=link is not None)
+    for s in socks:
         for opt in (socket.SO_RCVBUF, socket.SO_SNDBUF):
             try:
                 s.setsockopt(socket.SOL_SOCKET, opt, 4 << 20)
             except OSError:
                 pass
     router = None
-    stats = {"up": 0, "down": 0, "handshakes": 0, "dropped": 0}
+    stats = {"up": 0, "down": 0, "handshakes": 0, "dropped": 0, "icmp_up": 0, "icmp_down": 0}
     last_report = time.time()
-    log("awgrelay: %s:%d -> %s:%d" % (inside.getsockname() + server))
+    mode = carrier.mode
+    log("awgrelay: %s:%d -> %s:%d (%s)" % (inside.getsockname() + server + (carrier.transport,)))
+
+    def note_mode():
+        if cfg.get("mode_file"):
+            try:
+                with open(cfg["mode_file"], "w") as f:
+                    f.write(mode)
+            except OSError:
+                pass
+    note_mode()
+
+    def to_router(d):
+        try:
+            inside.sendto(d, router)
+            stats["down"] += 1
+        except OSError:
+            stats["dropped"] += 1
+
     while True:
-        ready, _, _ = select.select([inside, outside], [], [], 60)
+        ready, _, _ = select.select(socks, [], [], 0.2 if link else 60)
         for s in ready:
             try:
                 data, addr = s.recvfrom(65535)
@@ -120,36 +288,62 @@ def serve(cfg, log=print):
             if s is inside:
                 router = addr
                 out = relay.outgoing(data)
-                if len(out) > 1 or (out and data[:1] == b"\x01"):
+                is_init = data[:1] == b"\x01"
+                if len(out) > 1 or (out and is_init):
                     stats["handshakes"] += 1
+                way = carrier.route(is_init) if out else "udp"
                 for d in out:
                     try:
-                        outside.sendto(d, server)
+                        if way == "icmp":
+                            link.send(d)
+                            stats["icmp_up"] += 1
+                        else:
+                            outside.sendto(d, server)
                     except OSError as e:
                         stats["dropped"] += 1
                         if stats["dropped"] % 1000 == 1:
                             log("awgrelay: send to server: %s" % e)
                 stats["up"] += 1
-            else:
+            elif s is outside:
                 if addr[0] != server[0] or addr[1] != server[1] or router is None:
                     continue
+                carrier.heard_udp()
                 d = relay.incoming(data)
                 if d is None:
                     stats["dropped"] += 1
                     continue
-                try:
-                    inside.sendto(d, router)
-                except OSError:
-                    stats["dropped"] += 1
-                stats["down"] += 1
+                to_router(d)
+            else:
+                got = parse_ip(data)
+                if not got or got[0] != server[0] or got[1] != ECHO_REPLY or got[2] != link.ident:
+                    continue
+                pkt = link.reply(got[2], got[3], got[4])
+                if pkt is None or router is None:
+                    continue
+                d = relay.incoming(pkt)
+                if d is not None:
+                    stats["icmp_down"] += 1
+                    to_router(d)
+        if link is not None and carrier.mode == "icmp":
+            try:
+                link.pump()
+            except OSError:
+                pass
+        if carrier.mode != mode:
+            mode = carrier.mode
+            log("awgrelay: now over %s" % mode.upper())
+            note_mode()
         if time.time() - last_report > 600:
-            log("awgrelay: %(up)d up, %(down)d down, %(handshakes)d handshakes, %(dropped)d dropped" % stats)
+            log("awgrelay: %(up)d up, %(down)d down, %(handshakes)d handshakes, %(dropped)d dropped, "
+                "ICMP %(icmp_up)d up %(icmp_down)d down" % stats + " (%s)" % mode)
             last_report = time.time()
 
 
 def main(argv):
-    with open(argv[1] if len(argv) > 1 else "/app/relay.json") as f:
+    path = argv[1] if len(argv) > 1 else "/app/relay.json"
+    with open(path) as f:
         cfg = json.load(f)
+    cfg.setdefault("mode_file", os.path.join(os.path.dirname(os.path.abspath(path)), "mode.txt"))
     while True:
         try:
             serve(cfg, log=lambda m: print(m, flush=True))

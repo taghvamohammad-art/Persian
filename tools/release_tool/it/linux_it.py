@@ -151,6 +151,13 @@ def main():
     res = run_clients(entry, USER, PASS)
     problems += ["%s with right password: %s" % kv for kv in res.items() if kv[1] != "204"]
 
+    step("Xray update on a running server (already the latest: nothing changes)")
+    try:
+        with connect_linux() as h:
+            print(linux.update_xray(h, log=print), linux.update_agent(h, log=print))
+    except Exception as e:   # noqa: BLE001
+        problems.append("update xray/agent: %s" % e)
+
     step("monitoring sees who is connected with which protocol")
     import monitor
     time.sleep(15)
@@ -334,6 +341,31 @@ def backup_tunnel_test(params, connect_linux, server_ip):
                 problems.append("backup tunnel: to-gre does not use the backup (%s)" % st.get("using"))
             if not r.run(":put [:tostr ([/ip route get [find where gateway=10.99.0.2]]->\"check-gateway\")]").strip():
                 problems.append("backup tunnel: no health check on the GRE route")
+            # UDP cut, ping still passing: the same tunnel over ICMP (pv-icmp on the server)
+            relay.terminate()
+            relay.wait()
+            if not params["awg"].get("icmp_key") or "active" not in sh("systemctl is-active pv-icmp", check=False):
+                problems.append("backup tunnel: pv-icmp not installed on the server")
+            cfg.update(icmp_key=params["awg"].get("icmp_key", ""), transport="icmp", mode_file="/tmp/relay-mode.txt")
+            with open("/tmp/relay.json", "w") as f:
+                json.dump(cfg, f)
+            relay = subprocess.Popen(["sudo", sys.executable, os.path.join(relay_dir, "awgrelay.py"), "/tmp/relay.json"],
+                                     stdout=open("/tmp/relay.log", "a"), stderr=subprocess.STDOUT)
+            ok = False
+            for _ in range(20):
+                time.sleep(3)
+                out = r.run("/ping 10.64.0.1 count=3 src-address=%s" % bt.TUN_ADDR, check=False)
+                print("icmp:", out.strip().splitlines()[-2:])
+                if re.search(r"received=[123]", out):
+                    ok = True
+                    break
+            if not ok:
+                problems.append("backup tunnel: no ping through AmneziaWG over ICMP")
+                print(sh("sudo journalctl -u pv-icmp -n 30 --no-pager", check=False))
+            if (open("/tmp/relay-mode.txt").read().strip() if os.path.exists("/tmp/relay-mode.txt") else "") != "icmp":
+                problems.append("backup tunnel: relay did not report ICMP mode")
+            if "64 bytes" not in sh("ping -c 2 -W 2 127.0.0.1", check=False):
+                problems.append("backup tunnel: ordinary ping not answered while pv-icmp runs")
             time.sleep(25)                      # a pv-agent round: the router's peer must stay
             if pub not in sh("sudo awg show awg0 peers", check=False):
                 problems.append("backup tunnel: pv-agent removed the router's peer")
@@ -344,7 +376,8 @@ def backup_tunnel_test(params, connect_linux, server_ip):
                 problems.append("backup tunnel: remove() left %d items or the health check" % left)
         finally:
             relay.terminate()
-            print(open("/tmp/relay.log").read()[-1500:])
+            sh("sudo pkill -f awgrelay.py", check=False)
+            print(open("/tmp/relay.log").read()[-3000:])
         for c in ["/ip route remove [find where gateway=10.99.0.2]", "/ip address remove [find where interface=gre-test]",
                   "/interface gre remove [find where name=gre-test]", "/routing table remove [find where name=to-gre]"]:
             r.run(c, check=False)

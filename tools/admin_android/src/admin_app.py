@@ -1271,8 +1271,10 @@ class ServicesPage:
                  ft.Row([b("نصب بات / انتقال دیتابیس", self.bot_install, primary=True, icon=ft.Icons.SMART_TOY)]),
                  icon=ft.Icons.SMART_TOY),
             card("سرورهای لینوکس (pv-agent)",
-                 hint("کد جدید pv-agent را روی همه‌ی سرورهای لینوکس می‌گذارد؛ یوزرها و تنظیمات دست نمی‌خورند."),
-                 button_row(b("به‌روزرسانی pv-agent همه", self.update_agents, icon=ft.Icons.SYNC)),
+                 hint("pv-agent: فقط کد عوض می‌شود؛ یوزرها و تنظیمات دست نمی‌خورند. Xray: سرورها یکی‌یکی؛ "
+                      "یوزرهای پروتکل‌های Xray چند ثانیه قطع و خودکار وصل می‌شوند."),
+                 button_row(b("به‌روزرسانی pv-agent همه", self.update_agents, icon=ft.Icons.SYNC),
+                            b("به‌روزرسانی Xray همه", self.update_xrays, icon=ft.Icons.DOWNLOAD)),
                  icon=ft.Icons.DNS),
             card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
@@ -1343,6 +1345,31 @@ class ServicesPage:
         await self.app.info("انجام شد" if not bad else "ناقص",
                             "pv-agent همه‌ی سرورها به‌روز شد." if not bad
                             else "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
+
+    async def update_xrays(self):
+        servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return await self.app.info("خطا", "سرور لینوکسی تعریف نشده است.")
+        if not await self.app.ask("به‌روزرسانی Xray", "آخرین نسخه‌ی Xray روی %d سرور، یکی‌یکی نصب می‌شود. یوزرهای "
+                                  "Reality/XHTTP/Hysteria2/Shadowsocks/CDN هر سرور چند ثانیه قطع و خودکار وصل "
+                                  "می‌شوند (SSTP و AmneziaWG نه). اگر نسخه‌ی جدید تنظیمات را قبول نکند، نسخه‌ی قبلی "
+                                  "می‌ماند. بهتر است ساعت کم‌ترافیک باشد. ادامه؟" % len(servers)):
+            return
+
+        def job(log, progress):
+            done = []
+            for r in servers:
+                log("— %s" % r["host"])
+                try:
+                    with linux_connector(r)() as h:
+                        old, new = linux.update_xray(h, log)
+                    done.append("%s: %s" % (r["host"], new if old == new else "%s → %s" % (old, new)))
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    done.append("%s: ✗ نشد" % r["host"])
+            return done
+        done = await self.app.run(self.panel, job)
+        await self.app.info("Xray", "\n".join(done))
 
     async def bot_refresh(self):
         r = await self.chosen(self.target, "روتر اصلی")
@@ -1501,6 +1528,7 @@ class ServicesPage:
                 if static:
                     with linux_connector(tgt)() as h:
                         s["linux"] = linux.static_peer_status(h, next(iter(static)))
+                        s["icmp"] = linux.icmp_status(h)
             return s
         s = await self.app.run(self.panel, job)
         if not s.get("installed"):
@@ -1514,6 +1542,12 @@ class ServicesPage:
                 lines.append("جدول %s الان از: %s" % (table, "AmneziaWG (پشتیبان)" if via == "AmneziaWG"
                                                        else "GRE (%s)" % via))
         lines.append("کانتینر رله: %s" % s.get("relay"))
+        lines.append("راه رله به سرور لینوکس: %s" % ("پینگ (ICMP) — UDP بسته است" if s.get("carrier") == "ICMP"
+                                                      else "UDP (عادی)"))
+        if s.get("icmp"):
+            lines.append("پشتیبان پینگ روی لینوکس (pv-icmp): %s" % ("✓ فعال" if s["icmp"] == "active" else
+                                                                  "نصب نشده — «بررسی و راه‌اندازی» را دوباره بزنید"
+                                                                  if s["icmp"] in ("none", "inactive") else s["icmp"]))
         self.bt_state.value = "\n".join(lines)
 
     async def backup_remove(self):

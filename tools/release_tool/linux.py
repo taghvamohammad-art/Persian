@@ -104,10 +104,7 @@ def install_base(h, log):
     h.run("sysctl --system >/dev/null")
 
 
-def install_xray(h, log):
-    log("نصب Xray-core (آخرین نسخه)…")
-    arch = "64" if "x86_64" in h.run("uname -m") else "arm64-v8a"
-    script = r"""set -e
+XRAY_FETCH = r"""set -e
 cd /tmp
 # the API has a small hourly limit per IP; the release page redirect has none
 tag=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)
@@ -119,11 +116,17 @@ want=$(grep -i 'SHA2-256' xray.zip.dgst | head -1 | awk -F'= ' '{print $2}')
 have=$(sha256sum xray.zip | awk '{print $1}')
 [ "$want" = "$have" ] || { echo "checksum mismatch"; exit 3; }
 rm -rf xr && mkdir xr && unzip -q xray.zip -d xr
-install -m 755 xr/xray /usr/local/bin/xray
+"""
+
+
+def install_xray(h, log):
+    log("نصب Xray-core (آخرین نسخه)…")
+    arch = "64" if "x86_64" in h.run("uname -m") else "arm64-v8a"
+    script = (XRAY_FETCH + r"""install -m 755 xr/xray /usr/local/bin/xray
 mkdir -p /usr/local/share/xray %(conf)s
 cp xr/geoip.dat xr/geosite.dat /usr/local/share/xray/ 2>/dev/null || true
 echo $tag
-""" % {"arch": arch, "conf": XRAY_CONF_DIR}
+""") % {"arch": arch, "conf": XRAY_CONF_DIR}
     tag = h.run(script, timeout=600).strip().splitlines()[-1]
     h.write("/etc/systemd/system/xray.service", """[Unit]
 Description=Xray (Persian VPN)
@@ -497,6 +500,9 @@ def update_agent(h, log=print):
     h.write(AGENT_DIR + "/pv_agent.py", source("pv_agent.py"))
     h.write(AGENT_DIR + "/pvcreds.py", source("pvcreds.py"))
     h.run("systemctl restart pv-agent")
+    if h.run("test -f /etc/systemd/system/pv-icmp.service && echo Y || true").strip():
+        h.write(AGENT_DIR + "/pv_icmp.py", source("pv_icmp.py"))
+        h.run("systemctl restart pv-icmp")
     for _ in range(10):
         state = h.run("systemctl is-active pv-agent || true").strip()
         if state == "active":
@@ -506,6 +512,89 @@ def update_agent(h, log=print):
         raise LinuxError("pv-agent بعد از به‌روزرسانی اجرا نشد (%s):\n%s" % (
             state, h.run("journalctl -u pv-agent -n 15 --no-pager || true")))
     log("pv-agent به‌روز شد ✓")
+
+
+def update_xray(h, log=print):
+    """Xray's latest release on a running server: the new binary must accept
+    the current config before it replaces the old one, and the old one comes
+    back if the service does not start. Users of the Xray protocols are cut
+    for the few seconds of the restart; the app reconnects by itself.
+    Returns (old version, new version)."""
+    if not h.run("test -x /usr/local/bin/xray && echo Y || true").strip():
+        raise LinuxError("Xray روی این سرور نصب نیست.")
+    arch = "64" if "x86_64" in h.run("uname -m") else "arm64-v8a"
+    old = h.run("/usr/local/bin/xray version 2>/dev/null | head -1 | awk '{print $2}'").strip()
+    log("نسخه‌ی فعلی Xray: %s — دریافت آخرین نسخه…" % (old or "?"))
+    script = (XRAY_FETCH + r"""
+echo "NEW $tag"
+[ "v%(old)s" = "$tag" ] && { echo SAME; exit 0; }
+XRAY_LOCATION_ASSET=/tmp/xr /tmp/xr/xray run -test -config %(conf)s/config.json >/tmp/xray-test.log 2>&1 \
+  || { echo "REJECTED"; tail -5 /tmp/xray-test.log; exit 4; }
+cp -p /usr/local/bin/xray /usr/local/bin/xray.old
+install -m 755 xr/xray /usr/local/bin/xray
+for f in geoip.dat geosite.dat; do [ -f xr/$f ] && cp xr/$f /usr/local/share/xray/; done
+systemctl restart xray
+sleep 3
+if ! systemctl is-active --quiet xray; then
+  install -m 755 /usr/local/bin/xray.old /usr/local/bin/xray
+  systemctl restart xray
+  echo "ROLLED BACK"; exit 5
+fi
+echo DONE
+""") % {"arch": arch, "conf": XRAY_CONF_DIR, "old": old}
+    out = h.run(script, timeout=600, check=False)
+    new = next((l.split()[1] for l in out.splitlines() if l.startswith("NEW ") and len(l.split()) > 1), "")
+    if "SAME" in out.splitlines():
+        log("Xray به‌روز است (%s)" % new)
+        return old, old
+    if "REJECTED" in out:
+        raise LinuxError("Xray %s تنظیمات فعلی سرور را قبول نکرد؛ نسخه‌ی قبلی (%s) دست نخورد:\n%s"
+                         % (new, old, out[-600:]))
+    if "ROLLED BACK" in out:
+        raise LinuxError("Xray %s اجرا نشد؛ نسخه‌ی قبلی (%s) برگردانده شد." % (new, old))
+    if "DONE" not in out.splitlines():
+        raise LinuxError("به‌روزرسانی Xray ناموفق بود:\n%s" % out[-600:])
+    log("Xray از %s به %s رسید ✓" % (old, new.lstrip("v")))
+    return old, new.lstrip("v")
+
+
+def ensure_icmp(h, p, log=print):
+    """pv-icmp: the ICMP carrier of the router's backup tunnel (for routes
+    where Iran cuts UDP but ping passes). The key is kept in the params so a
+    re-install keeps it. The kernel's own ping replies are off while it runs;
+    it answers ordinary pings itself."""
+    awg = p["awg"]
+    if not awg.get("icmp_key"):
+        awg["icmp_key"] = secrets.token_hex(16)
+    log("ICMP پشتیبان روی سرور لینوکس…")
+    h.run("mkdir -p %s /etc/pv-agent" % AGENT_DIR)
+    h.write(AGENT_DIR + "/pv_icmp.py", source("pv_icmp.py"))
+    h.write("/etc/pv-agent/icmp.json", json.dumps({"key": awg["icmp_key"], "awg_port": int(awg["port"])}), "600")
+    h.write("/etc/systemd/system/pv-icmp.service", """[Unit]
+Description=Persian VPN backup tunnel over ICMP
+After=network-online.target
+
+[Service]
+ExecStartPre=/usr/sbin/sysctl -q -w net.ipv4.icmp_echo_ignore_all=1
+ExecStart=/usr/bin/python3 %s/pv_icmp.py /etc/pv-agent/icmp.json
+ExecStopPost=/usr/sbin/sysctl -q -w net.ipv4.icmp_echo_ignore_all=0
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+""" % AGENT_DIR)
+    h.run("systemctl daemon-reload && systemctl enable pv-icmp >/dev/null 2>&1; systemctl restart pv-icmp")
+    return p
+
+
+def icmp_status(h):
+    return h.run("systemctl is-active pv-icmp 2>/dev/null || true").strip() or "none"
+
+
+def remove_icmp(h):
+    h.run("systemctl disable --now pv-icmp >/dev/null 2>&1; rm -f /etc/systemd/system/pv-icmp.service; "
+          "systemctl daemon-reload; sysctl -q -w net.ipv4.icmp_echo_ignore_all=0 || true", check=False)
 
 
 def add_static_peer(h, p, public, address, log=print):

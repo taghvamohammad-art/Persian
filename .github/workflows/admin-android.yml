@@ -36,7 +36,7 @@ jobs:
             case "$(basename "$f")" in test_*|release_gui.py|stdlib_hidden.py) ;; *) cp "$f" . ;; esac
           done
           cp ../../sign_config.py ../../../server/umstatus/umstatus.py ../../../server/linux/pv_agent.py \
-             ../../../server/linux/pvcreds.py ../../../server/mikrotik/awgrelay.py .
+             ../../../server/linux/pvcreds.py ../../../server/linux/pv_icmp.py ../../../server/mikrotik/awgrelay.py .
           cp -r ../../../server/linux/site site
           cp ../BASE BASE_ANDROID
           mkdir -p assets/fonts && cp ../icon.png assets/icon.png && cp ../fonts/*.ttf assets/fonts/
@@ -110,7 +110,7 @@ jobs:
           set -e
           app=tools/admin_android/build/python-app
           ls "$app" | head -100
-          for f in umstatus.py pv_agent.py pvcreds.py awgrelay.py sign_config.py site/index.html BASE_ANDROID \
+          for f in umstatus.py pv_agent.py pvcreds.py pv_icmp.py awgrelay.py sign_config.py site/index.html BASE_ANDROID \
                    admin_app.py libpvdiff-arm64.so; do
             test -f "$app/$f" || { echo "::error::$f is missing from the app"; exit 1; }
           done

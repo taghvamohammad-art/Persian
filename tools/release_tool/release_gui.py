@@ -1088,11 +1088,15 @@ class ServicesPage(RouterPage):
         lay.addWidget(c2)
 
         c6, l6 = card("سرورهای لینوکس (pv-agent)")
-        hint6 = QLabel("کد جدید pv-agent را روی همه‌ی سرورهای لینوکس می‌گذارد؛ یوزرها و تنظیمات دست نمی‌خورند.")
+        hint6 = QLabel("pv-agent: فقط کد عوض می‌شود؛ یوزرها و تنظیمات دست نمی‌خورند. Xray: سرورها یکی‌یکی؛ "
+                       "یوزرهای پروتکل‌های Xray چند ثانیه قطع و خودکار وصل می‌شوند.")
         hint6.setObjectName("Hint")
         hint6.setWordWrap(True)
         l6.addWidget(hint6)
-        l6.addWidget(self.button("به‌روزرسانی pv-agent همه‌ی سرورها", self.update_agents))
+        r6 = QHBoxLayout()
+        r6.addWidget(self.button("به‌روزرسانی pv-agent همه‌ی سرورها", self.update_agents))
+        r6.addWidget(self.button("به‌روزرسانی Xray همه‌ی سرورها", self.update_xrays))
+        l6.addLayout(r6)
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1195,6 +1199,7 @@ class ServicesPage(RouterPage):
                 if static:
                     with linux_connector(tgt)() as h:
                         s["linux"] = linux.static_peer_status(h, next(iter(static)))
+                        s["icmp"] = linux.icmp_status(h)
             return s
 
         def done(s):
@@ -1211,6 +1216,12 @@ class ServicesPage(RouterPage):
                     lines.append("جدول %s الان از: %s" % (table, "AmneziaWG (پشتیبان)" if via == "AmneziaWG"
                                                            else "GRE (%s)" % via))
             lines.append("کانتینر رله: %s" % s.get("relay"))
+            lines.append("راه رله به سرور لینوکس: %s" % ("پینگ (ICMP) — UDP بسته است" if s.get("carrier") == "ICMP"
+                                                          else "UDP (عادی)"))
+            if s.get("icmp"):
+                lines.append("پشتیبان پینگ روی لینوکس (pv-icmp): %s" % ("✓ فعال" if s["icmp"] == "active" else
+                                                                      "نصب نشده — «بررسی و راه‌اندازی» را دوباره بزنید"
+                                                                      if s["icmp"] in ("none", "inactive") else s["icmp"]))
             self.bt_state.setText("\n".join(lines))
         self.run(job, done)
 
@@ -1297,6 +1308,31 @@ class ServicesPage(RouterPage):
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
         self.run(job, done)
+
+    def update_xrays(self):
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+        if QMessageBox.question(self, "به‌روزرسانی Xray",
+                                "آخرین نسخه‌ی Xray روی %d سرور، یکی‌یکی نصب می‌شود. یوزرهای "
+                                "Reality/XHTTP/Hysteria2/Shadowsocks/CDN هر سرور چند ثانیه قطع و خودکار وصل "
+                                "می‌شوند (SSTP و AmneziaWG نه). اگر نسخه‌ی جدید تنظیمات را قبول نکند، نسخه‌ی قبلی "
+                                "می‌ماند. بهتر است ساعت کم‌ترافیک باشد. ادامه؟" % len(servers)) != QMessageBox.Yes:
+            return
+
+        def job(log, progress):
+            done = []
+            for r in servers:
+                log("— %s" % r["host"])
+                try:
+                    with linux_connector(r)() as h:
+                        old, new = linux.update_xray(h, log)
+                    done.append("%s: %s" % (r["host"], new if old == new else "%s → %s" % (old, new)))
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    done.append("%s: ✗ نشد" % r["host"])
+            return done
+        self.run(job, lambda done: QMessageBox.information(self, "Xray", "\n".join(done)))
 
     def bot_refresh(self):
         r = self.target()

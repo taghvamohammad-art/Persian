@@ -5,6 +5,7 @@ over AmneziaWG to a Linux server instead, and back when GRE returns.
     SSTP user -> main router -[GRE]-> router abroad -> internet      (normal)
     SSTP user -> main router -[WireGuard]-> relay container
                  -[AmneziaWG]-> Linux server -> internet             (backup)
+                 (AmneziaWG inside ICMP echo when UDP is cut: pv_icmp.py)
 
 RouterOS only speaks plain WireGuard, which Iran's filtering drops, so a
 small relay in a container (server/mikrotik/awgrelay.py) turns it into
@@ -169,6 +170,8 @@ def describe(plan, server):
         lines.append("• ترافیکی که الان از %s (جدول %s، فاصله %d) می‌رود، اگر GRE قطع شد از AmneziaWG می‌رود."
                      % (rt["gateway"], rt["table"], rt["distance"]))
     lines += ["• یک کانتینر کوچک (رله) و اینترفیس %s ساخته می‌شود؛ همه با توضیح %s." % (WG, TAG)]
+    lines += ["• اگر UDP به سرور لینوکس هم بسته شد، رله خودکار بسته‌ها را داخل پینگ (ICMP) می‌فرستد؛ "
+              "روی سرور لینوکس سرویس pv-icmp نصب می‌شود."]
     lines += ["• " + c for c in plan.changes]
     if plan.warnings:
         lines += [""] + ["⚠ " + w for w in plan.warnings]
@@ -210,6 +213,8 @@ def ensure_peer(r, server_public, endpoint, port, log=print):
 def relay_config(server_ip, awg, router_public):
     cfg = {k: awg[k] for k in ("port", "jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4")}
     cfg.update(server=server_ip, server_public=awg["public"], router_public=router_public, listen=RELAY_PORT)
+    if awg.get("icmp_key"):
+        cfg.update(icmp_key=awg["icmp_key"], transport="auto")
     return cfg
 
 
@@ -314,6 +319,7 @@ def setup(r, linux_connect, p, server_ip, log=print, relay_endpoint=None):
     h = linux_connect()
     try:
         p = linux.add_static_peer(h, p, pub, TUN_ADDR, log)
+        p = linux.ensure_icmp(h, p, log)
     finally:
         h.close()
     awg = p["awg"]
@@ -349,6 +355,7 @@ def status(r):
         using[table or "main"] = "AmneziaWG" if comment == TAG or gw == WG else gw
     out["using"] = using
     out["relay"] = sv.container_status(r, RELAY) if sv.has_package(r, "container") else "none"
+    out["carrier"] = (sv.file_text(r, RELAY["dir"] + "/mode.txt") or "").strip().upper() or "UDP"
     return out
 
 

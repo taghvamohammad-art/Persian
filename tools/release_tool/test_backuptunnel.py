@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import os
 import sys
 import unittest
@@ -80,6 +81,64 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("priv", cfg)                          # no secret ever goes to the router
         self.assertEqual((cfg["server"], cfg["port"], cfg["router_public"]), ("5.6.7.8", 4444, "RPUB"))
         self.assertTrue(bt.relay_source().startswith(b'"""WireGuard'))
+        self.assertNotIn("icmp_key", cfg)                      # older servers: UDP only
+        cfg = bt.relay_config("5.6.7.8", dict(awg, icmp_key="ab" * 16), "RPUB")
+        self.assertEqual((cfg["icmp_key"], cfg["transport"]), ("ab" * 16, "auto"))
+
+    def test_icmp_carrier_installed_on_linux(self):
+        import linux
+
+        class H:
+            def __init__(self):
+                self.files, self.cmds = {}, []
+
+            def run(self, c, check=True, **kw):
+                self.cmds.append(c)
+                return ""
+
+            def write(self, path, data, mode=None):
+                self.files[path] = data
+        h = H()
+        p = linux.ensure_icmp(h, {"awg": {"port": 4444}}, log=lambda *a: None)
+        key = p["awg"]["icmp_key"]
+        self.assertEqual(len(bytes.fromhex(key)), 16)
+        self.assertEqual(json.loads(h.files["/etc/pv-agent/icmp.json"]), {"key": key, "awg_port": 4444})
+        self.assertIn(b"class Server", h.files["/opt/pv-agent/pv_icmp.py"])
+        self.assertIn("icmp_echo_ignore_all=0", h.files["/etc/systemd/system/pv-icmp.service"])
+        self.assertEqual(linux.ensure_icmp(h, p, log=lambda *a: None)["awg"]["icmp_key"], key)   # kept
+
+
+class XrayUpdateTests(unittest.TestCase):
+    def fake(self, script_out):
+        class H:
+            def __init__(self):
+                self.scripts = []
+
+            def run(self, c, check=True, **kw):
+                if c.startswith("test -x"):
+                    return "Y"
+                if c == "uname -m":
+                    return "x86_64"
+                if "xray version" in c:
+                    return "26.10.31\n"
+                self.scripts.append(c)
+                return script_out
+        return H()
+
+    def test_updated(self):
+        import linux
+        h = self.fake("NEW v26.11.9\nDONE\n")
+        self.assertEqual(linux.update_xray(h, log=lambda *a: None), ("26.10.31", "26.11.9"))
+        self.assertIn('[ "v26.10.31" = "$tag" ]', h.scripts[0])
+        self.assertIn("run -test -config", h.scripts[0])          # the new one must accept the config first
+
+    def test_same_rejected_rolled_back(self):
+        import linux
+        self.assertEqual(linux.update_xray(self.fake("NEW v26.10.31\nSAME\n"), log=lambda *a: None),
+                         ("26.10.31", "26.10.31"))
+        for out in ("NEW v27.1.1\nREJECTED\nbad option\n", "NEW v27.1.1\nROLLED BACK\n", "curl: (6)\n"):
+            with self.assertRaises(linux.LinuxError):
+                linux.update_xray(self.fake(out), log=lambda *a: None)
 
 
 if __name__ == "__main__":
