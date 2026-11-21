@@ -288,6 +288,8 @@ def serve(cfg, log=print):
             except OSError:
                 continue
             if s is inside:
+                if router is None:
+                    log("awgrelay: first packet from the router (%s:%d)" % addr)
                 router = addr
                 out = relay.outgoing(data)
                 is_init = data[:1] == b"\x01"

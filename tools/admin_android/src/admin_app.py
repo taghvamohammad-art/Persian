@@ -1547,6 +1547,8 @@ class ServicesPage:
             lines.append("سرور لینوکس از روتر: %s، دریافت %s، ارسال %s" % (
                 "✓ handshake %d ثانیه پیش" % lx[0] if lx[0] is not None else "✗ handshake نشده",
                 human_size(lx[1]), human_size(lx[2])))
+        for l in s.get("diag") or []:
+            lines.append("بررسی: " + l)
         for l in s.get("log") or []:
             lines.append("رله: " + l)
         lines.append("راه رله به سرور لینوکس: %s" % ("پینگ (ICMP) — UDP بسته است" if s.get("carrier") == "ICMP"

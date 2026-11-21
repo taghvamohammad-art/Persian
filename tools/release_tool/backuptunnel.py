@@ -115,7 +115,7 @@ def gre_of(gateway, gres):
     return None
 
 
-def make_plan(gres, addrs, routes, profiles):
+def make_plan(gres, addrs, routes, profiles, veths=()):
     plan = Plan()
     plan.gres = gres
     if not gres:
@@ -155,13 +155,17 @@ def make_plan(gres, addrs, routes, profiles):
             except ValueError:
                 pass
     used = [a for i, a in addrs if i != WG and a.split("/")[0] in (TUN_ADDR, RELAY["ip"])]
+    used += ["%s (%s)" % (a, n) for n, a in veths if n != RELAY["veth"] and a.split("/")[0] == RELAY["ip"]]
     if used:
         plan.problems.append("آدرس %s روی روتر استفاده شده است." % "، ".join(used))
     return plan
 
 
 def inspect(r):
-    return make_plan(*read_router(r))
+    out = r.run(':foreach i in=[/interface veth find] do={:local v [/interface veth get $i]; '
+                ':put ("v|" . ($v->"name") . "|" . [:tostr ($v->"address")])}', check=False)
+    veths = [(n, a) for n, a, *_ in (x + [""] for x in _lines(out, "v"))]
+    return make_plan(*read_router(r), veths=veths)
 
 
 def describe(plan, server):
@@ -379,6 +383,21 @@ def status(r):
     out["using"] = using
     out["relay"] = sv.container_status(r, RELAY) if sv.has_package(r, "container") else "none"
     out["carrier"] = (sv.file_text(r, RELAY["dir"] + "/mode.txt") or "").strip().upper() or "UDP"
+    # why nothing reaches the relay, if that is the case
+    diag = r.run(':put ("ping|" . [/ping %(ip)s count=2 interval=300ms]); '
+                 ':foreach i in=[/interface veth find] do={:local v [/interface veth get $i]; '
+                 ':put ("veth|" . ($v->"name") . "|" . [:tostr ($v->"address")])}; '
+                 ':local i [/interface wireguard peers find where interface=%(wg)s]; :if ([:len $i] > 0) do={'
+                 ':local p [/interface wireguard peers get ($i->0)]; :put ("peer|" . [:tostr ($p->"endpoint-address")] . '
+                 '"|" . [:tostr ($p->"endpoint-port")] . "|" . [:tostr ($p->"current-endpoint-address")] . "|" . '
+                 '[:tostr ($p->"current-endpoint-port")])}; '
+                 ':foreach i in=[/ip route find where dst-address~"^172.17.0." and active] do={'
+                 ':local x [/ip route get $i]; :put ("route|" . ($x->"dst-address") . "|" . [:tostr ($x->"gateway")] '
+                 '. "|" . [:tostr ($x->"routing-table")])}; '
+                 ':put ("rules|" . [:len [/routing rule find]] . "|" . [:len [/ip firewall mangle find where chain=output]] '
+                 '. "|" . [:len [/ip firewall filter find where chain=output]])'
+                 % {"ip": RELAY["ip"], "wg": q(WG)}, check=False)
+    out["diag"] = [l.strip() for l in diag.splitlines() if l.strip()]
     logs = r.run(':foreach i in=[/log find where message~"awgrelay"] do={:put [/log get $i message]}', check=False)
     out["log"] = [l.strip() for l in logs.splitlines() if l.strip()][-4:]
     return out
