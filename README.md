@@ -1,15 +1,78 @@
 # Persian VPN
 
-Android VPN client (Persian UI) for a MikroTik User Manager service.
+سرویس VPN با رابط فارسی، روی **یوزر منیجر میکروتیک**: اپ اندروید (گوشی و تلویزیون)، اپ ویندوز، چند پروتکل روی سرورهای لینوکس، و ابزار انتشار و مدیریت سرورها برای ویندوز و گوشی.
 
-- `app/` – Android app, based on [Open SSTP Client](https://github.com/kittoku/Open-SSTP-Client) (MIT, see `LICENSE`). Branded code: `app/src/main/java/kittoku/osc/brand/`
-- `server/umstatus/` – account-status service that runs in a RouterOS container
-- `tools/` – config signing / release tool, icon sources
-- Build and release guide (Persian): `BUILD_FA.md`
-- Project overview, features and roadmap (Persian): `docs/PROJECT_FA.md`
-- Automatic build: GitHub Actions (`.github/workflows/android.yml`)
+> مخزن خصوصی است. کلید امضای APK، کلید خصوصی امضای تنظیمات و رمزها **هرگز** در مخزن نیستند (پایین را ببینید).
 
-Never commit: the release keystore, `config_key.private.json`, `server/umstatus/config.json`.
+## اجزا در یک نگاه
+
+```mermaid
+flowchart LR
+  subgraph Users[کاربرها]
+    A[اپ اندروید<br/>گوشی و تلویزیون]
+    W[اپ ویندوز]
+  end
+  subgraph IR[میکروتیک اصلی - ایران]
+    UM[(User Manager)]
+    US[umstatus<br/>کانتینر]
+    BOT[بات ریسلر<br/>کانتینر]
+    SSTP[SSTP]
+    RL[رله‌ی AmneziaWG<br/>کانتینر]
+  end
+  GRE[میکروتیک خارج<br/>تانل GRE]
+  L[سرورهای لینوکس<br/>Xray + AmneziaWG + pv-agent]
+  T[ابزار انتشار<br/>ویندوز / Persian Admin]
+  A & W -->|وضعیت، تنظیمات امضاشده، آپدیت| US
+  A & W -->|VLESS، Hysteria2، SS، AmneziaWG| L
+  A & W -->|SSTP| SSTP
+  SSTP --> GRE
+  SSTP -.->|اگر GRE قطع شد| RL -.-> L
+  L -->|RADIUS: ورود و حجم| UM
+  US --- UM
+  BOT --- UM
+  T -->|امضا، انتشار، بکاپ، نصب| US & L & IR
+```
+
+| پوشه | چیست |
+|---|---|
+| `app/` | اپ اندروید (کاتلین) بر پایه‌ی [Open SSTP Client](https://github.com/kittoku/Open-SSTP-Client) (MIT). کد اختصاصی در `app/src/main/java/kittoku/osc/brand/` |
+| `mobile/pvcore/` | موتور Go مشترک اندروید و ویندوز (Xray، AmneziaWG، tun2socks، وصله‌ی bsdiff، اشتراک هات‌اسپات) |
+| `mobile/cmd/pvwin/` | سرویس ویندوزی موتور (`pvwin.exe`) |
+| `mobile/pvdiff/` | ساخت وصله‌ی bsdiff با Go برای نسخه‌ی گوشیِ ابزار انتشار |
+| `windows/pvclient.py` | اپ ویندوز (PySide6) |
+| `server/umstatus/` | سرویس وضعیت حساب، توزیع تنظیمات امضاشده، APK و وصله‌ها (کانتینر روی میکروتیک) |
+| `server/linux/` | `pv_agent.py` (هماهنگی Xray و AmneziaWG با یوزر منیجر، حسابداری RADIUS) و سایت پوششی |
+| `server/mikrotik/` | رله‌ی WireGuard→AmneziaWG برای تانل پشتیبان |
+| `tools/release_tool/` | ابزار انتشار و مدیریت (ویندوز، PySide6) |
+| `tools/admin_android/` | همان ابزار برای گوشی: **Persian Admin** (Flet) |
+| `tools/sign_config.py` | امضای تنظیمات |
+
+## مستندات
+
+| سند | برای |
+|---|---|
+| [`docs/ARCHITECTURE_FA.md`](docs/ARCHITECTURE_FA.md) | تحلیل فنی: هر جزء چطور کار می‌کند، جریان داده‌ها، امنیت |
+| [`docs/OPERATIONS_FA.md`](docs/OPERATIONS_FA.md) | کار روزمره: انتشار، تست، سرور جدید، بکاپ، تانل پشتیبان، رفع اشکال |
+| [`docs/PROJECT_FA.md`](docs/PROJECT_FA.md) | وضعیت، امکانات و نقشه‌ی راه |
+| [`docs/CHANGELOG_FA.md`](docs/CHANGELOG_FA.md) | تغییرات مهم |
+| [`BUILD_FA.md`](BUILD_FA.md) | ساخت از صفر و راه‌اندازی اولیه |
+
+بات ریسلر تلگرام در مخزن جدای [`um-reseller-bot`](https://github.com/taghvamohammad-art/um-reseller-bot) است.
+
+## بیلدها (GitHub Actions)
+
+| ورکفلو | خروجی |
+|---|---|
+| Build APK | اپ اندروید `persian-vpn-N` (گوشی و تلویزیون) |
+| Mobile engine (pvcore.aar) | موتور Go برای اندروید |
+| Windows client | اپ ویندوز |
+| Release tool (Windows) | ابزار انتشار + تست‌های واقعی روی CHR و لینوکس |
+| Admin app (Android) | Persian Admin `Persian-Admin-N` |
+
+اگر حساب GitHub مشکل پرداخت داشته باشد، ورکفلوها اجرا نمی‌شوند؛ بعد از رفع، از Actions دستی «Run workflow» بزنید.
+
+## هرگز در مخزن نگذارید
+`release.jks` و رمزهایش (فقط در GitHub Secrets)، `config_key.private.json`، `server/umstatus/config.json`، `tools/config.json`، توکن GitHub و Cloudflare، رمز روترها. روی روتر فقط کلید **عمومی** (`config_key.public.txt`) می‌رود.
 
 ---
 

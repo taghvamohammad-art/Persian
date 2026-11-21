@@ -1,5 +1,7 @@
 # ساخت اپ اندروید
 
+> این سند ساخت از صفر و راه‌اندازی اولیه است. کار روزمره: [`docs/OPERATIONS_FA.md`](docs/OPERATIONS_FA.md) · تحلیل فنی: [`docs/ARCHITECTURE_FA.md`](docs/ARCHITECTURE_FA.md)
+
 > **اول یک بار:** فایل `tools/config.example.json` را به `tools/config.json` کپی کنید و `ROUTER_IP` را با IP روتر عوض کنید. فایل `config.json` در گیت ثبت نمی‌شود.
 
 
