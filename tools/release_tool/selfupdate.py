@@ -47,8 +47,11 @@ def overlay_name(path):
         return None
     if path.startswith("tools/") and path.count("/") == 1 and name.endswith(".py"):
         return name
-    if path in ("server/umstatus/umstatus.py", "server/linux/pv_agent.py", "server/linux/pvcreds.py",
-                "server/linux/pv_icmp.py", "server/mikrotik/awgrelay.py"):
+    if path == "server/umstatus/umstatus.py":
+        return name
+    # every program the tool puts on servers, so a new one arrives with "get new features"
+    if path.count("/") == 2 and path.startswith(("server/linux/", "server/mikrotik/")) \
+            and name.endswith(".py") and not name.startswith("test_"):
         return name
     if path == "tools/admin_android/BASE":
         return "BASE_ANDROID"
