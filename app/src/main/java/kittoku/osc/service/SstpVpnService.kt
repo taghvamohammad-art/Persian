@@ -48,6 +48,7 @@ import java.util.Locale
 
 internal const val ACTION_VPN_CONNECT = "kittoku.osc.connect"
 internal const val ACTION_VPN_DISCONNECT = "kittoku.osc.disconnect"
+internal const val ACTION_VPN_SHIELD = "kittoku.osc.shield"
 
 internal const val NOTIFICATION_ERROR_CHANNEL = "ERROR"
 internal const val NOTIFICATION_RECONNECT_CHANNEL = "RECONNECT"
@@ -104,12 +105,122 @@ internal class SstpVpnService : VpnService() {
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     }
 
+    // ---------------------------------------------------------------- «سپر VPN»
+    // While the real tunnel is not up, an empty VPN for the shielded apps only:
+    // their packets go nowhere. The real tunnel replaces it when it comes up
+    // (onTunnelUp), so there is no moment where they reach the internet directly.
+
+    private var shieldPfd: android.os.ParcelFileDescriptor? = null
+    private var shieldJob: Job? = null
+
+    private fun shieldApps(): List<String> = BrandSession.shieldedApps(prefs).filter {
+        try {
+            packageManager.getApplicationInfo(it, 0); true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** True when the shield is up (the service then keeps running). quiet: between two
+     *  tunnels (reconnecting), where the state shown and the notification stay as they are. */
+    private fun startShield(quiet: Boolean = false): Boolean {
+        val apps = shieldApps()
+        if (apps.isEmpty() || VpnService.prepare(this) != null) {
+            closeShield()
+            return false
+        }
+        val builder = Builder()
+        try {
+            builder.setSession(getString(R.string.brand_shield_title))
+            builder.addAddress("10.255.255.254", 32)
+            builder.addRoute("0.0.0.0", 0)
+            builder.addAddress("fd00:7076:73::1", 128)
+            builder.addRoute("::", 0)
+            builder.addDnsServer("10.255.255.253")
+            builder.setBlocking(true)
+            apps.forEach { builder.addAllowedApplication(it) }
+        } catch (e: Exception) {
+            logWriter?.report("shield builder: $e")
+            closeShield()
+            return false
+        }
+        val pfd = try { builder.establish() } catch (_: Exception) { null }
+        if (pfd == null) {
+            closeShield()
+            return false
+        }
+        val old = shieldPfd
+        shieldPfd = pfd
+        shieldJob?.cancel()
+        try { old?.close() } catch (_: Exception) { }
+        shieldJob = scope.launch {
+            val input = java.io.FileInputStream(pfd.fileDescriptor)
+            val buf = ByteArray(32 * 1024)
+            try {
+                while (isActive && input.read(buf) >= 0) { /* dropped */ }
+            } catch (_: Exception) { }
+        }
+        if (!quiet) {
+            setRootState(false)
+            showShieldNotification(apps.size)
+        }
+        return true
+    }
+
+    private fun closeShield() {
+        shieldJob?.cancel()
+        shieldJob = null
+        try { shieldPfd?.close() } catch (_: Exception) { }
+        shieldPfd = null
+    }
+
+    /** The real tunnel's interface exists: it carries the shielded apps from now on. */
+    internal fun onTunnelUp() {
+        closeShield()
+    }
+
+    private fun showShieldNotification(count: Int) {
+        beForegroundedChannels()
+        val open = PendingIntent.getActivity(this, 2,
+            Intent(this, kittoku.osc.brand.BrandActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = NotificationCompat.Builder(this, NOTIFICATION_DISCONNECT_CHANNEL)
+            .setSmallIcon(R.drawable.ic_baseline_vpn_lock_24)
+            .setContentTitle(getString(R.string.brand_shield_notif_title))
+            .setContentText(getString(R.string.brand_shield_notif_text, kittoku.osc.brand.Fa.digits(count.toString())))
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        synchronized(statusLock) { statusClosed = true }
+        jobStatusNotification?.cancel()
+        startForeground(NOTIFICATION_DISCONNECT_ID, n)
+    }
+
+    private fun isTunnelBusy() =
+        controller != null || linuxTunnel != null || jobConnect?.isActive == true || jobReconnect?.isActive == true
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_VPN_SHIELD ||
+            (intent?.action == VpnService.SERVICE_INTERFACE && BrandSession.shieldedApps(prefs).isNotEmpty() && !isTunnelBusy())
+        ) {
+            if (isTunnelBusy()) return START_STICKY          // the tunnel carries them already
+            if (!startShield()) {
+                // nothing to shield: a short foreground start was promised, then stop
+                showShieldNotification(0)
+                stopForeground(true)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            return START_STICKY
+        }
         return when (intent?.action) {
             ACTION_VPN_CONNECT -> {
                 controller?.kill(false, null)
                 controller = null
                 stopLinux()
+                startShield(quiet = true)      // no gap for the shielded apps until the new tunnel
 
                 kittoku.osc.brand.SessionTraffic.reset()
                 cancelNotification(NOTIFICATION_ERROR_ID)
@@ -241,6 +352,7 @@ internal class SstpVpnService : VpnService() {
     }
 
     internal fun launchJobReconnect() {
+        startShield(quiet = true)              // the old tunnel is gone: no direct internet meanwhile
         jobReconnect = scope.launch {
             try {
                 getIntPrefValue(OscPrefKey.RECONNECTION_LIFE, prefs).also {
@@ -258,6 +370,21 @@ internal class SstpVpnService : VpnService() {
             } catch (_: CancellationException) { }
             finally {
                 cancelNotification(NOTIFICATION_RECONNECT_ID)
+            }
+        }
+    }
+
+    private fun beForegroundedChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            arrayOf(
+                NOTIFICATION_ERROR_CHANNEL,
+                NOTIFICATION_RECONNECT_CHANNEL,
+                NOTIFICATION_DISCONNECT_CHANNEL,
+                NOTIFICATION_CERTIFICATE_CHANNEL,
+            ).map {
+                NotificationChannel(it, it, NotificationManager.IMPORTANCE_DEFAULT)
+            }.also {
+                notificationManager.createNotificationChannels(it)
             }
         }
     }
@@ -385,6 +512,8 @@ internal class SstpVpnService : VpnService() {
     internal fun close() {
         // stop updating first, or a late update would bring the notification back
         removeStatusNotification()
+        // «سپر VPN»: the shielded apps stay without internet while there is no tunnel
+        if (startShield()) return
         stopForeground(true)
         cancelNotification(NOTIFICATION_DISCONNECT_ID)
         stopSelf()
@@ -399,6 +528,7 @@ internal class SstpVpnService : VpnService() {
         stopLinux()
         controller?.kill(false, null)
         controller = null
+        closeShield()
 
         scope.cancel()
 

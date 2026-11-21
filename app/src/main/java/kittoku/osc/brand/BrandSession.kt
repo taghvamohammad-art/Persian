@@ -122,6 +122,16 @@ internal object BrandSession {
         prefs.edit().putBoolean("pv_share", on).apply()
     }
 
+    /** «سپر VPN»: apps that may use the internet only through the VPN. */
+    internal fun shieldedApps(prefs: SharedPreferences): Set<String> =
+        prefs.getStringSet(PREF_SHIELD, null) ?: emptySet()
+
+    internal fun setShieldedApps(prefs: SharedPreferences, packages: Set<String>) {
+        prefs.edit().putStringSet(PREF_SHIELD, packages.toSet()).apply()
+    }
+
+    private const val PREF_SHIELD = "pv_shield_apps"
+
     internal fun excludedApps(prefs: SharedPreferences): Set<String> =
         prefs.getStringSet(OscPrefKey.ROUTE_SELECTED_APPS.name, null) ?: emptySet()
 

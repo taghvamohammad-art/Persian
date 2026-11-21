@@ -37,6 +37,7 @@ func (s *session) set(state string, protocols []string, err string) {
 	s.mu.Lock()
 	s.state, s.protocols, s.lastError = state, protocols, err
 	s.mu.Unlock()
+	guard.state(state == "connected")
 }
 
 func (s *session) status() (string, []string, string) {

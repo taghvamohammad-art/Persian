@@ -518,6 +518,116 @@ class BypassDialog(QDialog):
                             if self.list.item(i).checkState() == Qt.Checked)
 
 
+def running_program_paths():
+    """Full paths of the programs running now (the shield needs the file, not the name)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-Process | Where-Object Path | Select-Object -ExpandProperty Path -Unique"],
+            capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    win = os.environ.get("SystemRoot", r"C:\Windows").lower()
+    me = os.path.abspath(sys.executable).lower()
+    paths = {}
+    for line in out.decode("mbcs" if os.name == "nt" else "utf-8", "replace").splitlines():
+        p = line.strip()
+        low = p.lower()
+        if low.endswith(".exe") and not low.startswith(win) and low != me \
+                and os.path.basename(low) not in SYSTEM_PROCESSES:
+            paths.setdefault(low, p)
+    return sorted(paths.values(), key=lambda x: os.path.basename(x).lower())
+
+
+def clean_shield(paths):
+    seen, out = set(), []
+    for p in paths:
+        p = (p or "").strip()
+        if os.path.isabs(p) and p.lower().endswith(".exe") and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return sorted(out, key=lambda x: os.path.basename(x).lower())
+
+
+class ShieldDialog(QDialog):
+    """«سپر VPN»: programs that may use the internet only through the VPN.
+    While the VPN is not connected, Windows Firewall blocks them."""
+
+    def __init__(self, parent, chosen):
+        super().__init__(parent)
+        self.setWindowTitle("🛡 سپر VPN")
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.resize(460, 540)
+        lay = QVBoxLayout(self)
+        hint = QLabel("برنامه‌هایی که تیک بخورند فقط از راه VPN اینترنت دارند. وقتی VPN وصل نیست "
+                      "(قطع، در حال اتصال، یا بعد از روشن شدن کامپیوتر) هیچ اینترنتی ندارند. "
+                      "بقیه‌ی برنامه‌ها مثل قبل کار می‌کنند.")
+        hint.setWordWrap(True)
+        hint.setObjectName("Hint")
+        lay.addWidget(hint)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("جست‌وجو…")
+        self.search.textChanged.connect(self.filter)
+        lay.addWidget(self.search)
+        self.list = QListWidget()
+        self.list.setLayoutDirection(Qt.LeftToRight)
+        lay.addWidget(self.list, 1)
+        chosen_l = {p.lower() for p in chosen}
+        for p in clean_shield(list(chosen) + running_program_paths()):
+            self.add(p, p.lower() in chosen_l)
+        row = QHBoxLayout()
+        add = QPushButton("افزودن فایل برنامه…")
+        add.clicked.connect(self.add_file)
+        row.addWidget(add)
+        every = QPushButton("انتخاب همه")
+        every.clicked.connect(lambda: [self.list.item(i).setCheckState(Qt.Checked)
+                                       for i in range(self.list.count()) if not self.list.item(i).isHidden()])
+        row.addWidget(every)
+        clear = QPushButton("هیچ‌کدام")
+        clear.clicked.connect(lambda: [self.list.item(i).setCheckState(Qt.Unchecked)
+                                       for i in range(self.list.count())])
+        row.addWidget(clear)
+        lay.addLayout(row)
+        note = QLabel("دیوار آتش ویندوز (Windows Firewall) باید روشن باشد. برنامه‌ای که در «خارج از VPN» "
+                      "است نمی‌تواند در سپر هم باشد.")
+        note.setWordWrap(True)
+        note.setObjectName("Hint")
+        lay.addWidget(note)
+        ok = QPushButton("ذخیره")
+        ok.setObjectName("Primary")
+        ok.clicked.connect(self.accept)
+        lay.addWidget(ok)
+
+    def add(self, path, checked):
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole).lower() == path.lower():
+                if checked:
+                    self.list.item(i).setCheckState(Qt.Checked)
+                return
+        it = QListWidgetItem("%s  —  %s" % (os.path.basename(path), os.path.dirname(path)))
+        it.setData(Qt.UserRole, path)
+        it.setToolTip(path)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.list.insertItem(0, it) if checked else self.list.addItem(it)
+
+    def add_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "انتخاب برنامه", os.environ.get("ProgramFiles", ""),
+                                              "Programs (*.exe)")
+        if path:
+            self.add(os.path.normpath(path), True)
+
+    def filter(self, text):
+        t = text.strip().lower()
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            it.setHidden(bool(t) and t not in it.data(Qt.UserRole).lower())
+
+    def chosen(self):
+        return clean_shield(self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+                            if self.list.item(i).checkState() == Qt.Checked)
+
+
 class Window(QWidget):
     status_ready = Signal(object)
 
@@ -646,6 +756,10 @@ class Window(QWidget):
         self.b_bypass.clicked.connect(self.edit_bypass)
         lay.addWidget(self.b_bypass)
         self.show_bypass()
+        self.b_shield = QPushButton("")
+        self.b_shield.clicked.connect(self.edit_shield)
+        lay.addWidget(self.b_shield)
+        self.show_shield()
         self.auto = QCheckBox("بعد از باز شدن برنامه خودکار وصل شود")
         self.auto.setChecked(bool(self.state.get("auto")))
         self.auto.toggled.connect(lambda v: self.set_state(auto=v))
@@ -713,6 +827,8 @@ class Window(QWidget):
             self.refresh_account()
         if self.state.get("auto"):
             QTimer.singleShot(500, self.connect_vpn)
+        if self.shield():
+            threading.Thread(target=self.sync_shield, daemon=True).start()
 
     def refresh_account(self):
         user, pw = self.creds()
@@ -773,10 +889,55 @@ class Window(QWidget):
         new = d.chosen()
         if new == self.bypass():
             return
+        shielded = [p for p in self.shield() if os.path.basename(p).lower() in {n.lower() for n in new}]
+        if shielded:
+            QMessageBox.warning(self, APP_NAME, "این برنامه‌ها در «سپر VPN» هستند و نمی‌توانند خارج از VPN باشند:\n"
+                                + "\n".join(os.path.basename(p) for p in shielded))
+            new = [n for n in new if n.lower() not in {os.path.basename(p).lower() for p in shielded}]
         self.set_state(bypass=new)
         self.show_bypass()
         if self.wanted:
             self.connect_vpn()              # the service starts over with the new list
+
+    # «سپر VPN»: programs only through the VPN (the service keeps the firewall rules)
+    def shield(self):
+        return clean_shield(self.state.get("shield") or [])
+
+    def show_shield(self):
+        n = len(self.shield())
+        self.b_shield.setText("🛡 سپر VPN" + (" (%d)" % n if n else ""))
+
+    def edit_shield(self):
+        d = ShieldDialog(self, self.shield())
+        if d.exec() != QDialog.Accepted:
+            return
+        new = d.chosen()
+        names = {os.path.basename(p).lower() for p in new}
+        bypass = [b for b in self.bypass() if b.lower() not in names]
+        moved = len(bypass) != len(self.bypass())
+        try:
+            r = service("shield", timeout=20, programs=new)
+            if not r.get("ok"):
+                raise OSError(r.get("error") or "?")
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, "سرویس VPN جواب نداد؛ سپر ذخیره نشد.\n%s" % e)
+            return
+        self.set_state(shield=new, bypass=bypass)
+        self.show_shield()
+        self.show_bypass()
+        if moved:
+            QMessageBox.information(self, APP_NAME, "برنامه‌هایی که در سپر گذاشتید از «خارج از VPN» برداشته شدند.")
+            if self.wanted:
+                self.connect_vpn()
+
+    def sync_shield(self):
+        """The service keeps its own copy; send ours once in case it was reinstalled."""
+        try:
+            r = service("status")
+            if sorted(p.lower() for p in (r.get("shield") or [])) != sorted(p.lower() for p in self.shield()):
+                service("shield", timeout=20, programs=self.shield())
+        except OSError:
+            pass
 
     def logout(self):
         self.disconnect_vpn()

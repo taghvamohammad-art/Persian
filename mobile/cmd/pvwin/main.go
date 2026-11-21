@@ -14,6 +14,7 @@
 //	{"cmd":"status"}
 //	{"cmd":"connect","envelope":"<signed app config>","user":"..","pass":"..","bypass":["firefox.exe"]}
 //	{"cmd":"disconnect"}
+//	{"cmd":"shield","programs":["C:\\...\\telegram.exe"]}   only through the VPN (shield.go)
 //	{"cmd":"upgrade","envelope":"<signed app config>","path":"C:\\...\\pvwin.exe"}
 //
 // Any local program can reach that port, so the service only ever uses
@@ -57,6 +58,7 @@ type request struct {
 	Pass     string   `json:"pass"`
 	Bypass   []string `json:"bypass"`
 	Path     string   `json:"path"`
+	Programs []string `json:"programs"`
 }
 
 func exeDir() string {
@@ -86,6 +88,10 @@ func handle(req request) map[string]any {
 		tunnel.Connect(cfg, req.User, req.Pass, req.Bypass)
 	case "disconnect":
 		tunnel.Disconnect()
+	case "shield":
+		if err := guard.set(req.Programs); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
 	case "upgrade":
 		if err := upgrade(req); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
@@ -101,7 +107,8 @@ func handle(req request) map[string]any {
 	}
 	state, protocols, lastErr := tunnel.status()
 	v, _ := strconv.Atoi(version)
-	return map[string]any{"ok": true, "state": state, "protocols": protocols, "error": lastErr, "version": v}
+	return map[string]any{"ok": true, "state": state, "protocols": protocols, "error": lastErr, "version": v,
+		"shield": guard.list()}
 }
 
 // upgrade replaces this engine with a newer one whose SHA-256 the signed
@@ -145,6 +152,9 @@ func upgrade(req request) error {
 }
 
 func serve() error {
+	// the shield is closed from the start: the tunnel is not up yet
+	guard.load()
+	guard.apply()
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err

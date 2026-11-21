@@ -95,6 +95,7 @@ internal class IPTerminal(private val bridge: SharedBridge) {
         bridge.builder.setBlocking(true)
 
         fd = bridge.builder.establish()!!.also {
+            bridge.service.onTunnelUp()            // «سپر VPN» hands over to the real tunnel
             inputStream = FileInputStream(it.fileDescriptor)
             outputStream = FileOutputStream(it.fileDescriptor)
         }

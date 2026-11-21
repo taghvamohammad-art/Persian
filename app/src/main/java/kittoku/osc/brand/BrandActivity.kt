@@ -135,6 +135,10 @@ class BrandActivity : AppCompatActivity() {
         binding.shareButton.setOnClickListener {
             startActivity(Intent(this, ShareActivity::class.java))
         }
+        binding.shieldButton.setOnClickListener {
+            startActivity(Intent(this, ExcludedAppsActivity::class.java)
+                .putExtra(ExcludedAppsActivity.EXTRA_SHIELD, true))
+        }
         binding.excludedButton.setOnClickListener {
             startActivity(Intent(this, ExcludedAppsActivity::class.java))
         }
@@ -198,6 +202,9 @@ class BrandActivity : AppCompatActivity() {
         }
         binding.shareButton.setText(if (BrandSession.shareEnabled(prefs)) R.string.brand_share_button_on
                                      else R.string.brand_share_button)
+        val ns = BrandSession.shieldedApps(prefs).size
+        binding.shieldButton.text = if (ns == 0) getString(R.string.brand_shield_button)
+            else getString(R.string.brand_shield_button_count, Fa.digits(ns.toString()))
         val n = BrandSession.excludedApps(prefs).size
         binding.excludedButton.text = if (n == 0) getString(R.string.brand_excluded_button)
             else getString(R.string.brand_excluded_button_count, Fa.digits(n.toString()))

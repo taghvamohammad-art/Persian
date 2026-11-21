@@ -143,6 +143,11 @@ internal class LinuxTunnel(
                 builder.setMtu(XRAY_MTU)
             }
             builder.addRoute("0.0.0.0", 0)
+            if (BrandSession.shieldedApps(prefs).isNotEmpty()) {
+                // «سپر VPN»: the tunnel is IPv4 only; IPv6 would otherwise go around it
+                builder.addAddress("fd00:7076:74::1", 128)
+                builder.addRoute("::", 0)
+            }
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
             // the engine's own sockets must not loop back into the tunnel
@@ -160,6 +165,7 @@ internal class LinuxTunnel(
         } catch (e: Exception) {
             null
         } ?: return false
+        service.onTunnelUp()
         // the engine owns the descriptor from here on and closes it
         val fd = pfd.detachFd().toLong()
         try {

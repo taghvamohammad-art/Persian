@@ -59,3 +59,11 @@ class SignedConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Shield(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows paths")
+    def test_clean_shield(self):
+        p = r"C:\Program Files\Telegram\Telegram.exe"
+        got = pc.clean_shield([p, p.lower(), "Telegram.exe", "", r"D:\a\b.txt", r"C:\z\Alpha.EXE"])
+        self.assertEqual(got, [r"C:\z\Alpha.EXE", p])

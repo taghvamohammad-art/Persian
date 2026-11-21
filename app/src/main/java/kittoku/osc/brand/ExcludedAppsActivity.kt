@@ -22,8 +22,46 @@ import java.util.concurrent.Executors
 
 
 /** Lets the user keep chosen apps (e.g. banking apps) outside the tunnel. */
+/**
+ * The app list, in two modes: "outside the VPN" (default) and «سپر VPN»
+ * (EXTRA_SHIELD: apps that may use the internet only through the VPN).
+ * An app is never in both lists.
+ */
 class ExcludedAppsActivity : AppCompatActivity() {
+    companion object {
+        const val EXTRA_SHIELD = "shield"
+    }
+
     private data class AppRow(val packageName: String, val label: String)
+    private var shieldMode = false
+
+    private fun mine(): Set<String> =
+        if (shieldMode) BrandSession.shieldedApps(prefs) else BrandSession.excludedApps(prefs)
+
+    private fun other(): Set<String> =
+        if (shieldMode) BrandSession.excludedApps(prefs) else BrandSession.shieldedApps(prefs)
+
+    private fun save() {
+        if (shieldMode) {
+            BrandSession.setShieldedApps(prefs, selected)
+            val ex = BrandSession.excludedApps(prefs)
+            if (ex.any { it in selected }) {
+                BrandSession.setExcludedApps(prefs, ex - selected)
+                Toast.makeText(this, R.string.brand_shield_moved, Toast.LENGTH_SHORT).show()
+            }
+            // the service closes or opens the shield right away while the VPN is not connected
+            Shield.refresh(this)
+        } else {
+            BrandSession.setExcludedApps(prefs, selected)
+        }
+    }
+
+    private val askVpn = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        Shield.refresh(this)
+        super@ExcludedAppsActivity.finish()
+    }
 
     private lateinit var binding: ActivityExcludedAppsBinding
     private lateinit var prefs: SharedPreferences
@@ -65,27 +103,43 @@ class ExcludedAppsActivity : AppCompatActivity() {
         setContentView(binding.root)
         Tv.centre(binding.root)
         setSupportActionBar(binding.toolbar)
-        title = getString(R.string.brand_excluded_title)
+        shieldMode = intent.getBooleanExtra(EXTRA_SHIELD, false)
+        title = getString(if (shieldMode) R.string.brand_shield_title else R.string.brand_excluded_title)
+        if (shieldMode) {
+            binding.excludedHelp.text = getString(R.string.brand_shield_help) + "\n\n" +
+                getString(R.string.brand_shield_always_on)
+            binding.excludedHelp.setOnClickListener {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS))
+                } catch (_: Exception) {
+                }
+            }
+        }
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        selected.addAll(BrandSession.excludedApps(prefs))
+        selected.addAll(mine())
         initialSelection = selected.toSet()
 
         binding.excludedList.adapter = adapter
         binding.excludedList.setOnItemClickListener { _, _, position, _ ->
             val pkg = shown[position].packageName
+            if (!shieldMode && pkg !in selected && pkg in other()) {
+                Toast.makeText(this, R.string.brand_shield_in_other, Toast.LENGTH_SHORT).show()
+                return@setOnItemClickListener
+            }
             if (!selected.remove(pkg)) selected.add(pkg)
-            BrandSession.setExcludedApps(prefs, selected)
+            save()
             adapter.notifyDataSetChanged()
             syncAll()
         }
 
         // "select all": every app in the list (only the ones found while searching)
         binding.excludedAll.setOnClickListener {
-            val pkgs = shown.map { it.packageName }
+            val blocked = if (shieldMode) emptySet() else other()
+            val pkgs = shown.map { it.packageName }.filter { it !in blocked }
             if (binding.excludedAll.isChecked) selected.addAll(pkgs) else selected.removeAll(pkgs.toSet())
-            BrandSession.setExcludedApps(prefs, selected)
+            save()
             adapter.notifyDataSetChanged()
         }
 
@@ -143,6 +197,20 @@ class ExcludedAppsActivity : AppCompatActivity() {
     }
 
     override fun finish() {
+        if (shieldMode) {
+            // the shield needs the VPN permission even while the VPN is off
+            val ask = if (selected.isNotEmpty()) android.net.VpnService.prepare(this) else null
+            if (ask != null && selected != initialSelection) {
+                initialSelection = selected.toSet()
+                try {
+                    askVpn.launch(ask)
+                    return
+                } catch (_: Exception) {
+                }
+            }
+            super.finish()
+            return
+        }
         if (selected != initialSelection) {
             Toast.makeText(this, R.string.brand_excluded_apply, Toast.LENGTH_LONG).show()
         }
