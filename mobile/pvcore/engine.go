@@ -246,7 +246,7 @@ func awgHealth(state string) int {
 		return -1
 	}
 	age := time.Since(time.Unix(sec, 0))
-	if age > 200*time.Second {
+	if age > 160*time.Second { // rekey is due at 120s; a missed one means data is about to stop
 		return -1
 	}
 	return int(age.Milliseconds())

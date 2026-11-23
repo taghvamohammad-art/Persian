@@ -111,8 +111,8 @@ internal class LinuxTunnel(
      * The Xray protocols that work go together into one "pool": Xray keeps
      * measuring them and moves new connections to the fastest, so a slow or
      * blocked protocol is left without the tunnel going down. AmneziaWG has
-     * its own tunnel and is used when it is clearly faster, or when nothing
-     * else works; the DNS tunnel only as the last resort.
+     * its own tunnel and is only the fallback (on some networks its rekey
+     * handshake is dropped after a few minutes, so data stops); the DNS tunnel only as the last resort.
      */
     private fun plan(all: List<Choice>): List<Choice> {
         val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
@@ -123,7 +123,7 @@ internal class LinuxTunnel(
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
         val out = mutableListOf<Choice>()
-        if (pool != null && (awg == null || pool.ms <= awg.ms * 3 / 2)) {
+        if (pool != null) {
             out += pool
             awg?.let { out += it }
         } else {

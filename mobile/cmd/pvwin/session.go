@@ -131,7 +131,7 @@ func plan(all []choice, noAwg bool) [][]choice {
 		}
 	}
 	var out [][]choice
-	if len(pool) > 0 && (awg == nil || pool[0].ms <= awg.ms*3/2) {
+	if len(pool) > 0 {
 		out = append(out, pool)
 		if awg != nil {
 			out = append(out, []choice{*awg})
