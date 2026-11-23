@@ -532,7 +532,7 @@ def refresh_xray_config(h, p, log=print):
     if not p.get("hy2_pin") or not p.get("reality_public"):
         raise LinuxError("تنظیمات این سرور در ابزار کامل نیست؛ یک بار از «سرور جدید» نصبش کنید.")
     log("تنظیمات جدید Xray…")
-    new = XRAY_CONF_DIR + "/template.json.new"
+    new = XRAY_CONF_DIR + "/template.new.json"   # Xray reads the format from the extension
     h.write(new, json.dumps(xray_template(p), indent=1))
     test = h.run("/usr/local/bin/xray run -test -config %s 2>&1" % new, check=False)
     if "Configuration OK" not in test:
