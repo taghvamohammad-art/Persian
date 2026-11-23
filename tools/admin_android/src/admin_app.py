@@ -868,7 +868,13 @@ class PublishPage:
         return list(self.app.settings.testers)
 
     def _sync(self, ws, log, progress):
-        """Patches are made from the published APKs: fetch them from the router if this phone lacks them."""
+        """The newest published settings first (another device may have published
+        since: publishing from an old copy would drop servers and versions), then
+        the published APKs patches are made from."""
+        try:
+            pb.adopt_published(ws, self.app.github_clients(True)[0], log)
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            log("⚠ تنظیمات منتشرشده خوانده نشد: %s" % e)
         try:
             pb.sync_workspace(ws, log, progress)
         except (pb.ReleaseError, OSError) as e:

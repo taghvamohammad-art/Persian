@@ -479,6 +479,92 @@ def _write_patches(d, patches):
             out.write(b)
 
 
+def _open_envelope(ws, text):
+    """The config inside a signed envelope, if our key signed it."""
+    try:
+        env = json.loads(text)
+        payload = base64.b64decode(env["payload"])
+        sig = base64.b64decode(env["sig"])
+        if not sc.verify(sc.public_der(ws.private_key()), payload, sig):
+            return None
+        return json.loads(payload)
+    except (ValueError, KeyError, TypeError, OSError):
+        return None
+
+
+def published_config(ws, github=None, log=print):
+    """(config, envelope text) of the newest signed config out there (the
+    router, GitHub), or (None, None) when none could be read."""
+    best = (None, None)
+    texts = []
+    try:
+        data = RouterClient(ws.load_config(), timeout=20).download("/v1/config")
+        if data:
+            texts.append(data.decode("utf-8", "replace"))
+    except (ReleaseError, OSError, ValueError) as e:
+        log("⚠ تنظیمات منتشرشده از روتر خوانده نشد: %s" % e)
+    if github is not None:
+        data = github.get_file(ASSET_PATH)
+        if data:
+            texts.append(data.decode("utf-8", "replace"))
+    for text in texts:
+        cfg = _open_envelope(ws, text)
+        if cfg and int(cfg.get("version", 0)) > int((best[0] or {}).get("version", 0)):
+            best = (cfg, text)
+    return best
+
+
+STALE_MSG = ("پوشه‌ی کاری این دستگاه قدیمی است: تنظیمات منتشرشده نسخه‌ی %d است و این‌جا %d. انتشار از روی آن، "
+             "سرورها و نسخه‌های جدیدتر را پاک می‌کرد. «دریافت تنظیمات منتشرشده» را بزنید (یا در برنامه‌ی گوشی، "
+             "انتشار دوباره خودش این کار را می‌کند).")
+
+
+def ensure_current(ws, github=None, log=print):
+    """Refuse to publish from an out-of-date workspace (another device
+    published since): its config would bring back old servers and versions."""
+    pub, _ = published_config(ws, github, log)
+    if pub is None:
+        return
+    local = ws.load_config()
+    mine = int(local.get("version", 0))
+    if int(pub.get("version", 0)) > mine and _knows_more(pub, local):
+        # a newer number alone is our own release whose local save failed
+        # (the router is "ahead"; release() handles that): not stale. And a
+        # published config that knows less than this one (a mistake made
+        # from an old copy elsewhere) is exactly what this one must replace.
+        raise ReleaseError(STALE_MSG % (int(pub["version"]), mine))
+
+
+def _knows_more(a, b):
+    """a has servers or newer published versions that b lacks."""
+    def hosts(cfg):
+        return {str(s.get("host")) for k in ("servers", "linux_servers") for s in cfg.get(k, [])}
+
+    def ver(cfg, key):
+        return int((cfg.get(key) or {}).get("version_code", 0))
+    return bool(hosts(a) - hosts(b)) or ver(a, "app_update") > ver(b, "app_update") or \
+        ver(a, "windows_update") > ver(b, "windows_update")
+
+
+def adopt_published(ws, github=None, log=print):
+    """The newest published config becomes this workspace's (the files it
+    names are then fetched by sync_workspace). Returns its version, or None
+    when this workspace was already current."""
+    pub, envelope = published_config(ws, github, log)
+    if pub is None or int(pub.get("version", 0)) <= int(ws.load_config().get("version", 0)):
+        return None
+    shutil.copy(ws.path("config.json"), ws.path("config.before-adopt-%d.json" % int(time.time())))
+    tmp = ws.path("config.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(pub, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, ws.path("config.json"))
+    with open(ws.path(sc.SIGNED_FILE), "w", encoding="utf-8") as f:
+        f.write(envelope)
+    log("✓ تنظیمات منتشرشده (نسخه‌ی %d) جای تنظیمات قدیمی این دستگاه را گرفت" % pub["version"])
+    return int(pub["version"])
+
+
 def save_local(ws, cfg, envelope, build, patches=None, beta=False):
     """Called only after the router accepted the release. beta: build is the
     test build (beta.apk; the public app.apk and its history stay)."""
@@ -741,6 +827,14 @@ class GitHubClient:
         with self._req("GET", "/repos/%s" % self.repo) as r:
             return json.loads(r.read())["full_name"]
 
+    def get_file(self, path):
+        """A file's content in the repository (bytes), None when missing."""
+        try:
+            with self._req("GET", "/repos/%s/contents/%s" % (self.repo, path)) as r:
+                return base64.b64decode(json.loads(r.read()).get("content", ""))
+        except ReleaseError:
+            return None
+
     def put_file(self, path, content, message):
         sha = None
         try:
@@ -828,6 +922,8 @@ def release(ws, build, version_code, version_name, notes,
     release, so a failed attempt can simply be repeated.
     """
     ws.check()
+    if send_router or github is not None:
+        ensure_current(ws, github, log)
     patches = make_patches(ws, build, log, only_current=testers is not None)
     if patches:
         log("وصله‌های به‌روزرسانی سبک: %s" % "، ".join(
@@ -906,6 +1002,8 @@ def release_config_only(ws, send_router=True, github=None, public_github=None,
     freshly set-up router can serve updates too.
     """
     ws.check()
+    if send_router or github is not None:
+        ensure_current(ws, github, log)
     win_name = BETA_WIN if win_testers is not None else "win.exe"
     if win is not None:
         cur = (ws.load_config().get("windows_update") or {}).get("version_code", 0)

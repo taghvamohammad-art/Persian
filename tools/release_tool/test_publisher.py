@@ -341,6 +341,48 @@ class ReleaseFlow(unittest.TestCase):
         self.assertEqual(self.served()["version"], before["version"] + 2)
         self.assertEqual(self.served()["app_update_beta"]["version_code"], 17)
 
+    def test_stale_workspace_refused_then_adopted(self):
+        """Another device published since this workspace's last release (the
+        phone tool published 1.0.152 from a days-old copy: no Linux servers,
+        app 116 instead of 146). Refused, then the published one is taken."""
+        q = lambda *_: None
+        import shutil
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        old = os.path.join(self.ws_dir, "stale-copy.json")
+        shutil.copy(self.ws.path("config.json"), old)
+        pb.release(self.ws, pb.Build(apkdelta_apk(b"x"), 17, "b"), 17, "", "", log=q)   # "the other device"
+        shutil.copy(old, self.ws.path("config.json"))                                  # this one is behind
+        with self.assertRaises(pb.ReleaseError) as ctx:
+            pb.release(self.ws, pb.Build(apkdelta_apk(b"y"), 18, "b"), 18, "", "", log=q)
+        self.assertIn("قدیمی", str(ctx.exception))
+        with self.assertRaises(pb.ReleaseError):
+            pb.release_config_only(self.ws, log=q)
+        self.assertEqual(pb.adopt_published(self.ws, log=q), self.served()["version"])
+        self.assertEqual(self.ws.published_version_code(), 17)
+        pb.release(self.ws, pb.Build(apkdelta_apk(b"y"), 18, "b"), 18, "", "", log=q)  # now fine
+        self.assertEqual(self.served()["app_update"]["version_code"], 18)
+
+    def test_a_current_workspace_repairs_a_bad_publish(self):
+        """The bad config from the old copy knows less than this workspace:
+        publishing from here (to repair it) is allowed."""
+        q = lambda *_: None
+        import shutil
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        good = os.path.join(self.ws_dir, "good.json")
+        old = os.path.join(self.ws_dir, "old.json")
+        shutil.copy(self.ws.path("config.json"), old)
+        pb.release(self.ws, pb.Build(apkdelta_apk(b"x"), 17, "b"), 17, "", "", log=q)
+        shutil.copy(self.ws.path("config.json"), good)
+        with open(old) as f:                                          # the old copy publishes (old tool,
+            stale = json.load(f)                                      # no check): served as is
+        _, env = pb.sign(self.ws, dict(stale, version=self.served()["version"]))
+        with open(self.srv_cfg["app_config_file"], "w") as f:
+            f.write(env)
+        self.assertEqual(self.served()["app_update"]["version_code"], 16)
+        shutil.copy(good, self.ws.path("config.json"))                # the current workspace repairs it
+        pb.release_config_only(self.ws, log=q)
+        self.assertEqual(self.served()["app_update"]["version_code"], 17)
+
     def test_pin_mismatch_refuses_to_send(self):
         conf = self.ws.load_config()
         conf["status_pins"] = ["00" * 32]

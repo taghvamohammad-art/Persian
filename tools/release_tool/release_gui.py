@@ -2338,6 +2338,10 @@ class MainWindow(QMainWindow, FeaturesMixin):
         self.btn_win.setToolTip("فایل «PersianVPN-Windows» از GitHub (بخش Actions ← Windows client)")
         self.btn_win.clicked.connect(self.publish_windows)
         l3.addWidget(self.btn_win)
+        self.btn_adopt = QPushButton("⤓  دریافت تنظیمات منتشرشده (اگر از دستگاه دیگری منتشر کرده‌اید)")
+        self.btn_adopt.setCursor(Qt.PointingHandCursor)
+        self.btn_adopt.clicked.connect(self.adopt_published)
+        l3.addWidget(self.btn_adopt)
         self.btn_force = QPushButton("⚠  اجباری کردن نسخه‌های فعلی (بدون نسخه‌ی جدید)")
         self.btn_force.setCursor(Qt.PointingHandCursor)
         self.btn_force.setToolTip("هر کس نسخه‌ی قدیمی‌تر از نسخه‌ی منتشرشده‌ی فعلی دارد، تا به‌روز نکند وصل نمی‌شود")
@@ -2672,6 +2676,25 @@ class MainWindow(QMainWindow, FeaturesMixin):
                 "برای نصب اول، فایل PersianVPN.exe داخل همان zip را به کاربران بدهید.")
             self.refresh_state()
 
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
+
+    def adopt_published(self):
+        github = pb.GitHubClient(self.settings.token, self.settings.repo) if self.settings.token else None
+        ws = self.workspace()
+
+        def job(log, progress):
+            v = pb.adopt_published(ws, github, log)
+            pb.sync_workspace(ws, log, progress)
+            return v
+
+        def done(v):
+            self.set_busy(False)
+            self.refresh_state()
+            QMessageBox.information(self, "تنظیمات منتشرشده",
+                                    "پوشه‌ی کاری به‌روز شد (نسخه‌ی %s)." % fa(v) if v else
+                                    "پوشه‌ی کاری همین الان هم آخرین تنظیمات منتشرشده را دارد.")
         self.log.clear()
         self.set_busy(True)
         run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
