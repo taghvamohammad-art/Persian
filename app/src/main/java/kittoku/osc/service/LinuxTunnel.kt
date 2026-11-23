@@ -298,9 +298,12 @@ internal class LinuxTunnel(
     }
 
     private fun sameChoice(a: Choice, b: Choice): Boolean {
-        fun key(c: Choice) = if (c.members.isEmpty()) setOf("${c.server}|${c.kind}")
-                             else c.members.map { "${it.server}|${it.kind}" }.toSet()
-        return a.kind == b.kind && key(a) == key(b)
+        if (a.kind != b.kind) return false
+        if (a.kind != "pool") return a.server == b.server
+        // a pool on the same server is kept even if a probe in the middle of a
+        // hiccup missed one of its protocols: Xray's balancer inside the pool
+        // already leaves a failing protocol out and takes it back when it returns
+        return a.members.map { it.server }.toSet() == b.members.map { it.server }.toSet()
     }
 
     /** The hotspot proxy, when the user turned sharing on (BrandSession.shareEnabled). */
