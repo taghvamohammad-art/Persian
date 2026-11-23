@@ -386,7 +386,8 @@ func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error)
 	// A handshake is small and can pass where data does not (a filter that
 	// lets it through and drops or throttles what follows, or a path that
 	// loses large packets): ping through the tunnel, a small and a full-size
-	// packet, before calling AmneziaWG usable.
+	// packet, before calling AmneziaWG usable. A filter that lets data
+	// through makes this one round trip longer, nothing else.
 	left := timeout - time.Since(start)
 	if left < 1500*time.Millisecond {
 		left = 1500 * time.Millisecond
@@ -406,7 +407,11 @@ func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error)
 // awgProbeBig is the size of the large test packet: the app's AmneziaWG MTU.
 const awgProbeBig = 1280
 
-var pingTargets = []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}
+// pingTargets: the server's own address in the AmneziaWG network first
+// (answers without the internet; some hosts, GitHub's runners among them,
+// drop pings to the outside), then the internet.
+var pingTargets = []netip.Addr{netip.MustParseAddr("10.64.0.1"), netip.MustParseAddr("1.1.1.1"),
+	netip.MustParseAddr("8.8.8.8")}
 
 // pingTun is a TUN that only carries our own pings: echo requests go into
 // the device, the replies it decrypts come back to Write.
