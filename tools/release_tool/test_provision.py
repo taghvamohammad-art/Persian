@@ -73,6 +73,19 @@ class Filter(unittest.TestCase):
         self.assertEqual(pv.add_server_to_config(added, "sec", "9.9.9.9"), added)
 
 
+class LinuxServers(unittest.TestCase):
+    def test_add_and_remove(self):
+        cfg = {"servers": [{"host": "1.1.1.1"}], "linux_servers": []}
+        cfg = pv.add_linux_server(cfg, {"name": "old", "host": "5.5.5.5"})
+        cfg = pv.add_linux_server(cfg, {"name": "new", "host": "6.6.6.6"})
+        out, was = pv.remove_linux_server(cfg, "5.5.5.5")
+        self.assertTrue(was)
+        self.assertEqual([s["host"] for s in out["linux_servers"]], ["6.6.6.6"])
+        self.assertEqual(out["servers"], [{"host": "1.1.1.1"}])           # SSTP servers untouched
+        self.assertEqual(len(cfg["linux_servers"]), 2)                     # the original is not changed
+        self.assertFalse(pv.remove_linux_server(out, "5.5.5.5")[1])
+
+
 class Addresses(unittest.TestCase):
     def test_routeros_lists(self):
         self.assertEqual(sv.addr_list("93.118.136.58/32;5.181.156.189/32;5.181.156.189/32"),

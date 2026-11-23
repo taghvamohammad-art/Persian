@@ -508,6 +508,14 @@ def add_server_to_config(cfg, name, host, port=443):
     return out
 
 
+def remove_linux_server(cfg, host):
+    """The app config without a Linux server: (new config, whether it was there)."""
+    out = dict(cfg)
+    before = out.get("linux_servers", [])
+    out["linux_servers"] = [s for s in before if s.get("host") != host]
+    return out, len(out["linux_servers"]) != len(before)
+
+
 def add_linux_server(cfg, entry):
     """A Linux server in the app config: its own list, so app versions that
     only know SSTP (which reads "servers") are not confused by it."""

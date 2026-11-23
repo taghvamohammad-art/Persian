@@ -769,11 +769,77 @@ class ServersPage(QWidget):
 
     def delete(self):
         r = self.current()
-        if r and QMessageBox.question(self, "تأیید", "روتر «%s» از لیست حذف شود؟\n(بکاپ‌هایش پاک نمی‌شوند)"
-                                      % (r.get("name") or r["host"])) == QMessageBox.Yes:
+        if not r:
+            return
+        if r.get("role") == "linux":
+            return self.delete_linux(r)
+        if QMessageBox.question(self, "تأیید", "روتر «%s» از لیست حذف شود؟\n(بکاپ‌هایش پاک نمی‌شوند)"
+                                % (r.get("name") or r["host"])) == QMessageBox.Yes:
             self.settings.routers.remove(r)
             self.settings.save()
             self.reload()
+
+    def delete_linux(self, r):
+        """A Linux server leaves the apps first (signed config), then the bot's
+        list, then this tool; the server itself is left as it is."""
+        ws = pb.Workspace(self.settings.workspace)
+        try:
+            ws.check()
+            new_cfg, listed = pv.remove_linux_server(ws.load_config(), r["host"])
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return self.fail(str(e))
+        label = r.get("name") or r["host"]
+        if QMessageBox.question(self, "حذف سرور لینوکس",
+                ("سرور «%s»:\n" % label) +
+                ("• از تنظیمات اپ برداشته می‌شود و تنظیمات امضا و منتشر می‌شود (گوشی‌ها با باز کردن برنامه دیگر "
+                 "سراغش نمی‌روند)\n" if listed else "• در تنظیمات اپ نیست\n") +
+                "• از لیست «آنلاین‌ها»ی بات برداشته می‌شود\n• از لیست این ابزار حذف می‌شود\n\n"
+                "خود سرور دست نمی‌خورد. اگر تانل پشتیبان SSTP روی این سرور است، اول آن را «برداشتن» "
+                "و بعد با سرور جدید «بررسی و راه‌اندازی» کنید.\nادامه؟") != QMessageBox.Yes:
+            return
+        others = [x for x in self.settings.routers if x is not r]
+        ums = [x for x in others if x.get("role") in UM_ROLES]
+        github = public = None
+        if self.settings.token:
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+        if listed:
+            import json
+            import shutil
+            before = ws.path("config.before-%s.json" % bk.stamp())
+            shutil.copy(ws.path("config.json"), before)
+            with open(ws.path("config.json"), "w", encoding="utf-8") as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+
+        def job(log, progress):
+            cfg = None
+            if listed:
+                try:
+                    cfg = pb.release_config_only(ws, send_router=True, github=github, public_github=public,
+                                                 log=log, progress=progress)
+                except Exception:
+                    shutil.copy(before, ws.path("config.json"))   # not published: nothing changed
+                    raise
+            value = linux.bot_linux_status(others)
+            for u in ums:
+                try:
+                    with router_connector(u)() as c:
+                        if sv.set_bot_env(c, {"LINUX_STATUS": value}, log):
+                            log("✓ بات دیگر سراغ این سرور نمی‌رود.")
+                except Exception as e:   # noqa: BLE001
+                    log("⚠ تنظیم بات روی %s نشد: %s" % (u["host"], str(e).splitlines()[0]))
+            return cfg
+
+        def done(cfg):
+            self.set_busy(False)
+            self.settings.routers.remove(r)
+            self.settings.save()
+            self.reload()
+            QMessageBox.information(self, "انجام شد", "سرور «%s» حذف شد.%s" % (
+                label, "\nتنظیمات جدید اپ: نسخه‌ی %s" % fa(cfg["version"]) if cfg else ""))
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.log.appendPlainText, self.on_progress)
 
     def test(self):
         r = self.current()
