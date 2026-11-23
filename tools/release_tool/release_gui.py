@@ -19,7 +19,7 @@ from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QHeaderView, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTableWidget,
+    QHeaderView, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QScrollArea, QSpinBox, QTableWidget,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -966,6 +966,17 @@ def router_connector(r):
     def connect():
         return SSHRouter(r["host"], r["port"], r["user"], r["password"], r.get("hostkey", "")).connect()
     return connect
+
+
+def scrolled(page):
+    """A tab page inside a frameless scroll area."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    area.setStyleSheet("QScrollArea { background: transparent; } QScrollArea > QWidget > QWidget { background: transparent; }")
+    area.setWidget(page)
+    return area
 
 
 def human_size(n):
@@ -2087,6 +2098,11 @@ class MainWindow(QMainWindow, FeaturesMixin):
             self.setWindowIcon(QIcon(icon))
         self.setLayoutDirection(Qt.RightToLeft)
         self.resize(760, 860)
+        screen = QApplication.primaryScreen()
+        if screen is not None:                    # never taller than the screen (taskbar left out)
+            free = screen.availableGeometry()
+            self.resize(min(760, free.width() - 40), min(860, free.height() - 60))
+            self.move(free.x() + (free.width() - self.width()) // 2, free.y() + 10)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -2137,15 +2153,16 @@ class MainWindow(QMainWindow, FeaturesMixin):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
-        self.tabs.addTab(page, "انتشار")
+        # every page scrolls: on a laptop screen the lower buttons stay reachable
+        self.tabs.addTab(scrolled(page), "انتشار")
         self.servers = ServersPage(self)
-        self.tabs.addTab(self.servers, "سرورها و بکاپ")
+        self.tabs.addTab(scrolled(self.servers), "سرورها و بکاپ")
         self.services = ServicesPage(self)
-        self.tabs.addTab(self.services, "سرویس‌ها و بات")
+        self.tabs.addTab(scrolled(self.services), "سرویس‌ها و بات")
         self.newserver = NewServerPage(self)
-        self.tabs.addTab(self.newserver, "سرور جدید")
+        self.tabs.addTab(scrolled(self.newserver), "سرور جدید")
         self.monitor = MonitorPage(self)
-        self.tabs.addTab(self.monitor, "مانیتورینگ")
+        self.tabs.addTab(scrolled(self.monitor), "مانیتورینگ")
         self.tabs.currentChanged.connect(lambda _: (self.services.reload(), self.newserver.reload()))
 
         # 1. build
