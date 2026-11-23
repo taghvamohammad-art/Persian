@@ -67,6 +67,7 @@ internal class LinuxTunnel(
     private var networkWatcher: UnderlyingNetworkWatcher? = null
     @Volatile internal var current: String = ""
         private set
+    @Volatile private var currentChoice: Choice? = null
 
     private val user get() = BrandSession.username(prefs)
     private val pass get() = BrandSession.password(prefs)
@@ -195,6 +196,7 @@ internal class LinuxTunnel(
             return false        // pvcore has closed the descriptor
         }
         current = "${c.name}/${c.kind}"
+        currentChoice = c
         onConnected(c)
         return true
     }
@@ -269,6 +271,20 @@ internal class LinuxTunnel(
             try {
                 service.logWriter?.report("linux tunnel: $reason, switching")
                 val previous = current
+                if (reason == "check failed") {
+                    // Probe first while the tunnel keeps carrying traffic: a short
+                    // hiccup on a lossy network used to tear the tunnel down and
+                    // build the very same one again, cutting every connection
+                    // for ten seconds. Only a better choice is worth that.
+                    val best = plan(probeAll()).firstOrNull()
+                    if (closed) return@launch
+                    val now = currentChoice
+                    if (best != null && now != null && sameChoice(best, now)) {
+                        service.logWriter?.report("linux tunnel: still the best ($previous), kept")
+                        startWatchdog()
+                        return@launch
+                    }
+                }
                 stopEngine()
                 setStringPrefValue("", OscPrefKey.HOME_STATUS, prefs)
                 if (closed) return@launch
@@ -279,6 +295,12 @@ internal class LinuxTunnel(
                 switching = false
             }
         }
+    }
+
+    private fun sameChoice(a: Choice, b: Choice): Boolean {
+        fun key(c: Choice) = if (c.members.isEmpty()) setOf("${c.server}|${c.kind}")
+                             else c.members.map { "${it.server}|${it.kind}" }.toSet()
+        return a.kind == b.kind && key(a) == key(b)
     }
 
     /** The hotspot proxy, when the user turned sharing on (BrandSession.shareEnabled). */
@@ -301,6 +323,7 @@ internal class LinuxTunnel(
             runCatching { Pvcore.stop() }
         }
         current = ""
+        currentChoice = null
     }
 
     internal fun close() {
