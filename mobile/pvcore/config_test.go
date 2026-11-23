@@ -140,8 +140,9 @@ func TestAppsDNSGoesOverHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// (the test server's Reality key is a placeholder Xray would refuse)
 	pool, err := PoolConfig(`[{"server":`+testServer+`,"kind":"shadowsocks-2022"},{"server":`+testServer+
-		`,"kind":"vless-reality-vision"}]`, "25g00001", "abc123", 10808)
+		`,"kind":"shadowsocks-2022"}]`, "25g00001", "abc123", 10808)
 	if err != nil {
 		t.Fatal(err)
 	}
