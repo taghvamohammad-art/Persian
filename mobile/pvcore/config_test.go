@@ -134,3 +134,29 @@ func TestHysteria2Salamander(t *testing.T) {
 		t.Fatal("mask without obfs") // servers set up before keep working
 	}
 }
+
+func TestAppsDNSGoesOverHTTPS(t *testing.T) {
+	single, err := XrayConfig(testServer, "shadowsocks-2022", "25g00001", "abc123", 10808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := PoolConfig(`[{"server":`+testServer+`,"kind":"shadowsocks-2022"},{"server":`+testServer+
+		`,"kind":"vless-reality-vision"}]`, "25g00001", "abc123", 10808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, cfg := range map[string]string{"single": single, "pool": pool} {
+		for _, want := range []string{`"protocol":"dns"`, `"port":"53"`, `"inboundTag":["dns-in"]`, "dns-query"} {
+			if !strings.Contains(cfg, want) {
+				t.Error(name, "missing", want)
+			}
+		}
+		if _, err := serial.LoadJSONConfig(strings.NewReader(cfg)); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+	if !strings.Contains(pool, `"balancerTag":"best","inboundTag":["dns-in"]`) &&
+		!strings.Contains(pool, `"inboundTag":["dns-in"],"balancerTag":"best"`) {
+		t.Error("pool: Xray's own DNS does not use the pool")
+	}
+}

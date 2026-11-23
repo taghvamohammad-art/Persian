@@ -194,16 +194,31 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 	return nil, fmt.Errorf("not an Xray protocol: %s", p.Type)
 }
 
-func baseConfig(socksPort int, outs []any, rules []any) map[string]any {
+// DNSServers answer the apps' DNS questions inside Xray, over HTTPS through
+// the tunnel: on networks that drop UDP (it happens in Iran for hours),
+// questions sent as UDP through Shadowsocks were lost and nothing loaded.
+var DNSServers = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
+
+// baseConfig: via is the route of Xray's own DNS questions, {"outboundTag":
+// "proxy"} or {"balancerTag": "best"}.
+func baseConfig(socksPort int, outs []any, rules []any, via map[string]any) map[string]any {
+	dnsRoute := map[string]any{"inboundTag": []string{"dns-in"}}
+	for k, v := range via {
+		dnsRoute[k] = v
+	}
 	return map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
 		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": socksPort,
 			"protocol": "socks", "settings": map[string]any{"udp": true, "auth": "noauth"},
 			"sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}, "routeOnly": true}}},
-		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"}),
+		"dns": map[string]any{"servers": DNSServers, "queryStrategy": "UseIPv4", "tag": "dns-in"},
+		"outbounds": append(outs, map[string]any{"tag": "direct", "protocol": "freedom"},
+			map[string]any{"tag": "dns-out", "protocol": "dns"}),
 		"routing": map[string]any{"domainStrategy": "AsIs", "rules": append([]any{
+			dnsRoute,
 			map[string]any{"ip": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
-				"outboundTag": "direct"}}, rules...)},
+				"outboundTag": "direct"},
+			map[string]any{"network": "udp", "port": "53", "outboundTag": "dns-out"}}, rules...)},
 	}
 }
 
@@ -222,7 +237,7 @@ func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, err
 	if err != nil {
 		return "", err
 	}
-	b, err := json.Marshal(baseConfig(socksPort, []any{out}, nil))
+	b, err := json.Marshal(baseConfig(socksPort, []any{out}, nil, map[string]any{"outboundTag": "proxy"}))
 	return string(b), err
 }
 
@@ -259,7 +274,8 @@ func PoolConfig(choicesJSON, user, pass string, socksPort int) (string, error) {
 	if len(outs) == 0 {
 		return "", fmt.Errorf("pool: nothing usable (%s)", strings.Join(errs, "; "))
 	}
-	cfg := baseConfig(socksPort, outs, []any{map[string]any{"network": "tcp,udp", "balancerTag": "best"}})
+	cfg := baseConfig(socksPort, outs, []any{map[string]any{"network": "tcp,udp", "balancerTag": "best"}},
+		map[string]any{"balancerTag": "best"})
 	cfg["observatory"] = map[string]any{"subjectSelector": []string{"p-"}, "probeUrl": ProbeURL,
 		"probeInterval": "1m", "enableConcurrency": true}
 	cfg["routing"].(map[string]any)["balancers"] = []any{map[string]any{"tag": "best", "selector": []string{"p-"},
