@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,47 @@ func TestDNSAnswerErrors(t *testing.T) {
 
 func TestDiagnoseWithoutEngine(t *testing.T) {
 	if got := Diagnose(1000); got == "" || !strings.Contains(got, "no engine running") {
+		t.Fatal(got)
+	}
+}
+
+func TestEchoPackets(t *testing.T) {
+	src, dst := netip.MustParseAddr("10.64.1.2"), netip.MustParseAddr("1.1.1.1")
+	p := echoRequest(src, dst, pingID, 201, awgProbeBig)
+	if len(p) != awgProbeBig || inetChecksum(p[:20]) != 0 || inetChecksum(p[20:]) != 0 {
+		t.Fatal("bad request packet")
+	}
+	if _, ok := echoReplySeq(p, pingID); ok {
+		t.Fatal("a request taken for a reply")
+	}
+	r := append([]byte{}, p...) // what 1.1.1.1 sends back
+	copy(r[12:16], p[16:20])
+	copy(r[16:20], p[12:16])
+	r[20] = 0
+	if seq, ok := echoReplySeq(r, pingID); !ok || seq != 201 {
+		t.Fatal(seq, ok)
+	}
+	if _, ok := echoReplySeq(r, 1); ok {
+		t.Fatal("other id accepted")
+	}
+}
+
+func TestPingTunCarriesPings(t *testing.T) {
+	pt := newPingTun(netip.MustParseAddr("10.64.1.2"))
+	defer pt.Close()
+	done := make(chan [2]bool)
+	go func() { s, b := pt.pingBoth(2 * time.Second); done <- [2]bool{s, b} }()
+	buf := [][]byte{make([]byte, 2000)}
+	sizes := []int{0}
+	for i := 0; i < 4; i++ { // the device reads the requests and "answers" them
+		if _, err := pt.Read(buf, sizes, 0); err != nil {
+			t.Fatal(err)
+		}
+		r := append([]byte{}, buf[0][:sizes[0]]...)
+		r[20] = 0
+		pt.Write([][]byte{r}, 0)
+	}
+	if got := <-done; !got[0] || !got[1] {
 		t.Fatal(got)
 	}
 }

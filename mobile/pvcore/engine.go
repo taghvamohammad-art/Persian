@@ -1,10 +1,12 @@
 package pvcore
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -353,8 +355,13 @@ func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error)
 	if err != nil {
 		return -1, err
 	}
+	src, err := netip.ParseAddr(AwgAddress(user))
+	if err != nil {
+		return -1, err
+	}
 	uapi = strings.Replace(uapi, "persistent_keepalive_interval=25", "persistent_keepalive_interval=1", 1)
-	dev := device.NewDevice(newNullTun(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
+	ptun := newPingTun(src)
+	dev := device.NewDevice(ptun, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
 	defer dev.Close()
 	if err := dev.IpcSet(uapi); err != nil {
 		return -1, err
@@ -363,15 +370,188 @@ func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error)
 	if err := dev.Up(); err != nil {
 		return -1, err
 	}
+	shook := -1
 	for time.Since(start) < timeout {
 		state, err := dev.IpcGet()
 		if err == nil && strings.Contains(state, "last_handshake_time_sec=") &&
 			!strings.Contains(state, "last_handshake_time_sec=0\n") {
-			return int(time.Since(start).Milliseconds()), nil
+			shook = int(time.Since(start).Milliseconds())
+			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return -1, fmt.Errorf("no handshake")
+	if shook < 0 {
+		return -1, fmt.Errorf("no handshake")
+	}
+	// A handshake is small and can pass where data does not (a filter that
+	// lets it through and drops or throttles what follows, or a path that
+	// loses large packets): ping through the tunnel, a small and a full-size
+	// packet, before calling AmneziaWG usable.
+	left := timeout - time.Since(start)
+	if left < 1500*time.Millisecond {
+		left = 1500 * time.Millisecond
+	}
+	small, big := ptun.pingBoth(left)
+	switch {
+	case !small && !big:
+		return -1, fmt.Errorf("handshake ok but no data comes back (filtered?)")
+	case !big:
+		return -1, fmt.Errorf("handshake ok but large packets are lost (MTU %d)", awgProbeBig)
+	}
+	return shook, nil
+}
+
+// ---------------------------------------------------------------- data probe
+
+// awgProbeBig is the size of the large test packet: the app's AmneziaWG MTU.
+const awgProbeBig = 1280
+
+var pingTargets = []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}
+
+// pingTun is a TUN that only carries our own pings: echo requests go into
+// the device, the replies it decrypts come back to Write.
+type pingTun struct {
+	src     netip.Addr
+	out     chan []byte
+	replies chan uint16 // sequence numbers answered
+	events  chan tun.Event
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func newPingTun(src netip.Addr) *pingTun {
+	t := &pingTun{src: src, out: make(chan []byte, 16), replies: make(chan uint16, 16),
+		events: make(chan tun.Event, 1), closed: make(chan struct{})}
+	t.events <- tun.EventUp
+	return t
+}
+
+func (t *pingTun) File() *os.File { return nil }
+func (t *pingTun) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	select {
+	case p := <-t.out:
+		sizes[0] = copy(bufs[0][offset:], p)
+		return 1, nil
+	case <-t.closed:
+		return 0, os.ErrClosed
+	}
+}
+func (t *pingTun) Write(bufs [][]byte, offset int) (int, error) {
+	for _, b := range bufs {
+		if seq, ok := echoReplySeq(b[offset:], pingID); ok {
+			select {
+			case t.replies <- seq:
+			default:
+			}
+		}
+	}
+	return len(bufs), nil
+}
+func (t *pingTun) MTU() (int, error)        { return 1420, nil }
+func (t *pingTun) Name() (string, error)    { return "probe", nil }
+func (t *pingTun) Events() <-chan tun.Event { return t.events }
+func (t *pingTun) BatchSize() int           { return 1 }
+func (t *pingTun) Close() error {
+	t.once.Do(func() { close(t.closed); close(t.events) })
+	return nil
+}
+
+const pingID = 0x7076
+
+// pingBoth sends small (seq 1xx) and full-size (seq 2xx) pings, a few times,
+// and tells which sizes got an answer.
+func (t *pingTun) pingBoth(wait time.Duration) (small, big bool) {
+	deadline := time.After(wait)
+	tick := time.NewTicker(400 * time.Millisecond)
+	defer tick.Stop()
+	n := 0
+	send := func() {
+		for i, dst := range pingTargets {
+			seq := uint16(n*10 + i)
+			select {
+			case t.out <- echoRequest(t.src, dst, pingID, 100+seq, 64):
+			default:
+			}
+			select {
+			case t.out <- echoRequest(t.src, dst, pingID, 200+seq, awgProbeBig):
+			default:
+			}
+		}
+		n++
+	}
+	send()
+	for {
+		select {
+		case seq := <-t.replies:
+			if seq >= 200 {
+				big = true
+			} else if seq >= 100 {
+				small = true
+			}
+			if small && big {
+				return
+			}
+		case <-tick.C:
+			if n < 5 {
+				send()
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// echoRequest: an IPv4 ICMP echo request of the given total size, with
+// "don't fragment" so a path that cannot carry it shows.
+func echoRequest(src, dst netip.Addr, id, seq uint16, size int) []byte {
+	if size < 28 {
+		size = 28
+	}
+	p := make([]byte, size)
+	p[0] = 0x45
+	binary.BigEndian.PutUint16(p[2:], uint16(size))
+	binary.BigEndian.PutUint16(p[4:], seq)
+	binary.BigEndian.PutUint16(p[6:], 0x4000)
+	p[8] = 64
+	p[9] = 1
+	s4, d4 := src.As4(), dst.As4()
+	copy(p[12:16], s4[:])
+	copy(p[16:20], d4[:])
+	binary.BigEndian.PutUint16(p[10:], inetChecksum(p[:20]))
+	icmp := p[20:]
+	icmp[0] = 8
+	binary.BigEndian.PutUint16(icmp[4:], id)
+	binary.BigEndian.PutUint16(icmp[6:], seq)
+	for i := 8; i < len(icmp); i++ {
+		icmp[i] = byte(i)
+	}
+	binary.BigEndian.PutUint16(icmp[2:], inetChecksum(icmp))
+	return p
+}
+
+func echoReplySeq(p []byte, id uint16) (uint16, bool) {
+	if len(p) < 28 || p[0]>>4 != 4 || p[9] != 1 {
+		return 0, false
+	}
+	ihl := int(p[0]&0x0F) * 4
+	if len(p) < ihl+8 || p[ihl] != 0 || binary.BigEndian.Uint16(p[ihl+4:]) != id {
+		return 0, false
+	}
+	return binary.BigEndian.Uint16(p[ihl+6:]), true
+}
+
+func inetChecksum(b []byte) uint16 {
+	var sum uint32
+	for i := 0; i+1 < len(b); i += 2 {
+		sum += uint32(b[i])<<8 | uint32(b[i+1])
+	}
+	if len(b)%2 == 1 {
+		sum += uint32(b[len(b)-1]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xFFFF + sum>>16
+	}
+	return ^uint16(sum)
 }
 
 // Probe tries every protocol of a server at once and returns JSON
