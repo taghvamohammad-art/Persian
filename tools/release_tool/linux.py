@@ -166,6 +166,13 @@ def make_cert(h):
     return hashlib.sha256(base64.b64decode(der)).hexdigest()
 
 
+def hy2_mask(p):
+    """Salamander on Hysteria2, both ends (the app gets the password as "obfs")."""
+    if not p.get("hy2_obfs"):
+        return {}
+    return {"finalmask": {"udp": [{"type": "salamander", "settings": {"password": p["hy2_obfs"]}}]}}
+
+
 def xray_template(p):
     """Full Xray config with empty user lists (pv-agent fills them)."""
     reality = {"show": False, "target": "%s:443" % p["sni"], "serverNames": [p["sni"]],
@@ -188,11 +195,12 @@ def xray_template(p):
              "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}},
             {"tag": "hy2", "port": p["hy2_port"], "protocol": "hysteria",
              "settings": {"version": 2, "users": []},
-             "streamSettings": {"network": "hysteria", "hysteriaSettings": {"version": 2},
-                                "security": "tls",
-                                "tlsSettings": {"alpn": ["h3"], "certificates": [
-                                    {"certificateFile": XRAY_CONF_DIR + "/hy2.crt",
-                                     "keyFile": XRAY_CONF_DIR + "/hy2.key"}]}}},
+             "streamSettings": dict({"network": "hysteria", "hysteriaSettings": {"version": 2},
+                                     "security": "tls",
+                                     "tlsSettings": {"alpn": ["h3"], "certificates": [
+                                         {"certificateFile": XRAY_CONF_DIR + "/hy2.crt",
+                                          "keyFile": XRAY_CONF_DIR + "/hy2.key"}]}},
+                                    **hy2_mask(p))},
             {"tag": "ss", "port": p["ss_port"], "protocol": "shadowsocks",
              "settings": {"method": "2022-blake3-aes-128-gcm", "password": p["ss_server_key"],
                           "clients": [], "network": "tcp,udp"}},
@@ -514,6 +522,38 @@ def update_agent(h, log=print):
     log("pv-agent به‌روز شد ✓")
 
 
+def refresh_xray_config(h, p, log=print):
+    """A running server gets this tool's current Xray settings (new options,
+    e.g. Salamander on Hysteria2), keeping its keys, ports and users. The new
+    template must pass Xray's own test before it replaces the old one;
+    pv-agent then restarts Xray with the users (a few seconds' cut for the
+    Xray protocols). Returns the updated params (to save and publish)."""
+    p = new_params(p)
+    if not p.get("hy2_pin") or not p.get("reality_public"):
+        raise LinuxError("تنظیمات این سرور در ابزار کامل نیست؛ یک بار از «سرور جدید» نصبش کنید.")
+    log("تنظیمات جدید Xray…")
+    new = XRAY_CONF_DIR + "/template.json.new"
+    h.write(new, json.dumps(xray_template(p), indent=1))
+    test = h.run("/usr/local/bin/xray run -test -config %s 2>&1" % new, check=False)
+    if "Configuration OK" not in test:
+        h.run("rm -f %s" % new, check=False)
+        raise LinuxError("Xray تنظیمات جدید را قبول نکرد؛ چیزی عوض نشد:\n%s" % test[-600:])
+    h.run("mv %s %s/template.json && systemctl restart pv-agent" % (new, XRAY_CONF_DIR))
+    for _ in range(20):
+        time.sleep(2)
+        if all(h.run("systemctl is-active %s || true" % svc).strip() == "active" for svc in ("xray", "pv-agent")):
+            log("✓ Xray با تنظیمات جدید اجرا شد")
+            return p
+    raise LinuxError("Xray بعد از تنظیمات جدید اجرا نشد:\n%s"
+                     % h.run("journalctl -u xray -n 20 --no-pager || true")[-1200:])
+
+
+def refreshed_entry(old_entry, p):
+    """The app-config entry of a server after refresh_xray_config."""
+    awg = any(x.get("type") == "amneziawg" for x in old_entry.get("protocols", []))
+    return server_entry(old_entry["name"], old_entry["host"], p, awg)
+
+
 def update_xray(h, log=print):
     """Xray's latest release on a running server: the new binary must accept
     the current config before it replaces the old one, and the old one comes
@@ -659,6 +699,8 @@ def new_params(old=None):
     p.setdefault("xhttp_port", 8443)
     p.setdefault("xhttp_path", "/" + secrets.token_urlsafe(8))
     p.setdefault("hy2_port", 443)
+    # Salamander: Hysteria2's QUIC made to look like random UDP (Iran drops QUIC)
+    p.setdefault("hy2_obfs", secrets.token_urlsafe(16))
     p.setdefault("ss_port", 20000 + secrets.randbelow(40000))
     p.setdefault("ss_server_key", base64.b64encode(secrets.token_bytes(16)).decode())
     p.setdefault("awg", awg_params())
@@ -854,7 +896,8 @@ def server_entry(name, host, p, awg=True):
          "public_key": p["reality_public"], "short_id": p["short_id"]},
         {"type": "vless-xhttp-reality", "port": p["xhttp_port"], "sni": p["sni"], "path": p["xhttp_path"],
          "public_key": p["reality_public"], "short_id": p["short_id"]},
-        {"type": "hysteria2", "port": p["hy2_port"], "pin_sha256": p["hy2_pin"]},
+        dict({"type": "hysteria2", "port": p["hy2_port"], "pin_sha256": p["hy2_pin"]},
+             **({"obfs": p["hy2_obfs"]} if p.get("hy2_obfs") else {})),
         {"type": "shadowsocks-2022", "port": p["ss_port"], "method": "2022-blake3-aes-128-gcm",
          "server_key": p["ss_server_key"]},
     ]}

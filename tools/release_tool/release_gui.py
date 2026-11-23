@@ -1206,6 +1206,7 @@ class ServicesPage(RouterPage):
         r6.addWidget(self.button("به‌روزرسانی pv-agent همه‌ی سرورها", self.update_agents))
         r6.addWidget(self.button("به‌روزرسانی Xray همه‌ی سرورها", self.update_xrays))
         l6.addLayout(r6)
+        l6.addWidget(self.button("تنظیمات تازه‌ی Xray روی سرورها و انتشار برای اپ", self.refresh_servers))
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1425,6 +1426,62 @@ class ServicesPage(RouterPage):
                 QMessageBox.warning(self, "ناقص", "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
+        self.run(job, done)
+
+    def refresh_servers(self):
+        servers = [r for r in self.settings.routers if r.get("role") == "linux" and r.get("params")]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی (با تنظیمات ذخیره‌شده) تعریف نشده است.")
+        ws = pb.Workspace(self.settings.workspace)
+        try:
+            ws.check()
+            ws.load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return QMessageBox.warning(self, "خطا", str(e))
+        if QMessageBox.question(self, "تنظیمات تازه‌ی Xray", "تنظیمات تازه‌ی Xray (از جمله مبهم‌سازی Salamander برای Hysteria2) روی %d سرور لینوکس اعمال و تنظیمات اپ دوباره منتشر می‌شود. کاربران پروتکل‌های Xray هر سرور چند ثانیه قطع و خودکار وصل می‌شوند؛ Hysteria2 در نسخه‌های قدیمی اپ دیگر کار نمی‌کند (در ایران هم کار نمی‌کرد). ادامه؟" % len(servers)) != QMessageBox.Yes:
+            return
+        github = public = None
+        if self.settings.token:
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+
+        def job(log, progress):
+            import json
+            import shutil
+            new_cfg = ws.load_config()
+            entries = {e.get("host"): e for e in new_cfg.get("linux_servers", [])}
+            done = {}
+            for r in servers:
+                log("— %s" % r["host"])
+                p = st.decrypt_blob(r.get("params")) or {}
+                with linux_connector(r)() as h:
+                    p = linux.refresh_xray_config(h, p, log)
+                done[r["id"]] = p
+                if r["host"] in entries:
+                    new_cfg = pv.add_linux_server(new_cfg, linux.refreshed_entry(entries[r["host"]], p))
+                else:
+                    log("⚠ %s در تنظیمات اپ نیست؛ فقط خود سرور به‌روز شد." % r["host"])
+            before = ws.path("config.before-%s.json" % bk.stamp())
+            shutil.copy(ws.path("config.json"), before)
+            with open(ws.path("config.json"), "w", encoding="utf-8") as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+            try:
+                cfg = pb.release_config_only(ws, send_router=True, github=github, public_github=public,
+                                             log=log, progress=progress)
+            except Exception:
+                shutil.copy(before, ws.path("config.json"))
+                raise
+            return done, cfg
+
+        def done(res):
+            done_, cfg = res
+            for r in servers:
+                if r["id"] in done_:
+                    r["params"] = st.encrypt_blob(done_[r["id"]])
+            self.settings.save()
+            QMessageBox.information(self, "انجام شد",
+                                    "سرورها به‌روز شدند و تنظیمات اپ (نسخه‌ی %s) منتشر شد." % fa(cfg["version"]))
         self.run(job, done)
 
     def update_xrays(self):

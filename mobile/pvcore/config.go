@@ -19,6 +19,7 @@ type Protocol struct {
 	ShortID   string `json:"short_id"`
 	Path      string `json:"path"`
 	PinSha256 string `json:"pin_sha256"`
+	Obfs      string `json:"obfs"` // Hysteria2: Salamander password (both ends)
 	Method    string `json:"method"`
 	ServerKey string `json:"server_key"`
 	Jc        int    `json:"jc"`
@@ -134,13 +135,19 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 			"streamSettings": map[string]any{"network": "xhttp", "xhttpSettings": map[string]any{"path": p.Path},
 				"security": "reality", "realitySettings": reality(p)}}, nil
 	case "hysteria2":
+		stream := map[string]any{"network": "hysteria",
+			"hysteriaSettings": map[string]any{"version": 2, "auth": Hy2Auth(user, pass)},
+			"security":         "tls",
+			"tlsSettings": map[string]any{"serverName": "pv", "alpn": []string{"h3"},
+				"pinnedPeerCertSha256": p.PinSha256}}
+		if p.Obfs != "" {
+			// Salamander: the QUIC packets look like random UDP (Iran drops QUIC)
+			stream["finalmask"] = map[string]any{"udp": []any{map[string]any{"type": "salamander",
+				"settings": map[string]any{"password": p.Obfs}}}}
+		}
 		return map[string]any{"tag": "proxy", "protocol": "hysteria",
-			"settings": map[string]any{"version": 2, "address": s.Host, "port": p.Port},
-			"streamSettings": map[string]any{"network": "hysteria",
-				"hysteriaSettings": map[string]any{"version": 2, "auth": Hy2Auth(user, pass)},
-				"security":         "tls",
-				"tlsSettings": map[string]any{"serverName": "pv", "alpn": []string{"h3"},
-					"pinnedPeerCertSha256": p.PinSha256}}}, nil
+			"settings":       map[string]any{"version": 2, "address": s.Host, "port": p.Port},
+			"streamSettings": stream}, nil
 	case "shadowsocks-2022":
 		return map[string]any{"tag": "proxy", "protocol": "shadowsocks",
 			"settings": map[string]any{"servers": []any{map[string]any{"address": s.Host, "port": p.Port,

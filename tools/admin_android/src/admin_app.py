@@ -1371,6 +1371,7 @@ class ServicesPage:
                       "یوزرهای پروتکل‌های Xray چند ثانیه قطع و خودکار وصل می‌شوند."),
                  button_row(b("به‌روزرسانی pv-agent همه", self.update_agents, icon=ft.Icons.SYNC),
                             b("به‌روزرسانی Xray همه", self.update_xrays, icon=ft.Icons.DOWNLOAD)),
+                 button_row(b("تنظیمات تازه‌ی Xray و اپ", self.refresh_servers, icon=ft.Icons.TUNE)),
                  icon=ft.Icons.DNS),
             card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
@@ -1441,6 +1442,55 @@ class ServicesPage:
         await self.app.info("انجام شد" if not bad else "ناقص",
                             "pv-agent همه‌ی سرورها به‌روز شد." if not bad
                             else "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
+
+    async def refresh_servers(self):
+        servers = [r for r in self.app.settings.routers if r.get("role") == "linux" and r.get("params")]
+        if not servers:
+            return await self.app.info("خطا", "سرور لینوکسی (با تنظیمات ذخیره‌شده) تعریف نشده است.")
+        ws = self.app.workspace()
+        try:
+            ws.check()
+            ws.load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return await self.app.info("خطا", str(e))
+        if not await self.app.ask("تنظیمات تازه‌ی Xray", "تنظیمات تازه‌ی Xray (از جمله مبهم‌سازی Salamander برای Hysteria2) روی %d سرور لینوکس اعمال و تنظیمات اپ دوباره منتشر می‌شود. کاربران پروتکل‌های Xray هر سرور چند ثانیه قطع و خودکار وصل می‌شوند؛ Hysteria2 در نسخه‌های قدیمی اپ دیگر کار نمی‌کند (در ایران هم کار نمی‌کرد). ادامه؟" % len(servers)):
+            return
+        github, public = self.app.github_clients()
+
+        def job(log, progress):
+            import json
+            import shutil
+            new_cfg = ws.load_config()
+            entries = {e.get("host"): e for e in new_cfg.get("linux_servers", [])}
+            done = {}
+            for r in servers:
+                log("— %s" % r["host"])
+                p = st.decrypt_blob(r.get("params")) or {}
+                with linux_connector(r)() as h:
+                    p = linux.refresh_xray_config(h, p, log)
+                done[r["id"]] = p
+                if r["host"] in entries:
+                    new_cfg = pv.add_linux_server(new_cfg, linux.refreshed_entry(entries[r["host"]], p))
+                else:
+                    log("⚠ %s در تنظیمات اپ نیست؛ فقط خود سرور به‌روز شد." % r["host"])
+            before = ws.path("config.before-%s.json" % bk.stamp())
+            shutil.copy(ws.path("config.json"), before)
+            with open(ws.path("config.json"), "w", encoding="utf-8") as f:
+                json.dump(new_cfg, f, ensure_ascii=False, indent=2)
+            try:
+                cfg = pb.release_config_only(ws, send_router=True, github=github, public_github=public,
+                                             log=log, progress=progress)
+            except Exception:
+                shutil.copy(before, ws.path("config.json"))
+                raise
+            return done, cfg
+
+        done, cfg = await self.app.run(self.panel, job)
+        for r in servers:
+            if r["id"] in done:
+                r["params"] = st.encrypt_blob(done[r["id"]])
+        self.app.settings.save()
+        await self.app.info("انجام شد", "سرورها به‌روز شدند و تنظیمات اپ (نسخه‌ی %s) منتشر شد." % fa(cfg["version"]))
 
     async def update_xrays(self):
         servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]

@@ -76,7 +76,9 @@ def client_config(entry, user, password):
          "streamSettings": {"network": "hysteria", "hysteriaSettings": {"version": 2,
                                                                          "auth": pvcreds.hy2_auth(user, password)},
                             "security": "tls", "tlsSettings": {"serverName": "pv", "alpn": ["h3"],
-                                                               "pinnedPeerCertSha256": h["pin_sha256"]}}},
+                                                               "pinnedPeerCertSha256": h["pin_sha256"]},
+                            **({"finalmask": {"udp": [{"type": "salamander", "settings": {"password": h["obfs"]}}]}}
+                               if h.get("obfs") else {})}},
         {"tag": "ss", "protocol": "shadowsocks", "settings": {"servers": [{"address": "127.0.0.1", "port": s["port"],
             "method": s["method"], "password": s["server_key"] + ":" + pvcreds.ss_key(user, password)}]}},
     ]
@@ -165,6 +167,20 @@ def main():
             print(linux.update_xray(h, log=print), linux.update_agent(h, log=print))
     except Exception as e:   # noqa: BLE001
         problems.append("update xray/agent: %s" % e)
+
+    step("Xray settings refreshed on a running server; Hysteria2 with Salamander")
+    hy = next(x for x in entry["protocols"] if x["type"] == "hysteria2")
+    if not hy.get("obfs"):
+        problems.append("hysteria2 entry without salamander (obfs)")
+    try:
+        with connect_linux() as h:
+            p2 = linux.refresh_xray_config(h, dict(params), log=print)
+        e2 = linux.refreshed_entry(entry, p2)
+        if e2 != entry:
+            problems.append("refresh changed the app entry of an up-to-date server")
+        time.sleep(10)
+    except Exception as e:   # noqa: BLE001
+        problems.append("refresh xray config: %s" % e)
 
     step("monitoring sees who is connected with which protocol")
     import monitor

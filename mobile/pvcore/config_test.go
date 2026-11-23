@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/xtls/xray-core/infra/conf/serial"
 )
 
 const testServer = `{"name":"t","host":"1.2.3.4","protocols":[
@@ -110,5 +112,24 @@ func TestWindowsBypass(t *testing.T) {
 	plain, _ := WindowsConfig(choices, "u", "p", 10808, nil)
 	if strings.Contains(plain, `"process"`) {
 		t.Fatal("no bypass rule without programs")
+	}
+}
+
+func TestHysteria2Salamander(t *testing.T) {
+	server := strings.Replace(testServer, `"pin_sha256":"ff00"}`, `"pin_sha256":"ff00","obfs":"s3cret"}`, 1)
+	cfg, err := XrayConfig(server, "hysteria2", "25g00001", "abc123", 10808)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cfg, `"type":"salamander"`) || !strings.Contains(cfg, `"password":"s3cret"`) {
+		t.Fatal("no salamander mask:", cfg)
+	}
+	// Xray itself must accept it (the field names are Xray's)
+	if _, err := serial.LoadJSONConfig(strings.NewReader(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := XrayConfig(testServer, "hysteria2", "25g00001", "abc123", 10808)
+	if strings.Contains(plain, "salamander") {
+		t.Fatal("mask without obfs") // servers set up before keep working
 	}
 }
