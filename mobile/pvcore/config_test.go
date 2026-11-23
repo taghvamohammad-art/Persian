@@ -116,7 +116,8 @@ func TestWindowsBypass(t *testing.T) {
 }
 
 func TestHysteria2Salamander(t *testing.T) {
-	server := strings.Replace(testServer, `"pin_sha256":"ff00"}`, `"pin_sha256":"ff00","obfs":"s3cret"}`, 1)
+	pin := strings.Repeat("ab", 32) // Xray checks the pin's form
+	server := strings.Replace(testServer, `"pin_sha256":"ff00"}`, `"pin_sha256":"`+pin+`","obfs":"s3cret"}`, 1)
 	cfg, err := XrayConfig(server, "hysteria2", "25g00001", "abc123", 10808)
 	if err != nil {
 		t.Fatal(err)
