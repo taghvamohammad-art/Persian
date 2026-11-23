@@ -207,6 +207,19 @@ class ReleaseFlow(unittest.TestCase):
         with open(self.srv_cfg["app_config_file"]) as f:
             return json.loads(base64.b64decode(json.loads(f.read())["payload"]))
 
+    def test_required_update(self):
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        self.assertNotIn("min_version_code", self.served()["app_update"])
+        pb.release(self.ws, pb.Build(b"PK" + os.urandom(1000), 17, "x"), 17, "", "", log=q, required=True)
+        self.assertEqual(self.served()["app_update"]["min_version_code"], 17)
+        # a later ordinary release keeps the requirement
+        pb.release(self.ws, pb.Build(b"PK" + os.urandom(1000), 18, "x"), 18, "", "", log=q)
+        self.assertEqual(self.served()["app_update"]["min_version_code"], 17)
+        # the published version made required without a new build
+        pb.release_config_only(self.ws, log=q, require_app=True)
+        self.assertEqual(self.served()["app_update"]["min_version_code"], 18)
+
     def test_test_build_then_public(self):
         q = lambda *_: None
         pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)

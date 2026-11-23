@@ -60,6 +60,8 @@ internal data class AppUpdate(
     val patches: List<ApkPatch> = emptyList(),
     // test builds: sha256("pv-tester\n" + username)[:16] of each tester
     val testers: List<String> = emptyList(),
+    // «آپدیت اجباری»: versions below this cannot connect until they update
+    @SerialName("min_version_code") val minVersionCode: Long = 0,
 )
 
 internal fun testerHash(username: String): String =

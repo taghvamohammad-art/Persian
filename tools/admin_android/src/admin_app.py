@@ -752,6 +752,7 @@ class PublishPage:
         self.chk_router = ft.Checkbox(label="ارسال به روتر", value=True)
         self.chk_github = ft.Checkbox(label="به‌روزرسانی GitHub", value=True)
         self.chk_beta = ft.Checkbox(label="🧪 آزمایشی: اول فقط برای یوزرهای تست", value=True)
+        self.chk_required = ft.Checkbox(label="⚠ آپدیت اجباری (نسخه‌های قدیمی‌تر وصل نمی‌شوند)", value=False)
         self.beta_info = ft.Text("", size=13, color=ACCENT)
         self.btn_promote = app.button("عمومی کردن اندروید", lambda: self.promote(False), icon=ft.Icons.VERIFIED)
         self.btn_promote_win = app.button("عمومی کردن ویندوز", lambda: self.promote(True), icon=ft.Icons.VERIFIED)
@@ -771,11 +772,13 @@ class PublishPage:
                             app.button("انتخاب فایل", self.pick_build, icon=ft.Icons.UPLOAD_FILE)),
                  ft.Row([self.code, self.name]), icon=ft.Icons.ANDROID),
             card("توضیحات نسخه", self.notes, icon=ft.Icons.NOTES),
-            card("انتشار", ft.Row([self.chk_router, self.chk_github], wrap=True), self.chk_beta,
+            card("انتشار", ft.Row([self.chk_router, self.chk_github], wrap=True), self.chk_beta, self.chk_required,
                  ft.Row([self.btn_go]), self.panel.view, icon=ft.Icons.ROCKET_LAUNCH, color=ACCENT),
             card("کارهای دیگر",
                  button_row(app.button("فقط تنظیمات سرور", self.publish_config_only, icon=ft.Icons.SETTINGS_SUGGEST),
                             app.button("نسخه‌ی ویندوز", self.publish_windows, icon=ft.Icons.DESKTOP_WINDOWS)),
+                 button_row(app.button("اجباری کردن نسخه‌های فعلی", self.require_current, icon=ft.Icons.WARNING_AMBER_ROUNDED,
+                                       danger=True)),
                  icon=ft.Icons.MORE_HORIZ)], spacing=12)
 
     def _code_changed(self, e):
@@ -884,13 +887,18 @@ class PublishPage:
                          "رد می‌کنند. ادامه؟" % (fa(code), fa(self.build.version_code))):
             return
         testers = await self.testers_or_none()
+        required = testers is None and bool(self.chk_required.value)
+        if required and not await self.app.ask("آپدیت اجباری", "با این انتشار، نسخه‌های قدیمی‌تر برنامه دیگر وصل "
+                                                               "نمی‌شوند تا به‌روز کنند. ادامه؟"):
+            return
         github, public = self.app.github_clients(self.chk_github.value)
         ws, build, notes, send_router = self.app.workspace(), self.build, self.notes.value or "", self.chk_router.value
 
         def job(log, progress):
             self._sync(ws, log, progress)
             return pb.release(ws, build, code, name, notes, send_router=send_router, github=github,
-                              public_github=public, log=log, progress=progress, testers=testers)
+                              public_github=public, log=log, progress=progress, testers=testers,
+                              required=required)
         cfg = await self.app.run(self.panel, job)
         self.build = None
         self.build_text.value = "فایلی انتخاب نشده"
@@ -958,6 +966,7 @@ class PublishPage:
         if res is None:
             return
         testers = await self.testers_or_none()
+        win_required = testers is None and bool(self.chk_required.value)
         github, public = self.app.github_clients(self.chk_github.value)
         send_router = self.chk_router.value
 
@@ -965,7 +974,7 @@ class PublishPage:
             self._sync(ws, log, progress)
             return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
                                           log=log, progress=progress, win=win, win_notes=res["notes"],
-                                          win_testers=testers)
+                                          win_testers=testers, win_required=win_required)
         cfg = await self.app.run(self.panel, job, clear=False)
         self.reload()
         if testers is not None:
@@ -981,13 +990,41 @@ class PublishPage:
         github, public = self.app.github_clients(self.chk_github.value)
         ws, send_router = self.app.workspace(), self.chk_router.value
         fn = pb.promote_win_beta if windows else pb.promote_beta
+        required = bool(self.chk_required.value)
 
         def job(log, progress):
             self._sync(ws, log, progress)
-            return fn(ws, send_router=send_router, github=github, public_github=public, log=log, progress=progress)
+            return fn(ws, send_router=send_router, github=github, public_github=public, log=log, progress=progress,
+                      required=required)
         await self.app.run(self.panel, job)
         self.reload()
         await self.app.info("انجام شد", "نسخه‌ی %s برای همه‌ی کاربران منتشر شد." % what)
+
+    async def require_current(self):
+        ws = self.app.workspace()
+        try:
+            cfg = ws.load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return await self.app.info("خطا", str(e))
+        app = (cfg.get("app_update") or {}).get("version_code")
+        win = (cfg.get("windows_update") or {}).get("version_code")
+        if not app and not win:
+            return await self.app.info("خطا", "هنوز نسخه‌ای منتشر نشده است.")
+        if not await self.app.ask("آپدیت اجباری",
+                "از این به بعد هر کس نسخه‌ی قدیمی‌تر از این‌ها را دارد، تا برنامه را به‌روز نکند وصل نمی‌شود:\n"
+                "• اندروید: %s\n• ویندوز: %s\n\nفقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند "
+                "(اندروید ۱۴۰ به بعد). ادامه؟" % (fa(app) if app else "—", fa(win) if win else "—")):
+            return
+        github, public = self.app.github_clients(self.chk_github.value)
+        send_router = self.chk_router.value
+
+        def job(log, progress):
+            self._sync(ws, log, progress)
+            return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
+                                          log=log, progress=progress, require_app=bool(app), win_required=bool(win))
+        cfg = await self.app.run(self.panel, job)
+        self.reload()
+        await self.app.info("انجام شد", "آپدیت اجباری شد (تنظیمات %s)." % fa(cfg["version"]))
 
     async def publish_config_only(self):
         ws = self.app.workspace()

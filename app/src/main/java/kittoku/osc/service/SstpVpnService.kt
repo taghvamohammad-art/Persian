@@ -198,6 +198,10 @@ internal class SstpVpnService : VpnService() {
         startForeground(NOTIFICATION_DISCONNECT_ID, n)
     }
 
+    private fun updateRequired(): Boolean = runCatching {
+        kittoku.osc.brand.UpdateManager.required(kittoku.osc.brand.ConfigManager.current(this))
+    }.getOrDefault(false)
+
     private fun isTunnelBusy() =
         controller != null || linuxTunnel != null || jobConnect?.isActive == true || jobReconnect?.isActive == true
 
@@ -226,6 +230,12 @@ internal class SstpVpnService : VpnService() {
                 cancelNotification(NOTIFICATION_ERROR_ID)
                 cancelNotification(NOTIFICATION_RECONNECT_ID)
                 beForegrounded()
+                if (updateRequired()) {
+                    // «آپدیت اجباری»: the owner stopped this version (always-on and boot starts too)
+                    notifyError(getString(R.string.brand_update_required_text))
+                    close()
+                    return START_NOT_STICKY
+                }
                 resetReconnectionLife(prefs)
                 if (getBooleanPrefValue(OscPrefKey.LOG_DO_SAVE_LOG, prefs)) {
                     prepareLogWriter()

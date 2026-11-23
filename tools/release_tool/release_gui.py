@@ -2215,6 +2215,10 @@ class MainWindow(QMainWindow, FeaturesMixin):
         self.chk_beta.setChecked(True)
         self.chk_beta.setToolTip("یوزرهای تست در ⚙ تنظیمات. بقیه همان نسخه‌ی فعلی را دارند تا «انتشار عمومی» را بزنید.")
         l3.addWidget(self.chk_beta)
+        self.chk_required = QCheckBox("⚠ آپدیت اجباری: نسخه‌های قدیمی‌تر دیگر وصل نمی‌شوند تا به‌روز کنند")
+        self.chk_required.setToolTip("برای انتشار عمومی (و «انتشار عمومی نسخه‌ی آزمایشی»). "
+                                     "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۰ به بعد).")
+        l3.addWidget(self.chk_required)
         self.beta_box = QFrame()
         bl = QVBoxLayout(self.beta_box)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -2245,6 +2249,11 @@ class MainWindow(QMainWindow, FeaturesMixin):
         self.btn_win.setToolTip("فایل «PersianVPN-Windows» از GitHub (بخش Actions ← Windows client)")
         self.btn_win.clicked.connect(self.publish_windows)
         l3.addWidget(self.btn_win)
+        self.btn_force = QPushButton("⚠  اجباری کردن نسخه‌های فعلی (بدون نسخه‌ی جدید)")
+        self.btn_force.setCursor(Qt.PointingHandCursor)
+        self.btn_force.setToolTip("هر کس نسخه‌ی قدیمی‌تر از نسخه‌ی منتشرشده‌ی فعلی دارد، تا به‌روز نکند وصل نمی‌شود")
+        self.btn_force.clicked.connect(self.require_current)
+        l3.addWidget(self.btn_force)
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setMaximumHeight(8)
@@ -2432,10 +2441,16 @@ class MainWindow(QMainWindow, FeaturesMixin):
         if testers is False:
             return
 
+        required = testers is None and self.chk_required.isChecked()
+        if required and QMessageBox.question(
+                self, "آپدیت اجباری", "با این انتشار، نسخه‌های قدیمی‌تر برنامه دیگر وصل نمی‌شوند تا به‌روز کنند.\n"
+                "ادامه می‌دهید؟") != QMessageBox.Yes:
+            return
+
         def job(log, progress):
             return pb.release(ws, build, code, name, notes, send_router=send_router,
                               github=github, public_github=public, log=log, progress=progress,
-                              testers=testers)
+                              testers=testers, required=required)
 
         def done(cfg):
             self.set_busy(False)
@@ -2550,7 +2565,8 @@ class MainWindow(QMainWindow, FeaturesMixin):
         def job(log, progress):
             return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
                                           log=log, progress=progress, win=win, win_notes=notes,
-                                          win_testers=testers)
+                                          win_testers=testers,
+                                          win_required=testers is None and self.chk_required.isChecked())
 
         def done(cfg):
             self.set_busy(False)
@@ -2565,6 +2581,42 @@ class MainWindow(QMainWindow, FeaturesMixin):
             QMessageBox.information(self, "انجام شد",
                 "نسخه‌ی ویندوز منتشر شد.\nبرنامه‌های ویندوز موقع باز شدن پیشنهاد به‌روزرسانی می‌دهند.\n\n"
                 "برای نصب اول، فایل PersianVPN.exe داخل همان zip را به کاربران بدهید.")
+            self.refresh_state()
+
+        self.log.clear()
+        self.set_busy(True)
+        run_in_thread(self, job, done, self.fail, self.say, self.on_progress)
+
+    def require_current(self):
+        try:
+            cfg = self.workspace().load_config()
+        except (pb.ReleaseError, OSError, ValueError) as e:
+            return QMessageBox.warning(self, "خطا", str(e))
+        app = (cfg.get("app_update") or {}).get("version_code")
+        win = (cfg.get("windows_update") or {}).get("version_code")
+        if not app and not win:
+            return QMessageBox.warning(self, "خطا", "هنوز نسخه‌ای منتشر نشده است.")
+        if QMessageBox.question(self, "آپدیت اجباری",
+                "از این به بعد هر کس نسخه‌ی قدیمی‌تر از این‌ها را دارد، تا برنامه را به‌روز نکند وصل نمی‌شود:\n"
+                "• اندروید: %s\n• ویندوز: %s\n\n"
+                "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۰ به بعد). ادامه؟"
+                % (fa(app) if app else "—", fa(win) if win else "—")) != QMessageBox.Yes:
+            return
+        github = public = None
+        if self.chk_github.isChecked():
+            github = pb.GitHubClient(self.settings.token, self.settings.repo)
+            if self.settings.public_repo:
+                public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
+        ws, send_router = self.workspace(), self.chk_router.isChecked()
+
+        def job(log, progress):
+            return pb.release_config_only(ws, send_router=send_router, github=github, public_github=public,
+                                          log=log, progress=progress, require_app=bool(app), win_required=bool(win))
+
+        def done(cfg):
+            self.set_busy(False)
+            self.say("✓ آپدیت اجباری شد (تنظیمات %s)." % fa(cfg["version"]))
+            QMessageBox.information(self, "انجام شد", "نسخه‌های قدیمی‌تر از این به بعد باید به‌روز شوند.")
             self.refresh_state()
 
         self.log.clear()
@@ -2601,8 +2653,11 @@ class MainWindow(QMainWindow, FeaturesMixin):
         ws, send_router = self.workspace(), self.chk_router.isChecked()
         fn = pb.promote_win_beta if windows else pb.promote_beta
 
+        required = self.chk_required.isChecked()
+
         def job(log, progress):
-            return fn(ws, send_router=send_router, github=github, public_github=public, log=log, progress=progress)
+            return fn(ws, send_router=send_router, github=github, public_github=public, log=log, progress=progress,
+                      required=required)
 
         def done(cfg):
             self.set_busy(False)

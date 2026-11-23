@@ -335,6 +335,13 @@ def update_for(cfg, username):
     return pub
 
 
+def update_required(cfg, build):
+    """«آپدیت اجباری»: the owner stopped versions below min_version_code."""
+    pub = cfg.get("windows_update") or {}
+    return build < int(pub.get("min_version_code", 0)) and int(pub.get("version_code", 0)) > build \
+        and bool(pub.get("urls"))
+
+
 def fetch_update(cfg, progress, upd=None):
     """Downloads the Windows build named in the signed config; path or None."""
     upd = upd if upd is not None else (cfg.get("windows_update") or {})
@@ -953,6 +960,10 @@ class Window(QWidget):
             self.connect_vpn()
 
     def connect_vpn(self):
+        if update_required(self.config.cfg, BUILD) and getattr(sys, "frozen", False):
+            QMessageBox.warning(self, APP_NAME, "این نسخه دیگر وصل نمی‌شود؛ برای ادامه برنامه را به‌روز کنید.")
+            self.offer_update(self.config.cfg.get("windows_update") or {}, required=True)
+            return
         if not (self.config.cfg.get("linux_servers") or self.config.cfg.get("servers")):
             QMessageBox.warning(self, APP_NAME, "سروری برای این نسخه تعریف نشده است.")
             return
@@ -1013,8 +1024,11 @@ class Window(QWidget):
             self.wanted = self.connected = False
             self.set_look("off", "قطع")
 
-    def offer_update(self, upd):
+    def offer_update(self, upd, required=False):
         beta = "🧪 نسخه‌ی آزمایشی (فقط برای تست)\n" if upd.get("testers") else ""
+        if not upd.get("testers") and update_required(self.config.cfg, BUILD):
+            required = True
+            beta = "⚠ به‌روزرسانی لازم است: این نسخه دیگر وصل نمی‌شود.\n"
         if QMessageBox.question(self, APP_NAME, "نسخه‌ی جدید برنامه آماده است (%s).\nالان به‌روز شود؟\n\n%s%s"
                                 % (upd.get("version_name", upd.get("version_code")), beta, upd.get("notes", ""))) \
                 != QMessageBox.Yes:

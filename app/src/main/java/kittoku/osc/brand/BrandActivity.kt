@@ -460,6 +460,13 @@ class BrandActivity : AppCompatActivity() {
         }
 
         val cfg = config ?: return
+        if (UpdateManager.required(cfg)) {
+            // «آپدیت اجباری»: this version may not connect any more
+            renderUpdate()
+            binding.connError.text = getString(R.string.brand_update_required_connect)
+            binding.connError.visibility = View.VISIBLE
+            return
+        }
         val server = cfg.servers.firstOrNull() ?: return
         BrandSession.applyEngineSettings(prefs, server)
         binding.connError.visibility = View.GONE
@@ -488,8 +495,13 @@ class BrandActivity : AppCompatActivity() {
         binding.updateCard.visibility = View.VISIBLE
         binding.updateTitle.text = getString(R.string.brand_update_title,
             Fa.digits(upd.versionName.ifBlank { upd.versionCode.toString() }))
-        val notes = if (UpdateManager.isBeta(upd)) getString(R.string.brand_update_beta) + "\n" + upd.notes
-                    else upd.notes
+        val required = UpdateManager.required(config) && !UpdateManager.isBeta(upd)
+        if (required) binding.updateTitle.text = getString(R.string.brand_update_required_title)
+        val notes = when {
+            UpdateManager.isBeta(upd) -> getString(R.string.brand_update_beta) + "\n" + upd.notes
+            required -> getString(R.string.brand_update_required_text) + "\n" + upd.notes
+            else -> upd.notes
+        }
         fun show(bytes: Long) {
             val size = getString(R.string.brand_update_size,
                 Fa.digits(String.format(java.util.Locale.US, "%.1f", bytes / 1_048_576.0)))

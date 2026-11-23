@@ -49,6 +49,12 @@ internal object UpdateManager {
 
     internal fun isBeta(update: AppUpdate): Boolean = update.testers.isNotEmpty()
 
+    /** The owner made an update required and this version is below it (and the update can be got). */
+    internal fun required(config: AppConfig?): Boolean {
+        val u = config?.appUpdate ?: return false
+        return currentVersionCode() < u.minVersionCode && u.versionCode > currentVersionCode() && u.urls.isNotEmpty()
+    }
+
     private fun target(context: Context): File =
         File(File(context.cacheDir, DIR).apply { mkdirs() }, FILE)
 
