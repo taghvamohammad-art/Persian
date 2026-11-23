@@ -408,7 +408,45 @@ QDialog, QMessageBox, QInputDialog { background: #0B2F45; }
 QMessageBox QLabel { color: #FFFFFF; min-width: 260px; }
 QMessageBox QPushButton { min-width: 80px; }
 #Link { background: transparent; border: none; color: #2EE6C5; padding: 2px 6px; }
+QListWidget::item { padding: 6px; }
+QListWidget::item:selected { background: rgba(46,230,197,0.25); color: #FFFFFF; }
+QCheckBox::indicator { width: 18px; height: 18px; }
+QHeaderView { background: #0E3A52; border: none; }
+QHeaderView::section { background: #0E3A52; color: #E6F4F1; border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.16); padding: 6px; font-weight: bold; }
+QTableCornerButton::section { background: #0E3A52; border: none; }
+QScrollBar:horizontal, QScrollBar:vertical { background: transparent; border: none; margin: 0; }
+QScrollBar:horizontal { height: 10px; }
+QScrollBar:vertical { width: 10px; }
+QScrollBar::handle { background: rgba(255,255,255,0.28); border-radius: 5px; min-width: 30px; min-height: 30px; }
+QScrollBar::handle:hover { background: rgba(46,230,197,0.6); }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+QMenu { background: #0E3A52; border: 1px solid rgba(255,255,255,0.18); padding: 4px; }
+QMenu::item { padding: 6px 18px; border-radius: 6px; }
+QMenu::item:selected { background: #00A58E; }
+QToolTip { background: #12324A; color: #FFFFFF; border: 1px solid rgba(255,255,255,0.2); }
 """
+
+
+def dark_palette(app):
+    """Fusion with a dark palette: Windows' own style (light mode) painted table
+    headers, scroll bars, menus and some dialogs white under our white text."""
+    from PySide6.QtGui import QColor, QPalette
+    app.setStyle("Fusion")
+    p = QPalette()
+    for role, color in ((QPalette.Window, "#0B2F45"), (QPalette.WindowText, "#FFFFFF"),
+                        (QPalette.Base, "#0E3A52"), (QPalette.AlternateBase, "#12445F"),
+                        (QPalette.Text, "#FFFFFF"), (QPalette.Button, "#12445F"),
+                        (QPalette.ButtonText, "#FFFFFF"), (QPalette.ToolTipBase, "#12324A"),
+                        (QPalette.ToolTipText, "#FFFFFF"), (QPalette.Highlight, "#00A58E"),
+                        (QPalette.HighlightedText, "#FFFFFF"), (QPalette.PlaceholderText, "#8FB3C4"),
+                        (QPalette.Link, "#2EE6C5")):
+        p.setColor(role, QColor(color))
+    p.setColor(QPalette.Disabled, QPalette.Text, QColor("#7F9BAA"))
+    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#7F9BAA"))
+    p.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#7F9BAA"))
+    app.setPalette(p)
 
 
 # ---------------------------------------------------------------- programs outside the VPN
@@ -1070,6 +1108,7 @@ def main():
         except OSError:
             pass
     app = QApplication(sys.argv)
+    dark_palette(app)
     app.setStyleSheet(STYLE)
     icon = os.path.join(HERE, "icon-512.png")
     if os.path.isfile(icon):
@@ -1086,6 +1125,14 @@ def main():
         assert w.l_profile.text() == "30G-1M" and "بعدی" in w.l_account.text()
         d = BypassDialog(w, ["firefox.exe"])
         assert d.chosen() == ["firefox.exe"], d.chosen()
+        shots = os.environ.get("PV_SHOTS")    # CI: pictures to look at the colours
+        if shots:
+            os.makedirs(shots, exist_ok=True)
+            app.processEvents()
+            w.grab().save(os.path.join(shots, "client-main.png"))
+            d.show()
+            app.processEvents()
+            d.grab().save(os.path.join(shots, "client-bypass.png"))
         print("smoke ok, config version", w.config.cfg.get("version"))
         sys.exit(0)
     sys.exit(app.exec())

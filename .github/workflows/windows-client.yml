@@ -93,7 +93,13 @@ jobs:
       - name: GUI smoke test (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
+          PV_SHOTS: shots
         run: python windows/pvclient.py --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-client
+          path: shots
+          if-no-files-found: warn
       - name: Build exe
         run: >
           pyinstaller --noconfirm --onefile --windowed

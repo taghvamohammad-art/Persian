@@ -164,7 +164,13 @@ jobs:
       - name: GUI smoke test (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
+          PV_SHOTS: shots
         run: python tools/release_tool/release_gui.py --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-tool
+          path: shots
+          if-no-files-found: warn
 
       - name: Build exe
         shell: pwsh

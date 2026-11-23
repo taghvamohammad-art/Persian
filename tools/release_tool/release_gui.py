@@ -108,9 +108,21 @@ QTableWidget {
     background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.16); border-radius: 12px;
     gridline-color: rgba(255,255,255,0.08); selection-background-color: rgba(46,230,197,0.25);
 }
-QHeaderView::section {
-    background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); border: none; padding: 6px;
-}
+QHeaderView { background: #0E3A52; border: none; }
+QHeaderView::section { background: #0E3A52; color: #E6F4F1; border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.16); padding: 6px; font-weight: bold; }
+QTableCornerButton::section { background: #0E3A52; border: none; }
+QScrollBar:horizontal, QScrollBar:vertical { background: transparent; border: none; margin: 0; }
+QScrollBar:horizontal { height: 10px; }
+QScrollBar:vertical { width: 10px; }
+QScrollBar::handle { background: rgba(255,255,255,0.28); border-radius: 5px; min-width: 30px; min-height: 30px; }
+QScrollBar::handle:hover { background: rgba(46,230,197,0.6); }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+QMenu { background: #0E3A52; border: 1px solid rgba(255,255,255,0.18); padding: 4px; }
+QMenu::item { padding: 6px 18px; border-radius: 6px; }
+QMenu::item:selected { background: #00A58E; }
+QToolTip { background: #12324A; color: #FFFFFF; border: 1px solid rgba(255,255,255,0.2); }
 QTabWidget::pane { border: none; }
 QTabBar::tab {
     background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.75);
@@ -133,6 +145,26 @@ QComboBox QAbstractItemView { background: #12324A; selection-background-color: #
         border-radius: 12px; padding: 8px 12px; }
 QMessageBox { background: #12324A; }
 """
+
+
+def dark_palette(app):
+    """Fusion with a dark palette: Windows' own style (light mode) painted table
+    headers, scroll bars, menus and some dialogs white under our white text."""
+    from PySide6.QtGui import QColor, QPalette
+    app.setStyle("Fusion")
+    p = QPalette()
+    for role, color in ((QPalette.Window, "#0B2F45"), (QPalette.WindowText, "#FFFFFF"),
+                        (QPalette.Base, "#0E3A52"), (QPalette.AlternateBase, "#12445F"),
+                        (QPalette.Text, "#FFFFFF"), (QPalette.Button, "#12445F"),
+                        (QPalette.ButtonText, "#FFFFFF"), (QPalette.ToolTipBase, "#12324A"),
+                        (QPalette.ToolTipText, "#FFFFFF"), (QPalette.Highlight, "#00A58E"),
+                        (QPalette.HighlightedText, "#FFFFFF"), (QPalette.PlaceholderText, "#8FB3C4"),
+                        (QPalette.Link, "#2EE6C5")):
+        p.setColor(role, QColor(color))
+    p.setColor(QPalette.Disabled, QPalette.Text, QColor("#7F9BAA"))
+    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#7F9BAA"))
+    p.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#7F9BAA"))
+    app.setPalette(p)
 
 
 # ------------------------------------------------------------------ background work
@@ -2725,6 +2757,7 @@ def make_app(argv):
     f = QFont("Segoe UI", 10)
     f.setFamilies(["Vazirmatn", "Segoe UI", "Tahoma"])
     app.setFont(f)
+    dark_palette(app)
     app.setStyleSheet(STYLE)
     return app
 
@@ -2738,9 +2771,27 @@ def smoke():
     SettingsDialog(w, w.settings)  # dialogs build too
     RouterDialog(w, {"id": "r1"})
     BotSettingsDialog(w, {})
+    shots = os.environ.get("PV_SHOTS")        # CI: pictures of every tab, to look at the colours
+    if shots:
+        os.makedirs(shots, exist_ok=True)
+        w.resize(760, 860)
+        t = w.monitor.table
+        t.setRowCount(2)
+        for r, row in enumerate([["91.207.18.201", "میکروتیک اصلی", "روشن", "58%", "61%", "3d05:08:00", "55", ""],
+                                 ["ubu 2", "لینوکس", "روشن", "15%", "43%", "0d3h55m", "25", "WG: 24  SS: 1"]]):
+            for c, v in enumerate(row[:t.columnCount()]):
+                t.setItem(r, c, QTableWidgetItem(v))
     for i in range(w.tabs.count()):
         w.tabs.setCurrentIndex(i)
         app.processEvents()
+        if shots:
+            w.grab().save(os.path.join(shots, "tool-tab%d.png" % i))
+    if shots:
+        d = SettingsDialog(w, w.settings)
+        d.show()
+        app.processEvents()
+        d.grab().save(os.path.join(shots, "tool-settings.png"))
+        d.close()
     w.tabs.setCurrentIndex(1)
     app.processEvents()
     # callbacks of background work must run in the GUI thread
