@@ -2217,7 +2217,7 @@ class MainWindow(QMainWindow, FeaturesMixin):
         l3.addWidget(self.chk_beta)
         self.chk_required = QCheckBox("⚠ آپدیت اجباری: نسخه‌های قدیمی‌تر دیگر وصل نمی‌شوند تا به‌روز کنند")
         self.chk_required.setToolTip("برای انتشار عمومی (و «انتشار عمومی نسخه‌ی آزمایشی»). "
-                                     "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۰ به بعد).")
+                                     "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۲ و ویندوز ۲۴ به بعد).")
         l3.addWidget(self.chk_required)
         self.beta_box = QFrame()
         bl = QVBoxLayout(self.beta_box)
@@ -2599,7 +2599,7 @@ class MainWindow(QMainWindow, FeaturesMixin):
         if QMessageBox.question(self, "آپدیت اجباری",
                 "از این به بعد هر کس نسخه‌ی قدیمی‌تر از این‌ها را دارد، تا برنامه را به‌روز نکند وصل نمی‌شود:\n"
                 "• اندروید: %s\n• ویندوز: %s\n\n"
-                "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۰ به بعد). ادامه؟"
+                "فقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند (اندروید ۱۴۲ و ویندوز ۲۴ به بعد). ادامه؟"
                 % (fa(app) if app else "—", fa(win) if win else "—")) != QMessageBox.Yes:
             return
         github = public = None

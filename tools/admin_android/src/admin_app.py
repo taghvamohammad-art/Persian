@@ -1013,7 +1013,7 @@ class PublishPage:
         if not await self.app.ask("آپدیت اجباری",
                 "از این به بعد هر کس نسخه‌ی قدیمی‌تر از این‌ها را دارد، تا برنامه را به‌روز نکند وصل نمی‌شود:\n"
                 "• اندروید: %s\n• ویندوز: %s\n\nفقط روی نسخه‌هایی اثر دارد که این امکان را می‌شناسند "
-                "(اندروید ۱۴۰ به بعد). ادامه؟" % (fa(app) if app else "—", fa(win) if win else "—")):
+                "(اندروید ۱۴۲ و ویندوز ۲۴ به بعد). ادامه؟" % (fa(app) if app else "—", fa(win) if win else "—")):
             return
         github, public = self.app.github_clients(self.chk_github.value)
         send_router = self.chk_router.value
