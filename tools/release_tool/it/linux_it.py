@@ -86,7 +86,12 @@ def client_config(entry, user, password):
     return {"log": {"loglevel": "warning"}, "inbounds": ins, "outbounds": outs, "routing": {"rules": rules}}
 
 
-def run_clients(entry, user, password, expect_ok=True, only=None):
+# what a real user moves: enough for pv-agent to open a User Manager session
+# (it skips probe-sized traffic, MIN_START)
+BULK = "https://speed.cloudflare.com/__down?bytes=400000"
+
+
+def run_clients(entry, user, password, expect_ok=True, only=None, bulk=False):
     cfg = client_config(entry, user, password)
     path = tempfile.mktemp(suffix=".json")
     with open(path, "w") as f:
@@ -102,6 +107,9 @@ def run_clients(entry, user, password, expect_ok=True, only=None):
             code = sh("curl -s -o /dev/null -w '%%{http_code}' --max-time 15 -x socks5h://127.0.0.1:%d "
                       "https://www.google.com/generate_204" % (1081 + i), check=False).strip()
             results[o["tag"]] = code
+            if bulk and code == "204":
+                sh("curl -s -o /dev/null --max-time 30 -x socks5h://127.0.0.1:%d '%s'" % (1081 + i, BULK),
+                   check=False)
     finally:
         p.terminate()
         out = p.communicate(timeout=10)[0].decode(errors="replace")
@@ -148,7 +156,7 @@ def main():
     print(agent_log())
 
     step("clients with the right password")
-    res = run_clients(entry, USER, PASS)
+    res = run_clients(entry, USER, PASS, bulk=True)
     problems += ["%s with right password: %s" % kv for kv in res.items() if kv[1] != "204"]
 
     step("Xray update on a running server (already the latest: nothing changes)")
@@ -279,7 +287,7 @@ def main():
     m.sendall(b"quit\n")
     time.sleep(40)
     print(agent_log(30))
-    res = run_clients(entry, USER2, PASS2, only=["vision"])
+    res = run_clients(entry, USER2, PASS2, only=["vision"], bulk=True)
     if res.get("vision") != "204":
         problems.append("user from UM2 not let in after UM1 died")
     time.sleep(45)
