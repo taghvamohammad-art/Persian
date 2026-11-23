@@ -200,7 +200,7 @@ class AgentTests(unittest.TestCase):
     def make(self, radius_users):
         srv = FakeRadius(users=radius_users)
         tmp = tempfile.mkdtemp()
-        cfg = {"routers": [], "state": os.path.join(tmp, "state.json"),
+        cfg = {"routers": [], "state": os.path.join(tmp, "state.json"), "min_start": 0,
                "radius": {"servers": [{"host": "127.0.0.1", "secret": "s3cret", "auth_port": srv.port,
                                        "acct_port": srv.port}], "nas_ip": "10.0.0.5"}}
         agent = pa.Agent(cfg)
@@ -287,6 +287,23 @@ class AgentTests(unittest.TestCase):
         agent.state["seen"] = {"25g00001|hy2": 990}
         st = agent.write_status(1000)
         self.assertEqual(st["by_protocol"], {"hy2": 1})
+
+    def test_probe_traffic_opens_no_user_manager_session(self):
+        """The app tries every protocol of every server when connecting: a few KB
+        each. Those must not take the user's shared-users slot in User Manager."""
+        agent, srv = self.make({"25g00001": "abc123"})
+        agent.cfg["min_start"] = pa.MIN_START
+        pa.fetch_users = lambda routers: ({"25g00001": "abc123"}, "um1")
+        agent.sync_users()
+        agent.account({"25g00001|hy2": [3000, 5000]}, now=1000)          # a probe
+        self.assertEqual(srv.accounting, [])
+        self.assertEqual(agent.state["sessions"], {})
+        agent.account({}, now=1000 + pa.IDLE_STOP + 1)                   # and nothing after it
+        self.assertEqual(agent.state["pending"], {})
+        agent.account({"25g00001|ss": [40000, 30000]}, now=2000)         # real use builds up
+        agent.account({"25g00001|ss": [20000, 30000]}, now=2060)
+        kinds = [(k, i, o) for u, k, s, i, o in srv.accounting]
+        self.assertEqual(kinds, [(pa.START, 60000, 60000), (pa.INTERIM, 60000, 60000)])   # nothing lost
 
     def test_rejected_user_is_removed(self):
         agent, srv = self.make({})                         # User Manager says no (e.g. volume used up)

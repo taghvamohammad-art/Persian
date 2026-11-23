@@ -123,7 +123,11 @@ func plan(all []choice, noAwg bool) [][]choice {
 				awg = &all[i]
 			}
 		default:
-			pool = append(pool, c)
+			// one server at a time: traffic over two servers opens two User
+			// Manager sessions, and a one-user account is refused on the second
+			if len(pool) == 0 || string(pool[0].server) == string(c.server) {
+				pool = append(pool, c)
+			}
 		}
 	}
 	var out [][]choice

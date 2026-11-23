@@ -114,7 +114,10 @@ internal class LinuxTunnel(
      * else works; the DNS tunnel only as the last resort.
      */
     private fun plan(all: List<Choice>): List<Choice> {
-        val members = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
+        val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
+        // one server at a time: traffic spread over two servers would open two
+        // User Manager sessions, and a one-user account is refused on the second
+        val members = xray.firstOrNull()?.let { best -> xray.filter { it.server == best.server } }.orEmpty()
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }

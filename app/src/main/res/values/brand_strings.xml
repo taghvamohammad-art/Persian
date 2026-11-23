@@ -43,7 +43,7 @@
     <string name="brand_err_fill">نام کاربری و رمز عبور را وارد کنید.</string>
     <string name="brand_login_offline">اعتبار حساب بررسی نشد (سرور در دسترس نبود)، ولی می‌توانید اتصال را امتحان کنید.</string>
 
-    <string name="brand_vpn_err_auth">اتصال رد شد: رمز اشتباه است، یا اشتراک تمام شده است.</string>
+    <string name="brand_vpn_err_auth">اتصال رد شد: رمز اشتباه است، اشتراک تمام شده، یا با همین حساب جای دیگری وصل هستید.</string>
     <string name="brand_vpn_err_cert">هویت سرور تأیید نشد و اتصال برای امنیت شما برقرار نشد.</string>
     <string name="brand_vpn_err_lost">ارتباط با سرور قطع شد. دوباره «اتصال» را بزنید.</string>
     <string name="brand_vpn_err_timeout">سرور پاسخ نداد. اینترنت خود را بررسی کنید یا کمی بعد دوباره امتحان کنید.</string>

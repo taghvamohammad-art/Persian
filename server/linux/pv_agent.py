@@ -58,7 +58,11 @@ ACCESS_LOG = "/var/log/xray/access.log"
 STATUS_FILE = "/var/lib/pv-agent/status.json"
 ONLINE_WINDOW = 180      # a user seen in the last 3 minutes counts as connected
 IDLE_STOP = 300          # seconds without traffic before the accounting session is closed
-BLOCK_RETRY = 600        # a user User Manager rejected is asked again after this long
+MIN_START = 100 * 1024   # bytes before a User Manager session is opened: the app's probes of
+                         # every protocol and server are a few KB and must not take a
+                         # shared-users slot (a 1-user account would be refused elsewhere)
+BLOCK_RETRY = 120        # a user User Manager rejected is asked again after this long
+                         # (often only a session elsewhere still closing: retry soon)
 XRAY_RESTART_GAP = 120   # at most one fallback restart of Xray per this many seconds
 
 
@@ -556,11 +560,22 @@ class Agent:
         now = now or time.time()
         sessions = self.state.setdefault("sessions", {})
         names = {n.lower(): n for n in self.users}
+        pending = self.state.setdefault("pending", {})   # key -> [in, out, last]: below MIN_START
+        for key in [k for k, p in pending.items() if now - p[2] > IDLE_STOP]:
+            del pending[key]                                # a probe and nothing after it
         for key, (up, down) in traffic.items():
             user, _, proto = key.partition("|")
             name = names.get(user, user)
             s = sessions.get(key)
             if s is None:
+                p = pending.setdefault(key, [0, 0, now])
+                p[0] += up
+                p[1] += down
+                p[2] = now
+                if p[0] + p[1] < self.cfg.get("min_start", MIN_START):
+                    continue
+                up, down = p[0], p[1]
+                del pending[key]
                 password = self.users.get(name)
                 # one Access-Request per user: a second protocol of a user already
                 # in must not be turned away by User Manager's shared-users limit
