@@ -282,6 +282,12 @@ def main():
             problems.append("awg peer missing")
         else:
             problems += awg_client_test(entry)
+            step("user check from the server (the tool's «عیب‌یابی یک کاربر»)")
+            with connect_linux() as h:
+                lines = linux.user_check(h, params, USER, "", seconds=3, log=print)
+            print("\n".join(lines))
+            if not any(l.startswith("✓ peer") for l in lines):
+                problems.append("user_check: the user's AmneziaWG peer not found")
             step("backup tunnel: RouterOS WireGuard -> relay -> AmneziaWG")
             problems += backup_tunnel_test(params, connect_linux, ip)
     else:

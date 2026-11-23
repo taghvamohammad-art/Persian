@@ -522,6 +522,76 @@ def update_agent(h, log=print):
     log("pv-agent به‌روز شد ✓")
 
 
+def user_check(h, p, username, client_ip="", seconds=25, log=print):
+    """Why one user cannot connect, seen from the server (lines of text):
+    their AmneziaWG peer (present, last handshake, the address it came from,
+    bytes), whether pv-agent lets them in, and - while they press connect on
+    the phone - whether their packets reach the server at all (tcpdump on the
+    AmneziaWG and Hysteria2 ports, from the phone's own IP when given: the
+    test screen shows it in ①). Packets that never arrive mean the network
+    drops them; packets that arrive without a handshake mean a mismatch."""
+    import ipaddress
+    out = []
+    user = username.strip().lower()
+    # as pvcreds.awg_address (that file is not a module in the packaged tool)
+    net = ipaddress.ip_network("10.64.0.0/10")
+    h_ = int.from_bytes(hashlib.sha256(b"pv-awg-ip\n" + user.encode()).digest()[:4], "big")
+    addr = str(net.network_address + 2 + h_ % (net.num_addresses - 3))
+    awg = p.get("awg") or {}
+    port = int(awg.get("port") or 0)
+    out.append("کاربر %s — آدرس AmneziaWG او: %s" % (user, addr))
+    dump = h.run("awg show awg0 dump 2>/dev/null || true")
+    lines = [l.split("\t") for l in dump.splitlines()[1:]]
+    peer = next((l for l in lines if len(l) >= 8 and addr + "/32" in l[3].split(",")), None)
+    if peer is None:
+        out.append("✗ روی سرور peer این کاربر نیست (pv-agent او را اضافه نکرده: یوزر منیجر ردش کرده یا "
+                   "در لیست کاربران نیست)")
+    else:
+        hs = int(peer[4] or 0)
+        out.append("✓ peer هست — آخرین handshake: %s، از %s، دریافت %s، ارسال %s" % (
+            "%d ثانیه پیش" % (time.time() - hs) if hs else "هرگز",
+            peer[2] if peer[2] != "(none)" else "—", peer[5], peer[6]))
+    out.append("  کل peerهای AmneziaWG: %d، با handshake در ۳ دقیقه‌ی اخیر: %d" % (
+        len(lines), sum(1 for l in lines if len(l) >= 5 and l[4].isdigit() and int(l[4])
+                        and time.time() - int(l[4]) < 180)))
+    st = h.run("cat /var/lib/pv-agent/state.json 2>/dev/null || echo {}")
+    try:
+        state = json.loads(st or "{}")
+    except ValueError:
+        state = {}
+    if user in (state.get("blocked") or {}):
+        out.append("✗ pv-agent این کاربر را موقتاً کنار گذاشته (یوزر منیجر اتصالش را رد کرد)")
+    seen = [k.split("|", 1)[1] for k in (state.get("seen") or {}) if k.split("|", 1)[0] == user]
+    out.append("  دیده‌شده در ۳ دقیقه‌ی اخیر روی: %s" % ("، ".join(seen) or "هیچ پروتکلی"))
+    ports = [x for x in (port, int(p.get("hy2_port") or 0)) if x]
+    if ports and seconds:
+        if not h.run("command -v tcpdump || true").strip():
+            log("نصب tcpdump…")
+            h.run("DEBIAN_FRONTEND=noninteractive apt-get install -y -q tcpdump >/dev/null 2>&1 || true",
+                  timeout=300, check=False)
+        flt = "udp and (%s)" % " or ".join("port %d" % x for x in ports)
+        if client_ip.strip():
+            flt += " and host %s" % client_ip.strip()
+        log("گوش دادن %d ثانیه: حالا روی گوشی VPN را قطع و وصل کنید…" % seconds)
+        cap = h.run("timeout %d tcpdump -n -l -i any -c 400 '%s' 2>/dev/null || true" % (seconds, flt),
+                    timeout=seconds + 30, check=False)
+        pk = [l for l in cap.splitlines() if " IP " in l or " IP6 " in l]
+        by = {}
+        for l in pk:
+            src = l.split(" IP ")[-1].split(" > ")[0] if " IP " in l else "?"
+            by[src.rsplit(".", 1)[0]] = by.get(src.rsplit(".", 1)[0], 0) + 1
+        if not pk:
+            out.append("✗ در %d ثانیه هیچ بسته‌ی UDP %sبه پورت‌های %s نرسید: شبکه‌ی گوشی آن را می‌اندازد"
+                       % (seconds, ("از %s " % client_ip.strip()) if client_ip.strip() else "",
+                          "، ".join(map(str, ports))))
+        else:
+            out.append("✓ %d بسته‌ی UDP رسید/رفت (پورت‌های %s): %s" % (
+                len(pk), "، ".join(map(str, ports)),
+                "، ".join("%s ×%d" % kv for kv in sorted(by.items(), key=lambda x: -x[1])[:6])))
+            out += ["    " + l[:160] for l in pk[:8]]
+    return out
+
+
 def refresh_xray_config(h, p, log=print):
     """A running server gets this tool's current Xray settings (new options,
     e.g. Salamander on Hysteria2), keeping its keys, ports and users. The new

@@ -1207,6 +1207,7 @@ class ServicesPage(RouterPage):
         r6.addWidget(self.button("به‌روزرسانی Xray همه‌ی سرورها", self.update_xrays))
         l6.addLayout(r6)
         l6.addWidget(self.button("تنظیمات تازه‌ی Xray روی سرورها و انتشار برای اپ", self.refresh_servers))
+        l6.addWidget(self.button("🔍 عیب‌یابی یک کاربر (از دید سرور)", self.user_check))
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1427,6 +1428,33 @@ class ServicesPage(RouterPage):
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
         self.run(job, done)
+
+    def user_check(self):
+        from PySide6.QtWidgets import QInputDialog
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+        user, ok = QInputDialog.getText(self, "عیب‌یابی یک کاربر", "نام کاربری:")
+        if not ok or not user.strip():
+            return
+        ip, ok = QInputDialog.getText(self, "عیب‌یابی یک کاربر",
+                                      "IP گوشی او (اختیاری، از بخش ① صفحه‌ی تست):")
+        if not ok:
+            return
+        QMessageBox.information(self, "عیب‌یابی یک کاربر",
+                                "بعد از «OK»، ۲۵ ثانیه وقت دارید: روی گوشی آن کاربر VPN را قطع و دوباره وصل کنید.")
+
+        def job(log, progress):
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                p = st.decrypt_blob(r.get("params")) or {}
+                try:
+                    with linux_connector(r)() as h:
+                        for line in linux.user_check(h, p, user, ip, log=log):
+                            log(line)
+                except Exception as e:   # noqa: BLE001
+                    log("✗ %s" % e)
+        self.run(job, lambda _: None)
 
     def refresh_servers(self):
         servers = [r for r in self.settings.routers if r.get("role") == "linux" and r.get("params")]

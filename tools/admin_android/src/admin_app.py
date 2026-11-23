@@ -1377,7 +1377,8 @@ class ServicesPage:
                       "یوزرهای پروتکل‌های Xray چند ثانیه قطع و خودکار وصل می‌شوند."),
                  button_row(b("به‌روزرسانی pv-agent همه", self.update_agents, icon=ft.Icons.SYNC),
                             b("به‌روزرسانی Xray همه", self.update_xrays, icon=ft.Icons.DOWNLOAD)),
-                 button_row(b("تنظیمات تازه‌ی Xray و اپ", self.refresh_servers, icon=ft.Icons.TUNE)),
+                 button_row(b("تنظیمات تازه‌ی Xray و اپ", self.refresh_servers, icon=ft.Icons.TUNE),
+                            b("عیب‌یابی یک کاربر", self.user_check, icon=ft.Icons.SEARCH)),
                  icon=ft.Icons.DNS),
             card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
@@ -1448,6 +1449,30 @@ class ServicesPage:
         await self.app.info("انجام شد" if not bad else "ناقص",
                             "pv-agent همه‌ی سرورها به‌روز شد." if not bad
                             else "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
+
+    async def user_check(self):
+        servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return await self.app.info("خطا", "سرور لینوکسی تعریف نشده است.")
+        res = await self.app.form("عیب‌یابی یک کاربر", [
+            ("user", "نام کاربری", "", "ltr"),
+            ("ip", "IP گوشی او (اختیاری، از بخش ① صفحه‌ی تست)", "", "ltr")],
+            note="بعد از شروع، ۲۵ ثانیه وقت دارید: روی گوشی آن کاربر VPN را قطع و دوباره وصل کنید تا "
+                 "معلوم شود بسته‌هایش اصلاً به سرور می‌رسند یا نه.", ok="شروع")
+        if not res or not (res.get("user") or "").strip():
+            return
+
+        def job(log, progress):
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                p = st.decrypt_blob(r.get("params")) or {}
+                try:
+                    with linux_connector(r)() as h:
+                        for line in linux.user_check(h, p, res["user"], res.get("ip") or "", log=log):
+                            log(line)
+                except Exception as e:   # noqa: BLE001
+                    log("✗ %s" % e)
+        await self.app.run(self.panel, job)
 
     async def refresh_servers(self):
         servers = [r for r in self.app.settings.routers if r.get("role") == "linux" and r.get("params")]
