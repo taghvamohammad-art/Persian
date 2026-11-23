@@ -230,6 +230,7 @@ internal class SstpVpnService : VpnService() {
                 if (getBooleanPrefValue(OscPrefKey.LOG_DO_SAVE_LOG, prefs)) {
                     prepareLogWriter()
                 }
+                if (logWriter == null) logWriter = kittoku.osc.control.LogWriter(null)   // memory only
 
                 logWriter?.write("Establish VPN connection")
 

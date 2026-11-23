@@ -135,6 +135,13 @@ class BrandActivity : AppCompatActivity() {
         binding.shareButton.setOnClickListener {
             startActivity(Intent(this, ShareActivity::class.java))
         }
+        // «تست و عیب‌یابی» for the owner: a long press on the status or the account name
+        val openDiag = View.OnLongClickListener {
+            startActivity(Intent(this, DiagnosticsActivity::class.java))
+            true
+        }
+        binding.connState.setOnLongClickListener(openDiag)
+        binding.accountName.setOnLongClickListener(openDiag)
         binding.shieldButton.setOnClickListener {
             startActivity(Intent(this, ExcludedAppsActivity::class.java)
                 .putExtra(ExcludedAppsActivity.EXTRA_SHIELD, true))

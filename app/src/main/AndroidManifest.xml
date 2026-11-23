@@ -86,6 +86,10 @@
             android:theme="@style/Theme.Brand"
             android:name=".brand.ShareActivity" />
 
+        <activity
+            android:theme="@style/Theme.Brand"
+            android:name=".brand.DiagnosticsActivity" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.updates"

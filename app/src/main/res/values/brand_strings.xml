@@ -139,4 +139,11 @@
     <string name="brand_shield_notif_title">🛡 سپر VPN فعال است</string>
     <string name="brand_shield_notif_text">%1$s برنامه تا وصل شدن VPN اینترنت ندارند</string>
     <string name="brand_shield_always_on">برای محکم‌تر شدن: این‌جا را بزنید و در تنظیمات VPN گوشی، «VPN همیشه روشن» را برای این برنامه روشن کنید (گزینه‌ی «مسدود کردن اتصال‌های بدون VPN» را روشن نکنید، چون همه‌ی برنامه‌ها را می‌بندد).</string>
+    <!-- test and troubleshooting (long press on the status) -->
+    <string name="brand_diag_title">تست و عیب‌یابی</string>
+    <string name="brand_diag_hint">هر بخش جدا تست می‌شود تا معلوم شود اشکال از اینترنت گوشی است، از پروتکل، از DNS یا از برنامه‌ها. گزارش را می‌توانید کپی کنید و برای پشتیبانی بفرستید.</string>
+    <string name="brand_diag_run">تست دوباره</string>
+    <string name="brand_diag_copy">کپی</string>
+    <string name="brand_diag_share">ارسال</string>
+    <string name="brand_diag_copied">گزارش کپی شد</string>
 </resources>

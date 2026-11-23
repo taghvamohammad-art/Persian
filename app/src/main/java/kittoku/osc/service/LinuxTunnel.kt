@@ -247,6 +247,7 @@ internal class LinuxTunnel(
                 if (BrandSession.shareEnabled(prefs)) BrandSession.updateShareNets(service)
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
                 failures = if (ms < 0) failures + 1 else 0
+                if (ms < 0) service.logWriter?.report("check $current failed ($failures)")
                 if (failures >= CHECK_FAILURES) {
                     failover("check failed")
                     return@launch
