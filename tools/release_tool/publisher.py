@@ -679,7 +679,9 @@ class RouterClient:
             resp = conn.getresponse()
             data = json.loads(resp.read() or b"{}")
         except (OSError, socket.timeout, ValueError) as e:
-            raise ReleaseError("ارسال به روتر قطع شد: %s" % e)
+            ex = ReleaseError("ارسال به روتر قطع شد: %s" % e)
+            ex.code = "cut"
+            raise ex
         finally:
             conn.close()
         if resp.status != 200:
@@ -693,16 +695,29 @@ class RouterClient:
     def publish(self, envelope, apk, progress=None, need=None):
         # ask first (signature, version, router set up) so a rejection is
         # reported clearly instead of cutting a half-sent upload
-        probe = self._probe(envelope)
-        if need and need not in (probe.get("features") or []):
-            ex = ReleaseError(ROUTER_ERRORS["old_umstatus"])
-            ex.code = "old_umstatus"
-            raise ex
-        if getattr(apk, "parts", None) and "partial" in (probe.get("features") or []):
-            # only what the router does not hold yet: less upload, less disk on the router
-            have = set(probe.get("have") or [])
-            apk = b"".join(p for p in apk.parts if hashlib.sha256(p).hexdigest() not in have)
-        return self._call(envelope, apk, dry_run=False, progress=progress)
+        for attempt in range(self.CUT_TRIES):
+            probe = self._probe(envelope)
+            if need and need not in (probe.get("features") or []):
+                ex = ReleaseError(ROUTER_ERRORS["old_umstatus"])
+                ex.code = "old_umstatus"
+                raise ex
+            body = apk
+            if getattr(apk, "parts", None) and "partial" in (probe.get("features") or []):
+                # only what the router does not hold yet: less upload, less disk on the router
+                have = set(probe.get("have") or [])
+                body = b"".join(p for p in apk.parts if hashlib.sha256(p).hexdigest() not in have)
+            try:
+                return self._call(envelope, body, dry_run=False, progress=progress)
+            except ReleaseError as e:
+                # a dropped connection (the line, a VPN on this computer...): the
+                # router accepts nothing half-sent, so sending again is safe
+                if getattr(e, "code", None) != "cut" or attempt == self.CUT_TRIES - 1:
+                    raise
+                if self.log:
+                    self.log("⚠ %s؛ دوباره (%d از %d)…" % (e, attempt + 2, self.CUT_TRIES))
+                time.sleep(5)
+
+    CUT_TRIES = 3
 
     BUSY_WAIT = 10
     BUSY_TRIES = 12

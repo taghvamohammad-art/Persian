@@ -383,6 +383,30 @@ class ReleaseFlow(unittest.TestCase):
         pb.release_config_only(self.ws, log=q)
         self.assertEqual(self.served()["app_update"]["version_code"], 17)
 
+    def test_cut_upload_sent_again(self):
+        q, lines = (lambda *_: None), []
+        real = pb.RouterClient._call
+        cuts = []
+
+        def flaky(self_, envelope, body, dry_run, progress=None):
+            if not dry_run and not cuts:
+                cuts.append(1)
+                ex = pb.ReleaseError("ارسال به روتر قطع شد: EOF occurred in violation of protocol")
+                ex.code = "cut"
+                raise ex
+            return real(self_, envelope, body, dry_run, progress)
+        pb.RouterClient._call = flaky
+        old_sleep = pb.time.sleep
+        pb.time.sleep = lambda s: None
+        try:
+            pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=lines.append)
+        finally:
+            pb.RouterClient._call = real
+            pb.time.sleep = old_sleep
+        self.assertEqual(cuts, [1])
+        self.assertTrue(any("دوباره (2 از 3)" in l for l in lines))
+        self.assertEqual(self.served()["app_update"]["version_code"], 16)
+
     def test_pin_mismatch_refuses_to_send(self):
         conf = self.ws.load_config()
         conf["status_pins"] = ["00" * 32]
