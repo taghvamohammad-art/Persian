@@ -159,7 +159,9 @@ def make_patches(ws, build, log=print, only_current=False):
     previous test build (what testers have; spares the router's disk)."""
     import apkdelta
     out = {}
-    history = apk_history(ws)
+    # the version users have now comes first: it was last in the list and, with
+    # APK_HISTORY older ones kept, never got a patch (1.0.139 -> 146 was full size)
+    history = sorted(apk_history(ws), key=lambda h: (h[0] != -1, -h[0]))
     if only_current:
         history = [h for h in history if h[0] == -1]
         if os.path.isfile(ws.path(BETA_APK)):

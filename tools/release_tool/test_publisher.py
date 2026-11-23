@@ -281,6 +281,21 @@ class ReleaseFlow(unittest.TestCase):
         froms = {p["from_sha256"] for p in self.served()["app_update_beta"]["patches"]}
         self.assertIn(hashlib.sha256(first).hexdigest(), froms)       # testers on the last test build
 
+    def test_patch_from_the_version_users_have_now(self):
+        """With APK_HISTORY older versions kept, the current public one was
+        skipped and its users downloaded the whole app (139 -> 146)."""
+        q = lambda *_: None
+        apks = {}
+        for v in range(20, 20 + pb.APK_HISTORY + 2):
+            apks[v] = apkdelta_apk(b"v%d" % v)
+            pb.release(self.ws, pb.Build(apks[v], v, "b"), v, "", "", log=q)
+        last = max(apks)
+        new = apkdelta_apk(b"new")
+        pb.release(self.ws, pb.Build(new, last + 1, "b"), last + 1, "", "", log=q)
+        froms = {p["from_sha256"] for p in self.served()["app_update"]["patches"]}
+        self.assertIn(hashlib.sha256(apks[last]).hexdigest(), froms)
+        self.assertEqual(len(froms), pb.APK_HISTORY)
+
     def test_windows_test_build(self):
         q = lambda *_: None
         pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
