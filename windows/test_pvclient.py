@@ -67,3 +67,18 @@ class Shield(unittest.TestCase):
         p = r"C:\Program Files\Telegram\Telegram.exe"
         got = pc.clean_shield([p, p.lower(), "Telegram.exe", "", r"D:\a\b.txt", r"C:\z\Alpha.EXE"])
         self.assertEqual(got, [r"C:\z\Alpha.EXE", p])
+
+
+def test_format_diag():
+    d = {"version": 162, "state": "connected", "protocols": ["ubu-2/hysteria2 500ms"],
+         "engine": {"running": "pool", "steps": [{"name": "trace", "ok": True, "ms": 300, "info": "ip=1.2.3.4"},
+                                                 {"name": "download", "ok": False, "ms": 9000, "error": "timeout"}]},
+         "probes": [{"name": "ubu-2", "result": {"hysteria2": 500, "amneziawg": -1,
+                                                 "errors": {"amneziawg": "no handshake"}}}],
+         "log": ["2026-11-24 16:00:00 connect"]}
+    txt = pc.format_diag(d, "mohammad")
+    assert "user: mohammad" in txt and "✓ Hysteria2 500ms" in txt and "✗ AmneziaWG no handshake" in txt
+    assert "✓ صفحه با IP" in txt and "✗ دانلود" in txt and "connect" in txt
+    awg = pc.format_diag({"engine": {"running": "amneziawg", "awg": {"handshake_age_s": 20, "rx_bytes": 2048,
+                                                                          "tx_bytes": 10, "port": 5000}}})
+    assert "handshake 20s" in awg and "2.0 KB" in awg and "(اول وصل شوید)" in awg

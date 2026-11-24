@@ -24,6 +24,38 @@ type session struct {
 	lastError string
 	stop      chan struct{}
 	done      chan struct{}
+	// for the test screen
+	servers    []json.RawMessage
+	user, pass string
+}
+
+// events: the last lines of what the session did (probes, plan, checks),
+// for the app's test screen
+var (
+	eventMu sync.Mutex
+	events  []string
+)
+
+func note(format string, a ...any) {
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	events = append(events, time.Now().Format("2006-01-02 15:04:05")+" "+fmt.Sprintf(format, a...))
+	if len(events) > 80 {
+		events = events[len(events)-80:]
+	}
+}
+
+func eventLog() []string {
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	return append([]string(nil), events...)
+}
+
+// creds: the servers and account of the current session (nil when off).
+func (s *session) creds() ([]json.RawMessage, string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.servers, s.user, s.pass
 }
 
 type choice struct {
@@ -68,7 +100,9 @@ func (s *session) Connect(cfg *pvcore.SignedConfig, user, pass string, bypass []
 	stop, done := make(chan struct{}), make(chan struct{})
 	s.mu.Lock()
 	s.stop, s.done = stop, done
+	s.servers, s.user, s.pass = cfg.LinuxServers, user, pass
 	s.mu.Unlock()
+	note("connect")
 	s.set("probing", nil, "")
 	go func() {
 		defer close(done)
@@ -90,7 +124,9 @@ func probeAll(servers []json.RawMessage, user, pass string) []choice {
 			}
 			json.Unmarshal(sv, &meta)
 			var r map[string]any
-			json.Unmarshal([]byte(pvcore.Probe(string(sv), user, pass, 7000)), &r)
+			raw := pvcore.Probe(string(sv), user, pass, 7000)
+			note("probe %s: %s", meta.Name, raw)
+			json.Unmarshal([]byte(raw), &r)
 			for k, v := range r {
 				if ms, ok := v.(float64); ok && ms >= 0 {
 					mu.Lock()
@@ -132,6 +168,9 @@ func plan(all []choice, noAwg bool) [][]choice {
 	}
 	// the faster of the two, counting how often each broke lately on this
 	// computer (a tunnel that drops every few minutes is not fast)
+	if len(pool) > 0 && awg != nil {
+		note("plan: pool %dms×%d, amneziawg %dms×%d", pool[0].ms, 1+failCount("pool"), awg.ms, 1+failCount("amneziawg"))
+	}
 	var out [][]choice
 	poolFirst := awg == nil || (len(pool) > 0 && score(pool[0].ms, "pool") <= score(awg.ms, "amneziawg"))
 	if poolFirst {
@@ -187,11 +226,14 @@ func recent(ts []time.Time) []time.Time {
 	return out
 }
 
-func score(ms int, kind string) int {
+func failCount(kind string) int {
 	failMu.Lock()
-	n := len(recent(fails[kind]))
-	failMu.Unlock()
-	return ms * (1 + n)
+	defer failMu.Unlock()
+	return len(recent(fails[kind]))
+}
+
+func score(ms int, kind string) int {
+	return ms * (1 + failCount(kind))
 }
 
 func start(chosen []choice, user, pass string, bypass []string) ([]string, error) {
@@ -252,9 +294,11 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			var err error
 			if names, err = start(attempt, user, pass, bypass); err == nil {
 				up, kind = true, kindOf(attempt)
+				note("connected: %v", names)
 				break
 			}
 			lastErr = err.Error()
+			note("start failed: %s", lastErr)
 		}
 		sstp := false
 		if !up && len(cfg.Servers) > 0 {
@@ -290,6 +334,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			}
 			if !ok {
 				failures++
+				note("check failed (%d)", failures)
 			} else {
 				failures = 0
 			}
@@ -297,6 +342,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		if !sstp {
 			noteFailure(kind)
 		}
+		note("tunnel stopped working, starting over")
 		pvcore.Stop()
 		stopSstp()
 		s.set("retry", nil, "tunnel stopped working")

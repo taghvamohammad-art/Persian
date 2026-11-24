@@ -29,8 +29,8 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-                               QProgressBar, QPushButton, QStackedWidget, QSystemTrayIcon, QMenu,
-                               QVBoxLayout, QWidget)
+                               QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget,
+                               QSystemTrayIcon, QMenu, QVBoxLayout, QWidget)
 
 APP_NAME = "Persian VPN"
 try:
@@ -594,6 +594,123 @@ def clean_shield(paths):
     return sorted(out, key=lambda x: os.path.basename(x).lower())
 
 
+PROTOCOL_LABELS = {"vless-reality-vision": "Reality", "vless-xhttp-reality": "XHTTP", "hysteria2": "Hysteria2",
+                   "shadowsocks-2022": "Shadowsocks", "amneziawg": "AmneziaWG", "vless-xhttp-cdn": "CDN",
+                   "vless-dns": "DNS"}
+
+
+def _size(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+        n /= 1024
+
+
+def format_diag(d, user=""):
+    """The test report (text, the same sections as the Android app's)."""
+    import platform
+    out = ["Persian VPN Windows %s · engine %s · %s" % (BUILD, d.get("version", "?"), platform.platform()),
+           "user: %s · %s" % (user, time.strftime("%Y-%m-%d %H:%M:%S")),
+           "VPN: %s · %s" % (d.get("state", "?"), "، ".join(d.get("protocols") or []) or "-")]
+    if d.get("error"):
+        out.append("آخرین خطا: %s" % d["error"])
+    out += ["", "② داخل تانل (همان راهی که برنامه‌ها می‌روند)"]
+    e = d.get("engine") or {}
+    out.append("  engine: %s" % (e.get("running") or "-"))
+    if e.get("error"):
+        out.append("  ✗ %s" % e["error"])
+    a = e.get("awg")
+    if a:
+        age = a.get("handshake_age_s", -1)
+        out.append("  ✓ AmneziaWG handshake %ss پیش" % age if 0 <= age <= 175
+                   else "  ✗ AmneziaWG handshake نشده یا قدیمی (%s)" % age)
+        out.append("  ↓ %s  ↑ %s" % (_size(a.get("rx_bytes")), _size(a.get("tx_bytes"))))
+        if a.get("port"):
+            out.append("  پورت: %s" % a["port"])
+        for line in a.get("roam") or []:
+            out.append("    %s" % line)
+    names = {"trace": "صفحه با IP (بدون DNS)", "name": "صفحه با اسم (DNS سمت سرور)",
+             "dns_udp": "DNS روی UDP (مثل برنامه‌ها)", "download": "دانلود ۲ مگابایت"}
+    steps = e.get("steps") or []
+    for st in steps:
+        ok = st.get("ok")
+        detail = st.get("info", "") if ok else (st.get("error") or "")[:120]
+        out.append("  %s %s %sms %s" % ("✓" if ok else "✗", names.get(st.get("name"), st.get("name")),
+                                         st.get("ms", 0), detail))
+    failed = {st.get("name") for st in steps if not st.get("ok")}
+    if steps and not failed:
+        out.append("  → تانل سالم است")
+    elif {"trace", "name"} <= failed:
+        out.append("  → خود پروتکل کار نمی‌کند (سرور یا فیلتر)")
+    out += ["", "④ همه‌ی پروتکل‌ها (هر کدام جدا%s)" % ("؛ از داخل تانل فعلی" if d.get("state") == "connected" else "")]
+    for p in d.get("probes") or []:
+        out.append("  %s:" % p.get("name"))
+        r = p.get("result") or {}
+        errs = r.get("errors") or {}
+        for k, v in sorted(r.items()):
+            if k == "errors":
+                continue
+            label = PROTOCOL_LABELS.get(k, k)
+            out.append("    ✓ %s %sms" % (label, v) if isinstance(v, (int, float)) and v >= 0
+                       else "    ✗ %s %s" % (label, str(errs.get(k, ""))[:110]))
+    if not d.get("probes"):
+        out.append("  (اول وصل شوید)")
+    out += ["", "⑥ گزارش اتصال (آخرین خط‌ها)"]
+    out += ["  %s" % line for line in (d.get("log") or [])[-60:]]
+    out += ["", "— پایان —"]
+    return "\n".join(out)
+
+
+class DiagDialog(QDialog):
+    """«تست و عیب‌یابی»: the report to copy and send."""
+    done = Signal(str)
+
+    def __init__(self, parent, user):
+        super().__init__(parent)
+        self.setWindowTitle("🔍 تست و عیب‌یابی")
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.resize(620, 640)
+        lay = QVBoxLayout(self)
+        hint = QLabel("تانل از داخل، همه‌ی پروتکل‌ها و گزارش اتصال تست می‌شود (حدود ۲۰ ثانیه). "
+                      "بعد «کپی» را بزنید و متن را برای پشتیبانی بفرستید.")
+        hint.setWordWrap(True)
+        hint.setObjectName("Hint")
+        lay.addWidget(hint)
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setLayoutDirection(Qt.LeftToRight)
+        self.text.setPlainText("در حال تست…")
+        lay.addWidget(self.text, 1)
+        row = QHBoxLayout()
+        self.again = QPushButton("تست دوباره")
+        self.again.clicked.connect(self.run)
+        row.addWidget(self.again)
+        copy = QPushButton("کپی")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.text.toPlainText()))
+        row.addWidget(copy)
+        close = QPushButton("بستن")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.user = user
+        self.done.connect(self.text.setPlainText)
+        self.done.connect(lambda _: self.again.setEnabled(True))
+        self.run()
+
+    def run(self):
+        self.again.setEnabled(False)
+        self.text.setPlainText("در حال تست…")
+
+        def work():
+            try:
+                txt = format_diag(service("diag", timeout=90), self.user)
+            except (OSError, ValueError) as e:
+                txt = "سرویس VPN جواب نداد: %s\n(برنامه را یک بار ببندید و باز کنید)" % e
+            self.done.emit(txt)
+        threading.Thread(target=work, daemon=True).start()
+
+
 class ShieldDialog(QDialog):
     """«سپر VPN»: programs that may use the internet only through the VPN.
     While the VPN is not connected, Windows Firewall blocks them."""
@@ -809,6 +926,9 @@ class Window(QWidget):
         self.auto.setChecked(bool(self.state.get("auto")))
         self.auto.toggled.connect(lambda v: self.set_state(auto=v))
         lay.addWidget(self.auto)
+        diag = QPushButton("🔍 تست و عیب‌یابی")
+        diag.clicked.connect(lambda: DiagDialog(self, self.creds()[0]).exec())
+        lay.addWidget(diag)
         out = QPushButton("خروج از حساب")
         out.clicked.connect(self.logout)
         lay.addWidget(out)

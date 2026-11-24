@@ -16,6 +16,7 @@
 //	{"cmd":"disconnect"}
 //	{"cmd":"shield","programs":["C:\\...\\telegram.exe"]}   only through the VPN (shield.go)
 //	{"cmd":"upgrade","envelope":"<signed app config>","path":"C:\\...\\pvwin.exe"}
+//	{"cmd":"diag"}   the test screen: the tunnel tested from inside, every protocol, the session log
 //
 // Any local program can reach that port, so the service only ever uses
 // servers, and only ever installs an engine, named in a config signed
@@ -88,6 +89,8 @@ func handle(req request) map[string]any {
 		tunnel.Connect(cfg, req.User, req.Pass, req.Bypass)
 	case "disconnect":
 		tunnel.Disconnect()
+	case "diag":
+		return diag()
 	case "shield":
 		if err := guard.set(req.Programs); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
@@ -109,6 +112,34 @@ func handle(req request) map[string]any {
 	v, _ := strconv.Atoi(version)
 	return map[string]any{"ok": true, "state": state, "protocols": protocols, "error": lastErr, "version": v,
 		"shield": guard.list()}
+}
+
+// diag: what the app's test screen shows. The engine's own test through
+// the running tunnel, a probe of every protocol of the session's servers
+// (while connected these go out through the tunnel too), and the log.
+func diag() map[string]any {
+	state, protocols, lastErr := tunnel.status()
+	out := map[string]any{"ok": true, "state": state, "protocols": protocols, "error": lastErr}
+	var engine map[string]any
+	if json.Unmarshal([]byte(pvcore.Diagnose(10000)), &engine) == nil {
+		out["engine"] = engine
+	}
+	servers, user, pass := tunnel.creds()
+	var probes []map[string]any
+	for _, sv := range servers {
+		var meta struct {
+			Name string `json:"name"`
+		}
+		json.Unmarshal(sv, &meta)
+		var r map[string]any
+		json.Unmarshal([]byte(pvcore.Probe(string(sv), user, pass, 7000)), &r)
+		probes = append(probes, map[string]any{"name": meta.Name, "result": r})
+	}
+	out["probes"] = probes
+	out["log"] = eventLog()
+	v, _ := strconv.Atoi(version)
+	out["version"] = v
+	return out
 }
 
 // upgrade replaces this engine with a newer one whose SHA-256 the signed
