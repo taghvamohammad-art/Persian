@@ -138,7 +138,8 @@ func awgSummary(state string) map[string]any {
 	if sec > 0 {
 		age = int(time.Since(time.Unix(sec, 0)).Seconds())
 	}
-	return map[string]any{"handshake_age_s": age, "rx_bytes": rx, "tx_bytes": tx}
+	port, roam := roamState()
+	return map[string]any{"handshake_age_s": age, "rx_bytes": rx, "tx_bytes": tx, "port": port, "roam": roam}
 }
 
 // socksDNS asks a DNS question over UDP through a SOCKS5 proxy (UDP

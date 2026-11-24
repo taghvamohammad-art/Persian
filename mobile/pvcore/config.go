@@ -31,6 +31,9 @@ type Protocol struct {
 	H2        int64  `json:"h2"`
 	H3        int64  `json:"h3"`
 	H4        int64  `json:"h4"`
+	// AmneziaWG: [first, last] of extra UDP ports the server also answers on
+	// (redirected to Port), for moving to another port when one is cut
+	Hop []int `json:"hop"`
 	// CDN (vless-xhttp-cdn) and DNS tunnel (vless-dns)
 	Host       string   `json:"host"`
 	Encryption string   `json:"encryption"`

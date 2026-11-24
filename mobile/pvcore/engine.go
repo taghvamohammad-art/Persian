@@ -181,11 +181,11 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 		closeFd(tunFd)
 		return fmt.Errorf("awg tun: %w", err)
 	}
-	return awgOnLocked(tdev, uapi)
+	return awgOnLocked(tdev, uapi, awgPortsOf(serverJSON))
 }
 
 // awgOnLocked runs AmneziaWG on a TUN (which it closes on failure).
-func awgOnLocked(tdev tun.Device, uapi string) error {
+func awgOnLocked(tdev tun.Device, uapi string, ports []int) error {
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()
@@ -197,6 +197,9 @@ func awgOnLocked(tdev tun.Device, uapi string) error {
 	}
 	awgDev = dev
 	running = "amneziawg"
+	if r := newAwgRoam(uapi, ports); r != nil {
+		go r.run(dev)
+	}
 	return nil
 }
 
@@ -246,7 +249,7 @@ func awgHealth(state string) int {
 		return -1
 	}
 	age := time.Since(time.Unix(sec, 0))
-	if age > 160*time.Second { // rekey is due at 120s; a missed one means data is about to stop
+	if age > 175*time.Second { // keys stop working at 180s; awgRoam tries other ports before that
 		return -1
 	}
 	return int(age.Milliseconds())

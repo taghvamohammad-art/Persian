@@ -476,8 +476,31 @@ def install_awg(h, p, log):
 
 
 def configure_awg(h, p, log):
+    h.run("mkdir -p /etc/amnezia/amneziawg")
+    h.write("/etc/amnezia/amneziawg/awg0.conf", awg_conf(h, p), "600")
+    h.run("systemctl enable awg-quick@awg0 >/dev/null 2>&1; systemctl restart awg-quick@awg0")
+    p["awg"]["public"] = h.run("echo %s | awg pubkey" % p["awg"]["priv"]).strip()
+    return True
+
+
+def ensure_awg_hop(h, p, log=print):
+    """The hop ports on a running server, without restarting AmneziaWG (its
+    users stay connected): the rule now, and in awg0.conf for later starts."""
+    if not p.get("awg", {}).get("public") or not p["awg"].get("hop"):
+        return False
+    if not h.run("test -f /etc/amnezia/amneziawg/awg0.conf && echo Y || true").strip():
+        return False
+    h.write("/etc/amnezia/amneziawg/awg0.conf", awg_conf(h, p), "600")
+    h.run("%s 2>/dev/null || %s" % (awg_hop_rule(p, "-C"), awg_hop_rule(p, "-A")))
+    log("✓ پورت‌های جایگزین AmneziaWG: %d تا %d" % tuple(p["awg"]["hop"]))
+    return True
+
+
+def awg_conf(h, p):
     wan = h.run("ip route show default | awk '{print $5; exit}'").strip() or "eth0"
-    conf = """[Interface]
+    hop_up = "; " + awg_hop_rule(p, "-A") if p["awg"].get("hop") else ""
+    hop_down = "; " + awg_hop_rule(p, "-D") if p["awg"].get("hop") else ""
+    return """[Interface]
 PrivateKey = %(priv)s
 Address = 10.64.0.1/10
 ListenPort = %(port)d
@@ -490,14 +513,9 @@ H1 = %(h1)d
 H2 = %(h2)d
 H3 = %(h3)d
 H4 = %(h4)d
-PostUp = iptables -t nat -A POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT
-PostDown = iptables -t nat -D POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT
-""" % dict(p["awg"], wan=wan)
-    h.run("mkdir -p /etc/amnezia/amneziawg")
-    h.write("/etc/amnezia/amneziawg/awg0.conf", conf, "600")
-    h.run("systemctl enable awg-quick@awg0 >/dev/null 2>&1; systemctl restart awg-quick@awg0")
-    p["awg"]["public"] = h.run("echo %s | awg pubkey" % p["awg"]["priv"]).strip()
-    return True
+PostUp = iptables -t nat -A POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERADE; iptables -A FORWARD -i %%i -j ACCEPT; iptables -A FORWARD -o %%i -j ACCEPT%(hop_up)s
+PostDown = iptables -t nat -D POSTROUTING -s 10.64.0.0/10 -o %(wan)s -j MASQUERADE; iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -j ACCEPT%(hop_down)s
+""" % dict(p["awg"], wan=wan, hop_up=hop_up, hop_down=hop_down)
 
 
 def update_agent(h, log=print):
@@ -569,7 +587,9 @@ def user_check(h, p, username, client_ip="", seconds=25, log=print):
             log("نصب tcpdump…")
             h.run("DEBIAN_FRONTEND=noninteractive apt-get install -y -q tcpdump >/dev/null 2>&1 || true",
                   timeout=300, check=False)
-        flt = "udp and (%s)" % " or ".join("port %d" % x for x in ports)
+        hop = (p.get("awg") or {}).get("hop")
+        flt = "udp and (%s)" % " or ".join(["port %d" % x for x in ports] +
+                                          (["portrange %d-%d" % tuple(hop)] if hop else []))
         if client_ip.strip():
             flt += " and host %s" % client_ip.strip()
         log("گوش دادن %d ثانیه: حالا روی گوشی VPN را قطع و وصل کنید…" % seconds)
@@ -601,6 +621,11 @@ def refresh_xray_config(h, p, log=print):
     p = new_params(p)
     if not p.get("hy2_pin") or not p.get("reality_public"):
         raise LinuxError("تنظیمات این سرور در ابزار کامل نیست؛ یک بار از «سرور جدید» نصبش کنید.")
+    try:
+        ensure_awg_hop(h, p, log)
+    except LinuxError as e:
+        log("⚠ پورت‌های جایگزین AmneziaWG اضافه نشد: %s" % str(e)[-300:])
+        p["awg"].pop("hop", None)
     log("تنظیمات جدید Xray…")
     new = XRAY_CONF_DIR + "/template.new.json"   # Xray reads the format from the extension
     h.write(new, json.dumps(xray_template(p), indent=1))
@@ -779,7 +804,33 @@ def new_params(old=None):
     p.setdefault("cdn_local_port", 10086)
     p.setdefault("radius_secret", secrets.token_urlsafe(24))
     p.setdefault("agent_password", secrets.token_urlsafe(24))
+    p["awg"].setdefault("hop", awg_hop_range(p))
     return p
+
+
+AWG_HOP_N = 32
+
+
+def awg_hop_range(p):
+    """[first, last] of AWG_HOP_N UDP ports redirected to AmneziaWG's port:
+    when a network cuts one AmneziaWG flow (the rekey after 2 minutes gets
+    no answer) the app moves to another port. Clear of the server's other ports."""
+    used = {int(p.get(k) or 0) for k in ("vision_port", "xhttp_port", "hy2_port", "ss_port", "cdn_local_port")}
+    used |= {int((p.get("awg") or {}).get("port") or 0), 53, 80, 443, 1812, 1813}
+    while True:
+        first = 20000 + secrets.randbelow(40000 - AWG_HOP_N)
+        if not any(first <= u < first + AWG_HOP_N for u in used):
+            return [first, first + AWG_HOP_N - 1]
+
+
+def awg_hop_rule(p, op):
+    """iptables rule (op -A, -D or -C) sending the hop ports to AmneziaWG."""
+    a = p["awg"]
+    hop = a.get("hop")
+    if not hop:
+        return ""
+    return ("iptables -t nat %s PREROUTING -p udp -m addrtype --dst-type LOCAL --dport %d:%d "
+            "-j REDIRECT --to-ports %d" % (op, hop[0], hop[1], a["port"]))
 
 
 # ---------------------------------------------------------------- router side
@@ -986,6 +1037,8 @@ def server_entry(name, host, p, awg=True):
         entry["protocols"].append({"type": "amneziawg", "port": a["port"], "public_key": a["public"],
                                    "jc": a["jc"], "jmin": a["jmin"], "jmax": a["jmax"], "s1": a["s1"],
                                    "s2": a["s2"], "h1": a["h1"], "h2": a["h2"], "h3": a["h3"], "h4": a["h4"]})
+        if a.get("hop"):
+            entry["protocols"][-1]["hop"] = list(a["hop"])
     return entry
 
 

@@ -543,7 +543,29 @@ ip netns exec c1 ping -c 3 -W 3 10.64.0.1
 """ % pvcreds.awg_address(USER)
     p = subprocess.run(["sudo", "bash", "-c", cmds], capture_output=True, text=True)
     print(p.stdout[-1500:], p.stderr[-1500:])
-    return [] if p.returncode == 0 else ["awg client could not reach the server"]
+    if p.returncode != 0:
+        return ["awg client could not reach the server"]
+    if not a.get("hop"):
+        return ["awg entry has no hop ports"]
+    # a fresh tunnel through one of the hop ports (what the app moves to
+    # when a network cuts the flow on the main port)
+    hop_port = a["hop"][0] + 7
+    with open("/tmp/awgc.conf", "w") as f:
+        f.write(conf.replace("Endpoint = 10.200.0.1:%d" % a["port"], "Endpoint = 10.200.0.1:%d" % hop_port))
+    again = """set -e
+ip netns exec c1 ip link del awgc
+ip netns exec c1 ip link add awgc type amneziawg 2>/dev/null || ip netns exec c1 amneziawg-go awgc
+sleep 1
+ip netns exec c1 awg setconf awgc /tmp/awgc.conf
+ip netns exec c1 ip addr add %s/32 dev awgc
+ip netns exec c1 ip link set awgc up
+ip netns exec c1 ip route add 10.64.0.1/32 dev awgc
+ip netns exec c1 ping -c 3 -W 3 10.64.0.1
+ip netns exec c1 awg show awgc
+""" % pvcreds.awg_address(USER)
+    p = subprocess.run(["sudo", "bash", "-c", again], capture_output=True, text=True)
+    print("hop port %d:" % hop_port, p.stdout[-1500:], p.stderr[-1500:])
+    return [] if p.returncode == 0 else ["awg client could not reach the server on hop port %d" % hop_port]
 
 
 if __name__ == "__main__":

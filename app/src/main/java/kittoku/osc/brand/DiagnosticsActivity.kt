@@ -233,7 +233,12 @@ class DiagnosticsActivity : AppCompatActivity() {
         d.optString("error").takeIf { it.isNotEmpty() }?.let { line("  ✗ $it") }
         d.optJSONObject("awg")?.let { a ->
             val age = a.optInt("handshake_age_s", -1)
-            line(if (age in 0..200) "  ✓ AmneziaWG handshake ${age}s پیش" else "  ✗ AmneziaWG handshake نشده یا قدیمی ($age)")
+            line(if (age in 0..175) "  ✓ AmneziaWG handshake ${age}s پیش" else "  ✗ AmneziaWG handshake نشده یا قدیمی ($age)")
+            a.optInt("port").takeIf { it > 0 }?.let { line("  پورت: $it") }
+            a.optJSONArray("roam")?.let { r ->
+                if (r.length() > 0) line("  تعویض پورت (وقتی handshake جواب نگرفت):")
+                for (i in 0 until r.length()) line("    ${r.optString(i)}")
+            }
             line("  ↓ ${bytes(a.optLong("rx_bytes"))}  ↑ ${bytes(a.optLong("tx_bytes"))}")
             if (a.optLong("tx_bytes") > 0 && a.optLong("rx_bytes") < 1024)
                 line("  ⚠ می‌فرستد ولی تقریباً چیزی نمی‌گیرد: راه UDP به سرور بسته است؟")
