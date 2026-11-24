@@ -25,11 +25,11 @@ import time
 import urllib.parse
 import urllib.request
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-                               QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget,
+                               QAbstractButton, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget,
                                QSystemTrayIcon, QMenu, QVBoxLayout, QWidget)
 
 APP_NAME = "Persian VPN"
@@ -395,10 +395,6 @@ QPushButton { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255
 QPushButton:hover { background: rgba(255,255,255,0.14); }
 #Primary { background: #2EE6C5; color: #04211C; border: none; font-weight: bold; font-size: 12pt;
            border-radius: 22px; padding: 11px; }
-#Big { border-radius: 80px; min-width: 160px; max-width: 160px; min-height: 160px; max-height: 160px;
-       font-size: 15pt; font-weight: bold; border: 4px solid #2EE6C5; background: rgba(46,230,197,0.08); }
-#Big[state="on"] { background: #2EE6C5; color: #04211C; }
-#Big[state="busy"] { border-color: #F5C451; }
 #Profile { font-size: 13pt; font-weight: bold; color: #2EE6C5; }
 QProgressBar { background: rgba(255,255,255,0.10); border: none; border-radius: 4px; max-height: 8px; }
 QProgressBar::chunk { background: #2EE6C5; border-radius: 4px; }
@@ -662,6 +658,111 @@ def format_diag(d, user=""):
     return "\n".join(out)
 
 
+class PowerButton(QAbstractButton):
+    """The round connect button, drawn: a disc with a power sign and a word,
+    a soft glow when connected and a turning arc while connecting."""
+    SIZE = 184
+    LOOK = {   # ring, disc centre, disc edge, sign and word
+        "off": ("#2EE6C5", "#16465F", "#0C2D42", "#2EE6C5"),
+        "busy": ("#F5C451", "#2A3F4F", "#132837", "#F5C451"),
+        "on": ("#2EE6C5", "#45F0D2", "#14B89A", "#04211C"),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.state, self.word, self.angle, self.pulse = "off", "اتصال", 0, 0.0
+        self.timer = QTimer(self)
+        self.timer.setInterval(30)
+        self.timer.timeout.connect(self._tick)
+        self.timer.start()
+
+    def set_state(self, state, word):
+        self.state, self.word = state, word
+        self.setAccessibleName(word)
+        self.update()
+
+    def _tick(self):
+        if self.state == "busy":
+            self.angle = (self.angle + 6) % 360
+        elif self.state == "on":
+            self.pulse = (self.pulse + 0.02) % 2.0
+        else:
+            return
+        self.update()
+
+    def enterEvent(self, e):
+        self.update()
+
+    def leaveEvent(self, e):
+        self.update()
+
+    def paintEvent(self, e):
+        ring, centre, edge, ink = self.LOOK.get(self.state, self.LOOK["off"])
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        r = self.SIZE / 2 - 14
+        hover = self.underMouse()
+        # glow
+        glow = QRadialGradient(c, r + 14)
+        g = QColor(ring)
+        strength = 0.0
+        if self.state == "on":
+            strength = 0.35 + 0.15 * (1 - abs(self.pulse - 1))
+        elif hover:
+            strength = 0.18
+        g.setAlphaF(strength)
+        glow.setColorAt(0.72, g)
+        g2 = QColor(ring)
+        g2.setAlphaF(0)
+        glow.setColorAt(1.0, g2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawEllipse(c, r + 14, r + 14)
+        # disc
+        disc = QRadialGradient(QPointF(c.x(), c.y() - r * 0.35), r * 1.3)
+        top = QColor(centre)
+        if hover and self.state != "on":
+            top = top.lighter(118)
+        disc.setColorAt(0, top)
+        disc.setColorAt(1, QColor(edge))
+        p.setBrush(QBrush(disc))
+        p.drawEllipse(c, r, r)
+        # ring
+        rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        if self.state == "busy":
+            faint = QColor(ring)
+            faint.setAlphaF(0.25)
+            p.setPen(QPen(faint, 4))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(rect)
+            p.setPen(QPen(QColor(ring), 5, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(rect, -self.angle * 16, 100 * 16)
+        else:
+            col = QColor(ring)
+            if self.state == "off" and not hover:
+                col.setAlphaF(0.75)
+            p.setPen(QPen(col, 3 if self.state == "on" else 4))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(rect)
+        # power sign
+        s = r * 0.30
+        sc = QPointF(c.x(), c.y() - r * 0.16)
+        p.setPen(QPen(QColor(ink), 6, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(QRectF(sc.x() - s, sc.y() - s, 2 * s, 2 * s), 120 * 16, 300 * 16)
+        p.drawLine(QPointF(sc.x(), sc.y() - s * 1.25), QPointF(sc.x(), sc.y() - s * 0.15))
+        # word
+        f = QFont(self.font())
+        f.setPointSize(13)
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(ink))
+        p.drawText(QRectF(c.x() - r, c.y() + r * 0.28, 2 * r, r * 0.4), Qt.AlignCenter, self.word)
+        p.end()
+
+
 class DiagDialog(QDialog):
     """«تست و عیب‌یابی»: the report to copy and send."""
     done = Signal(str)
@@ -877,8 +978,7 @@ class Window(QWidget):
         lay.addWidget(self.l_user)
         row = QHBoxLayout()
         row.addStretch()
-        self.big = QPushButton("اتصال")
-        self.big.setObjectName("Big")
+        self.big = PowerButton()
         self.big.clicked.connect(self.toggle)
         row.addWidget(self.big)
         row.addStretch()
@@ -1200,10 +1300,7 @@ class Window(QWidget):
         threading.Thread(target=job, daemon=True).start()
 
     def set_look(self, state, text):
-        self.big.setProperty("state", state)
-        self.big.setText({"on": "قطع", "busy": "لغو", "off": "اتصال"}[state])
-        self.big.style().unpolish(self.big)
-        self.big.style().polish(self.big)
+        self.big.set_state(state, {"on": "قطع", "busy": "لغو", "off": "اتصال"}[state])
         self.l_state.setText(text)
         self.tray.setToolTip("%s — %s" % (APP_NAME, text)) if hasattr(self, "tray") else None
 
@@ -1250,6 +1347,11 @@ def main():
             os.makedirs(shots, exist_ok=True)
             app.processEvents()
             w.grab().save(os.path.join(shots, "client-main.png"))
+            for st, txt in (("busy", "در حال اتصال…"), ("on", "وصل")):
+                if hasattr(w, "set_look") and hasattr(w, "big"):
+                    w.set_look(st, txt)
+                    app.processEvents()
+                    w.big.grab().save(os.path.join(shots, "client-button-%s.png" % st))
             d.show()
             app.processEvents()
             d.grab().save(os.path.join(shots, "client-bypass.png"))
