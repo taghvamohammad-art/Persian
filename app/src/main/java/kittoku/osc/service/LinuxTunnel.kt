@@ -117,7 +117,7 @@ internal class LinuxTunnel(
      * more of its measured time: the fast and steady one first. The DNS
      * tunnel only as the last resort.
      */
-    private fun plan(all: List<Choice>): List<Choice> {
+    private suspend fun plan(all: List<Choice>): List<Choice> {
         val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
         // one server at a time: traffic spread over two servers would open two
         // User Manager sessions, and a one-user account is refused on the second
