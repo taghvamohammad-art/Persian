@@ -162,6 +162,9 @@ class FakeXray:
         self.users = dict(new)
         return True
 
+    def alive(self):
+        return True
+
     def traffic(self):
         out, self.pending = self.pending, {}
         return out
@@ -188,6 +191,37 @@ class XrayRestartTests(unittest.TestCase):
             self.assertEqual(sum("restart" in c for c in calls), 1)
             x.restart({"25g00002": "b"}, if_changed=True)          # users changed: restart
             self.assertEqual(sum("restart" in c for c in calls), 2)
+
+
+    def test_supervised_xray(self):
+        """No systemd (container on a MikroTik): the agent runs Xray itself."""
+        tmp = tempfile.mkdtemp()
+        tpl = {"inbounds": [{"tag": "vless-vision", "protocol": "vless", "settings": {"clients": []}}]}
+        with open(os.path.join(tmp, "t.json"), "w") as f:
+            json.dump(tpl, f)
+        fake = os.path.join(tmp, "xray")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\nexec sleep 60\n")
+        os.chmod(fake, 0o755)
+        x = pa.Xray({"template": os.path.join(tmp, "t.json"), "config": os.path.join(tmp, "c.json"),
+                    "inbounds": {"vless-vision": "vless-vision"}, "bin": fake, "supervise": True})
+        try:
+            self.assertFalse(x.alive())
+            x.restart({"25g00001": "a"}, if_changed=True)
+            first = x.proc
+            self.assertTrue(x.alive())
+            x.restart({"25g00001": "a"}, if_changed=True)          # same users, running: kept
+            self.assertIs(x.proc, first)
+            first.kill()
+            first.wait()
+            self.assertFalse(x.alive())
+            x.restart({"25g00001": "a"}, if_changed=True)          # died: started again
+            self.assertTrue(x.alive())
+            self.assertIsNot(x.proc, first)
+        finally:
+            if x.proc:
+                x.proc.kill()
+                x.proc.wait()
 
 
 class AgentTests(unittest.TestCase):

@@ -906,17 +906,14 @@ def public_address(r, host):
 
 # ---------------------------------------------------------------- whole server
 
-def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=print,
-                linux_ip_seen_by_router=None, router_addresses=None, install_awg_too=True):
-    """Install/refresh everything. um_routers: [(connect(), host)] main first.
-
-    Returns (params, server entry for the app config)."""
-    p = new_params(params)
-    seen = linux_ip_seen_by_router or public_ip
+def register_um(um_routers, name, seen, p, log=print, router_addresses=None, what="سرور لینوکس"):
+    """The server as a RADIUS client and REST reader on each User Manager
+    router. Returns pv-agent's routers and radius lists and the routers'
+    addresses (who may read the status page)."""
     routers_cfg, radius_servers = [], []
     allow = set()            # who may read the status page (the bot runs on the routers)
     for i, (connect, host) in enumerate(um_routers):
-        log("ثبت سرور لینوکس روی یوزر منیجر %d (%s)…" % (i + 1, host))
+        log("ثبت %s روی یوزر منیجر %d (%s)…" % (what, i + 1, host))
         r = connect()
         try:
             if not sv.has_package(r, "user-manager"):
@@ -936,6 +933,18 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
                             "user": "pvagent", "password": p["agent_password"], "pin": fp})
         radius_servers.append({"host": reach.get("host", host), "secret": p["radius_secret"],
                                "auth_port": reach.get("auth_port", 1812), "acct_port": reach.get("acct_port", 1813)})
+
+    return routers_cfg, radius_servers, allow
+
+
+def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=print,
+                linux_ip_seen_by_router=None, router_addresses=None, install_awg_too=True):
+    """Install/refresh everything. um_routers: [(connect(), host)] main first.
+
+    Returns (params, server entry for the app config)."""
+    p = new_params(params)
+    seen = linux_ip_seen_by_router or public_ip
+    routers_cfg, radius_servers, allow = register_um(um_routers, name, seen, p, log, router_addresses)
 
     h = connect_linux()
     try:
@@ -1045,16 +1054,21 @@ def server_entry(name, host, p, awg=True):
 def status_url(router):
     """The bot's view of a Linux server's online users (settings router entry)."""
     import settings as st
-    p = st.decrypt_blob(router.get("params")) if router.get("params") else {}
+    box = bool(router.get("xray_box"))          # Xray in a container on a MikroTik (mtxray.py)
+    blob = router.get("xray_params") if box else router.get("params")
+    p = st.decrypt_blob(blob) if blob else {}
     tok = (p or {}).get("status_token")
-    return "http://%s/pvs/%s" % (router["host"], tok) if tok else None
+    if not tok:
+        return None
+    port = (p or {}).get("status_port") if box else None
+    return "http://%s%s/pvs/%s" % (router["host"], ":%d" % port if port else "", tok)
 
 
 def bot_linux_status(routers):
     """LINUX_STATUS for the bot's settings."""
     out = []
     for r in routers:
-        if r.get("role") == "linux":
+        if r.get("role") == "linux" or r.get("xray_box"):
             u = status_url(r)
             if u:
                 out.append("%s|%s" % (r.get("name") or r["host"], u))

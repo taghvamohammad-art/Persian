@@ -36,7 +36,7 @@ jobs:
 
       - name: Unit tests
         working-directory: tools/release_tool
-        run: python -m unittest test_backup test_provision test_backuptunnel test_settings -v
+        run: python -m unittest test_backup test_provision test_backuptunnel test_settings test_mtxray -v
 
       - name: Download RouterOS ${{ env.ROS_VERSION }}
         run: |
@@ -119,7 +119,7 @@ jobs:
       - name: Unit tests (agent and relay)
         run: |
           (cd server/linux && python -m unittest test_pv_agent -v)
-          (cd server/mikrotik && sudo "$(which python)" -m unittest test_awgrelay -v)
+          (cd server/mikrotik && sudo "$(which python)" -m unittest test_awgrelay test_xraybox -v)
 
       - name: Root SSH to this runner
         run: |
@@ -148,6 +148,22 @@ jobs:
 
       - name: Linux server end to end
         run: timeout 3000 python tools/release_tool/it/linux_it.py
+
+      - name: Boot a third CHR (Xray in a container)
+        run: |
+          qemu-img create -f raw /tmp/disk-C.img 1G >/dev/null
+          cp /tmp/chr-$ROS_VERSION.img /tmp/disk-C.img
+          qemu-img resize -f raw /tmp/disk-C.img 1G
+          f="hostfwd=tcp:127.0.0.1:2224-:22"
+          for p in 30443 30444 30446 30447; do f="$f,hostfwd=tcp:127.0.0.1:$p-:$p"; done
+          for p in 30445 30446; do f="$f,hostfwd=udp:127.0.0.1:$p-:$p"; done
+          qemu-system-x86_64 -enable-kvm -m 1024 -smp 1 -display none -daemonize \
+            -drive file=/tmp/disk-C.img,format=raw -netdev user,id=n0,$f -device e1000,netdev=n0 \
+            -serial unix:/tmp/chr-C.sock,server,nowait -monitor unix:/tmp/mon-C.sock,server,nowait
+          timeout 300 python tools/release_tool/it/chr.py boot C
+
+      - name: Xray on a MikroTik (container) end to end
+        run: timeout 1800 python tools/release_tool/it/box_it.py
 
   exe:
     runs-on: windows-latest
@@ -181,7 +197,7 @@ jobs:
             --icon tools/icon/app.ico `
             --add-data "tools/icon/icon-512.png;." `
             --add-data "tools/release_tool/BASE;." `
-            --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/pv_icmp.py;." --add-data "server/linux/site;site" --add-data "server/mikrotik/awgrelay.py;." `
+            --add-data "server/umstatus/umstatus.py;." --add-data "server/linux/pv_agent.py;." --add-data "server/linux/pvcreds.py;." --add-data "server/linux/pv_icmp.py;." --add-data "server/linux/site;site" --add-data "server/mikrotik/awgrelay.py;." --add-data "server/mikrotik/xraybox.py;." `
             --paths tools --paths tools/release_tool `
             --hidden-import release_gui --hidden-import bsdiff4 @hidden `
             tools/release_tool/launcher.py

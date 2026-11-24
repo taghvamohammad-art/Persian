@@ -1664,10 +1664,12 @@ class NewServerPage(RouterPage):
         self.mode_main = QRadioButton("سرور اصلی جدید (از روی بکاپ)")
         self.mode_sec = QRadioButton("سرور فرعی (احراز هویت از سرور اصلی)")
         self.mode_linux = QRadioButton("سرور لینوکس (Xray و AmneziaWG)")
+        self.mode_box = QRadioButton("Xray روی میکروتیک (کانتینر)")
         self.mode_main.setChecked(True)
         mrow.addWidget(self.mode_main)
         mrow.addWidget(self.mode_sec)
         mrow.addWidget(self.mode_linux)
+        mrow.addWidget(self.mode_box)
         mrow.addStretch()
         l1.addLayout(mrow)
         hint = QLabel("روتر جدید را اول در تب «سرورها و بکاپ» اضافه کنید (CHR تازه، با کاربر pvtool).")
@@ -1730,6 +1732,7 @@ class NewServerPage(RouterPage):
 
         self.mode_main.toggled.connect(self.update_mode)
         self.mode_linux.toggled.connect(self.update_mode)
+        self.mode_box.toggled.connect(self.update_mode)
         self.target.currentIndexChanged.connect(self.fill_ip)
         self.source.currentIndexChanged.connect(self.fill_backups)
         self.reload()
@@ -1744,9 +1747,10 @@ class NewServerPage(RouterPage):
     def update_mode(self):
         main = self.mode_main.isChecked()
         lin = self.mode_linux.isChecked()
+        box = self.mode_box.isChecked()
         self.chk_bot.setVisible(main)
-        self.backup.setVisible(not lin)
-        self.lbl_backup.setVisible(not lin)
+        self.backup.setVisible(not lin and not box)
+        self.lbl_backup.setVisible(not lin and not box)
         for w in (self.domain, self.lbl_domain, self.cf_token, self.lbl_cf):
             w.setVisible(lin)
         self.btn_cfg.setText("به‌روزرسانی سرورهای اپ و انتشار" if main else "اضافه کردن به سرورهای اپ و انتشار")
@@ -1856,7 +1860,65 @@ class NewServerPage(RouterPage):
                 QMessageBox.information(self, "انجام شد", msg)
         self.run(job, done)
 
+    def go_box(self, tgt, new_ip):
+        """Xray in a container on a MikroTik (the router abroad): one more server for the apps."""
+        ums = [r for r in self.settings.routers if r.get("role") in UM_ROLES]
+        ums.sort(key=lambda r: r.get("role") != "main")
+        if not ums:
+            return self.fail("اول روتر یوزر منیجر (اصلی) را در تب «سرورها و بکاپ» تعریف کنید.")
+        if tgt.get("role") == "linux":
+            return self.fail("برای سرور لینوکس گزینه‌ی «سرور لینوکس» را بزنید؛ این گزینه برای روتر میکروتیک است.")
+        if QMessageBox.question(self, "تأیید",
+                "روی میکروتیک «%s» یک کانتینر Xray ساخته می‌شود:
+Reality، XHTTP، Hysteria2 (Salamander) و "
+                "Shadowsocks، با هماهنگی یوزر منیجر.
+
+چند قانون dst-nat (با توضیح pv-xray) اضافه می‌شود و "
+                "تنظیمات فعلی روتر (GRE، SSTP و …) دست نمی‌خورد.
+روی %s هم دسترسی این سرور (RADIUS و REST) "
+                "ثبت می‌شود.
+ادامه می‌دهید؟" % (router_label(tgt), "، ".join(router_label(r) for r in ums))) \
+                != QMessageBox.Yes:
+            return
+        import mtxray
+        name = re.sub(r"[^A-Za-z0-9_-]", "-", tgt.get("name") or tgt["id"])
+        params = st.decrypt_blob(tgt.get("xray_params")) or {}
+        others = [r for r in self.settings.routers if r.get("id") != tgt.get("id")]
+
+        def job(log, progress):
+            res = mtxray.setup_box(router_connector(tgt), [(router_connector(r), r["host"]) for r in ums],
+                                   name, new_ip, params=params, log=log)
+            value = linux.bot_linux_status(others + [dict(tgt, xray_box=True, xray_params=st.encrypt_blob(res[0]))])
+            for r in ums:
+                try:
+                    with router_connector(r)() as c:
+                        if sv.set_bot_env(c, {"LINUX_STATUS": value}, log):
+                            log("✓ بات تلگرام از این سرور خبر دارد (آنلاین‌ها).")
+                except Exception as e:
+                    log("⚠ تنظیم بات روی %s نشد: %s" % (r["host"], str(e).splitlines()[0]))
+            return res
+
+        def done(res):
+            p, entry = res
+            tgt["xray_box"] = True
+            tgt["xray_params"] = st.encrypt_blob(p)
+            self.settings.save()
+            self.result = {"linux": True, "entry": entry, "target": tgt["id"], "new_ip": new_ip, "main": False}
+            self.log.appendPlainText("\n✓ سرور Xray روی میکروتیک آماده است: %s"
+                                     % "، ".join(x["type"] for x in entry["protocols"]))
+            self.btn_cfg.allowed = True
+            self.btn_cfg.setEnabled(True)
+            QMessageBox.information(self, "انجام شد", "سرور Xray روی میکروتیک آماده است.
+حالا «%s» را بزنید تا "
+                                    "اپ‌ها آن را بشناسند." % self.btn_cfg.text())
+        self.run(job, done)
+
     def go(self):
+        if self.mode_box.isChecked():
+            tgt = self.chosen(self.target)
+            if not tgt:
+                return self.fail("روتر میکروتیک را انتخاب کنید.")
+            return self.go_box(tgt, self.ip.text().strip() or tgt["host"])
         if self.mode_linux.isChecked():
             tgt = self.chosen(self.target)
             if not tgt:

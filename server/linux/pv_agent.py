@@ -284,6 +284,26 @@ class Xray:
         self.inbounds = cfg["inbounds"]           # {tag: "vless-vision" | "vless" | "hysteria" | "shadowsocks"}
         self.service = cfg.get("service", "xray")
         self.last_restart = 0.0
+        # no systemd (a container on a MikroTik): the agent runs Xray itself
+        self.supervise = bool(cfg.get("supervise"))
+        self.assets = cfg.get("assets", "")
+        self.proc = None
+
+    def alive(self):
+        if not self.supervise:
+            return True
+        return self.proc is not None and self.proc.poll() is None
+
+    def _run_own(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(5)
+        env = dict(os.environ, **({"XRAY_LOCATION_ASSET": self.assets} if self.assets else {}))
+        self.proc = subprocess.Popen([self.bin, "run", "-config", self.config], env=env)
 
     def _cli(self, command, *args, timeout=30):
         p = subprocess.run([self.bin, "api", command, "-s", self.api] + list(args),
@@ -331,6 +351,8 @@ class Xray:
             return False
         if on_disk != json.loads(json.dumps(self.render(users))):
             return False
+        if self.supervise:
+            return self.alive()
         try:
             return subprocess.run(["systemctl", "is-active", "--quiet", self.service],
                                   check=False, timeout=30).returncode == 0
@@ -342,7 +364,10 @@ class Xray:
             log.info("xray already runs with these %d users; not restarted", len(users))
             return
         self.write(users)
-        subprocess.run(["systemctl", "restart", self.service], check=False, timeout=60)
+        if self.supervise:
+            self._run_own()
+        else:
+            subprocess.run(["systemctl", "restart", self.service], check=False, timeout=60)
         self.last_restart = time.time()
 
     def apply(self, old, new):
@@ -504,10 +529,14 @@ class Agent:
             users, source = fetch_users(self.cfg["routers"])
         except RouterError as e:
             log.warning("user list unavailable, keeping the current one: %s", e)
+            if self.xray and not self.xray.alive() and os.path.exists(self.xray.config):
+                self.xray._run_own()          # with the users it last had
             return
         new = self.allowed_now(users)
         if self.xray:
-            if self.first:
+            if self.first or not self.xray.alive():
+                if not self.first:
+                    log.warning("xray had stopped; started again")
                 self.xray.restart(new, if_changed=True)
             elif not self.xray.apply(self.users, new):
                 return             # try again next round with the old set as "current"
