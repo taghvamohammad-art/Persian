@@ -147,9 +147,10 @@ WantedBy=multi-user.target
     return tag
 
 
-def x25519(h):
-    """(private, public) Reality keys; xray changed its output format over time."""
-    out = h.run("/usr/local/bin/xray x25519")
+def x25519(h, private=None):
+    """(private, public) Reality keys (new ones, or the public key of `private`);
+    xray changed its output format over time."""
+    out = h.run("/usr/local/bin/xray x25519" + (" -i %s" % shell_quote(private) if private else ""))
     priv = re.search(r"Private\s*key:\s*(\S+)|PrivateKey:\s*(\S+)", out)
     pub = re.search(r"Public\s*key:\s*(\S+)|Password(?:\s*\(PublicKey\))?:\s*(\S+)", out)
     if not priv or not pub:
@@ -619,6 +620,7 @@ def refresh_xray_config(h, p, log=print):
     pv-agent then restarts Xray with the users (a few seconds' cut for the
     Xray protocols). Returns the updated params (to save and publish)."""
     p = new_params(p)
+    adopt_server_secrets(h, p, log)
     if not p.get("hy2_pin") or not p.get("reality_public"):
         raise LinuxError("تنظیمات این سرور در ابزار کامل نیست؛ یک بار از «سرور جدید» نصبش کنید.")
     try:
@@ -783,6 +785,72 @@ def awg_params():
             "jc": 3 + secrets.randbelow(6), "jmin": jmin, "jmax": jmin + 20 + secrets.randbelow(40),
             "s1": 15 + secrets.randbelow(60), "s2": 15 + secrets.randbelow(60),
             "h1": h1, "h2": h2, "h3": h3, "h4": h4}
+
+
+AWG_KEYS = {"PrivateKey": "priv", "ListenPort": "port", "Jc": "jc", "Jmin": "jmin", "Jmax": "jmax",
+            "S1": "s1", "S2": "s2", "H1": "h1", "H2": "h2", "H3": "h3", "H4": "h4"}
+
+
+def server_secrets(h):
+    """The keys a running server already uses (its users' apps depend on
+    them): {} on a new server."""
+    out = {}
+    t = h.run("grep -oE 'location = /pvs/[^ ]+' /etc/nginx/sites-available/pv 2>/dev/null || true", check=False)
+    m = re.search(r"/pvs/([^\s{;]+)", t)
+    if m:
+        out["status_token"] = m.group(1)
+    tpl = h.run("cat %s/template.json 2>/dev/null || true" % XRAY_CONF_DIR, check=False)
+    try:
+        for ib in json.loads(tpl).get("inbounds", []):
+            rs = (ib.get("streamSettings") or {}).get("realitySettings")
+            if rs and rs.get("privateKey"):
+                out["reality_private"] = rs["privateKey"]
+                if rs.get("shortIds"):
+                    out["short_id"] = rs["shortIds"][0]
+                break
+    except ValueError:
+        pass
+    conf = h.run("cat /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || true", check=False)
+    awg = {}
+    for line in conf.split("[Peer]")[0].splitlines():
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if k in AWG_KEYS and v:
+            awg[AWG_KEYS[k]] = v if k == "PrivateKey" else int(v)
+    if awg.get("priv"):
+        out["awg"] = awg
+    return out
+
+
+def adopt_server_secrets(h, p, log=print):
+    """When the tool's copy of a server's keys differs from what the server
+    really uses (settings from another device, an old copy ...), the
+    server's keys win: writing the tool's would cut every user's app and
+    the bot's online list. Returns the names of what was taken."""
+    srv = server_secrets(h)
+    taken = []
+    for k in ("status_token", "short_id"):
+        if srv.get(k) and p.get(k) != srv[k]:
+            p[k] = srv[k]
+            taken.append(k)
+    if srv.get("reality_private") and p.get("reality_private") != srv["reality_private"]:
+        p["reality_private"] = srv["reality_private"]
+        p["reality_public"] = x25519(h, srv["reality_private"])[1]
+        taken.append("reality")
+    if srv.get("awg"):
+        a = p.setdefault("awg", {})
+        diff = {k: v for k, v in srv["awg"].items() if a.get(k) != v}
+        if diff:
+            a.update(diff)
+            pub = h.run("command -v awg >/dev/null && echo %s | awg pubkey || true" % shell_quote(a["priv"]),
+                        check=False).strip()
+            if pub:
+                a["public"] = pub
+            taken.append("amneziawg")
+    if taken:
+        log("⚠ کلیدهای ابزار با خود سرور یکی نبود (%s)؛ کلیدهای فعلی سرور نگه داشته شد تا اتصال کاربران و "
+            "لیست آنلاین بات قطع نشود." % "، ".join(taken))
+    return taken
 
 
 def new_params(old=None):
@@ -950,6 +1018,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
     try:
         info = check_os(h)
         log("سرور: %s" % " ".join(info))
+        adopt_server_secrets(h, p, log)
         install_base(h, log)
         p["xray_version"] = install_xray(h, log)
         if not p.get("reality_private"):

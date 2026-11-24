@@ -28,8 +28,9 @@ def snapshot(settings):
     routers = []
     for r in settings.routers:
         r = dict(r)
-        if r.get("params"):
-            r["params"] = st.decrypt_blob(r["params"]) or {}
+        for key in ("params", "xray_params"):
+            if r.get(key):
+                r[key] = st.decrypt_blob(r[key]) or {}
         routers.append(r)
     files = {}
     for name in WORKSPACE_FILES:
@@ -96,7 +97,9 @@ def apply(data, settings, workspace):
         r = {k: r.get(k, "") for k in st.ROUTER_FIELDS}
         r["port"] = int(r["port"] or 22)
         r["role"] = r["role"] or "main"
-        r["params"] = st.encrypt_blob(r["params"]) if isinstance(r["params"], dict) else (r["params"] or "")
+        for key in ("params", "xray_params"):
+            r[key] = st.encrypt_blob(r[key]) if isinstance(r[key], dict) else (r[key] or "")
+        r["xray_box"] = bool(r.get("xray_box"))
         settings.routers.append(r)
     settings.save()
     return written

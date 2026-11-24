@@ -33,6 +33,7 @@ import publisher as pb       # noqa: E402
 import selfupdate as su      # noqa: E402
 import services as sv        # noqa: E402
 import settings as st        # noqa: E402
+import settingsync as ss     # noqa: E402
 from routeros import SSHRouter  # noqa: E402
 from settings import Settings  # noqa: E402
 
@@ -212,7 +213,55 @@ class Relay(QObject):
             self.f[3](a, b)
 
 
-def run_in_thread(owner, fn, on_done, on_failed, on_log=None, on_progress=None):
+class _SyncStop:
+    """A job not run: the settings changed under it (see _with_sync)."""
+
+    def __init__(self, kind, conflict=None):
+        self.kind, self.conflict = kind, conflict
+
+
+def _main_of(owner):
+    main = owner if isinstance(owner, QMainWindow) else getattr(owner, "main", None)
+    return main if hasattr(main, "settings") and hasattr(main, "settings_changed") else None
+
+
+def _with_sync(settings, fn):
+    """Before the job: the shared copy of the settings on the main router
+    (settingsync). A newer copy from the phone stops the job: what the user
+    picked may have changed."""
+    def job(log, progress):
+        try:
+            res = ss.sync(settings, log=log)
+        except ss.SyncConflict as c:
+            return _SyncStop("conflict", c)
+        except Exception as e:   # noqa: BLE001 - offline router, ...: work on with this device's copy
+            log("⚠ همگام‌سازی تنظیمات با روتر اصلی انجام نشد (%s)؛ با تنظیمات همین کامپیوتر ادامه می‌دهم."
+                % str(e)[:200])
+            res = None
+        if res == "pulled":
+            return _SyncStop("pulled")
+        return fn(log, progress)
+    return job
+
+
+def _after_sync(main, on_done, on_failed):
+    def done(res):
+        if not isinstance(res, _SyncStop):
+            return on_done(res)
+        if res.kind == "pulled":
+            main.settings_changed()
+            return on_failed("تنظیمات تازه‌تری از گوشی روی روتر اصلی بود و دریافت شد.\n"
+                             "صفحه‌ها به‌روز شد؛ لطفاً همان کار را دوباره بزنید.")
+        on_failed("کار انجام نشد: اول باید معلوم شود کدام نسخه‌ی تنظیمات بماند.")
+        main.ask_sync_conflict(res.conflict)
+    return done
+
+
+def run_in_thread(owner, fn, on_done, on_failed, on_log=None, on_progress=None, sync=True):
+    main = _main_of(owner) if sync else None
+    if main is not None:
+        fn = _with_sync(main.settings, fn)
+        on_done = _after_sync(main, on_done, on_failed)
     thread = QThread(owner)
     worker = Worker(fn)
     worker.moveToThread(thread)
@@ -2125,7 +2174,7 @@ class MonitorPage(RouterPage):
             self.status = res
             self.fill()
         self.set_busy(True)
-        run_in_thread(self, job, lambda r: (self.set_busy(False), done(r)), self.fail, None, None)
+        run_in_thread(self, job, lambda r: (self.set_busy(False), done(r)), self.fail, None, None, sync=False)
 
     def fill(self):
         routers = self.settings.routers
@@ -2216,7 +2265,7 @@ class FeaturesMixin:
             self.btn_new.setText("⬇ امکانات جدید")
             if not silent:
                 QMessageBox.warning(self, "امکانات جدید", err)
-        run_in_thread(self, _features_job(self.settings), done, failed)
+        run_in_thread(self, _features_job(self.settings), done, failed, sync=False)
 
     def offer_features(self, up, plan):
         actions_url = "https://github.com/%s/actions/workflows/%s" % (self.settings.repo, su.WORKFLOW)
@@ -2253,7 +2302,7 @@ class FeaturesMixin:
         run_in_thread(self, job, done,
                       lambda e: (self.btn_new.setText("⬇ امکانات جدید"),
                                  QMessageBox.warning(self, "امکانات جدید", e)),
-                      lambda line: self.btn_new.setText("⏳ " + line[:30]))
+                      lambda line: self.btn_new.setText("⏳ " + line[:30]), sync=False)
 
 
 # ------------------------------------------------------------------ main window
@@ -2304,6 +2353,8 @@ class MainWindow(QMainWindow, FeaturesMixin):
         self.btn_new.clicked.connect(lambda: self.check_features(False))
         head.addWidget(self.btn_new, 0, Qt.AlignTop)
         QTimer.singleShot(2000, lambda: self.check_features(True))
+        ss.install_hook()                         # every save goes to the shared copy on the main router
+        QTimer.singleShot(3000, self.sync_at_start)
         phone = QPushButton("📱 انتقال به گوشی")
         phone.setToolTip("همه‌ی تنظیمات، رمزها و کلید امضا در یک فایل رمزدار برای برنامه‌ی اندروید «Persian Admin»")
         phone.clicked.connect(self.transfer_to_phone)
@@ -2506,6 +2557,54 @@ class MainWindow(QMainWindow, FeaturesMixin):
         QMessageBox.warning(self, "خطا", text)
 
     # ---------------------------------------------------------------- actions
+
+    # ---------------------------------------------------------------- settings sync with the phone
+
+    def settings_changed(self):
+        """The settings were replaced by the shared copy: show them."""
+        self.refresh_state()
+        self.servers.reload()
+        self.services.reload()
+        self.newserver.reload()
+        self.check_backups()
+
+    def sync_at_start(self):
+        def job(log, progress):
+            try:
+                return ss.sync(self.settings, force=True, log=log)
+            except ss.SyncConflict as c:
+                return _SyncStop("conflict", c)
+
+        def done(res):
+            if isinstance(res, _SyncStop):
+                return self.ask_sync_conflict(res.conflict)
+            if res == "pulled":
+                self.settings_changed()
+        run_in_thread(self, job, done, lambda e: self.say("⚠ همگام‌سازی تنظیمات با روتر اصلی: " + e),
+                      self.say, None, sync=False)
+
+    def ask_sync_conflict(self, conflict):
+        other = conflict.remote.get("device_name") or "دستگاه دیگر"
+        box = QMessageBox(self)
+        box.setWindowTitle("همگام‌سازی تنظیمات")
+        box.setIcon(QMessageBox.Question)
+        box.setText("تنظیمات این کامپیوتر و %s (%s) هر دو تغییر کرده‌اند:\n\n%s\n\nکدام نسخه بماند؟ "
+                    "نسخه‌ی کنار گذاشته‌شده در پوشه‌ی sync_old برنامه نگه داشته می‌شود."
+                    % (other, conflict.remote.get("time", ""), conflict.summary))
+        take = box.addButton("نسخه‌ی %s" % other, QMessageBox.AcceptRole)
+        keep = box.addButton("نسخه‌ی این کامپیوتر", QMessageBox.AcceptRole)
+        box.addButton("فعلاً هیچ‌کدام", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() not in (take, keep):
+            return
+        use_remote = box.clickedButton() is take
+
+        def done(_):
+            self.settings_changed()
+            QMessageBox.information(self, "همگام‌سازی تنظیمات", "انجام شد؛ حالا کار را دوباره بزنید.")
+        run_in_thread(self, lambda log, progress: ss.resolve_now(self.settings, conflict, use_remote, log),
+                      done, lambda e: QMessageBox.warning(self, "همگام‌سازی تنظیمات", e), self.say, None,
+                      sync=False)
 
     def open_settings(self):
         if SettingsDialog(self, self.settings).exec():
@@ -2963,7 +3062,7 @@ def smoke():
     run_in_thread(w, lambda log, progress: (log("x"), 42)[1],
                   lambda r: seen.update(done=QThread.currentThread() is app.thread(), r=r),
                   lambda e: seen.update(err=e),
-                  lambda line: seen.update(log=QThread.currentThread() is app.thread()))
+                  lambda line: seen.update(log=QThread.currentThread() is app.thread()), sync=False)
     import time
     end = time.time() + 10
     while "done" not in seen and "err" not in seen and time.time() < end:

@@ -77,7 +77,11 @@ def _decrypt(value):
     return raw.decode()
 
 
-ROUTER_FIELDS = ("id", "name", "role", "host", "port", "user", "password", "hostkey", "params")
+ROUTER_FIELDS = ("id", "name", "role", "host", "port", "user", "password", "hostkey", "params",
+                 "xray_box", "xray_params")      # Xray in a container on a MikroTik (mtxray.py)
+
+# called after every save (settingsync: the change goes to the other device)
+ON_SAVE = None
 
 
 class Settings:
@@ -147,6 +151,11 @@ class Settings:
                        "testers": self.testers,
                        "routers": routers}, f, ensure_ascii=False, indent=2)
         os.replace(tmp, FILE)
+        if ON_SAVE is not None:
+            try:
+                ON_SAVE(self)
+            except Exception:   # noqa: BLE001 - syncing never stops a save
+                pass
 
 
 def load_status():

@@ -26,6 +26,7 @@ import publisher as pb
 import selfupdate as su
 import services as sv
 import settings as st
+import settingsync as ss
 import toolbackup as tb
 from routeros import SSHRouter
 
@@ -214,6 +215,11 @@ def dropdown(label, items, value=None, on_select=None):
                     expand=True, on_select=on_select, border_radius=12, filled=True, fill_color=FIELD,
                     border_color=LINE, focused_border_color=BRAND)
     return d
+
+
+class _NullPanel:
+    def tlog(self, text):
+        pass
 
 
 class Panel:
@@ -417,14 +423,18 @@ class App:
 
     # ------------------------------------------------------------ background work
 
-    async def run(self, panel, job, clear=True):
-        """job(log, progress) in a thread; errors are shown and raise Cancel."""
+    async def run(self, panel, job, clear=True, sync=True):
+        """job(log, progress) in a thread; errors are shown and raise Cancel.
+        sync: first the shared copy of the settings on the main router
+        (settingsync); a newer copy from the computer stops the job."""
         if self.busy:
             await self.info("صبر کنید", "یک کار دیگر در حال اجراست.")
             raise Cancel()
         self.busy = True
         panel.start(clear)
         try:
+            if sync and not await self._sync_before(panel):
+                raise Cancel()
             return await asyncio.to_thread(job, panel.tlog, panel.tprogress)
         except Cancel:
             raise
@@ -438,6 +448,57 @@ class App:
         finally:
             self.busy = False
             panel.stop()
+
+    # ------------------------------------------------------------ settings sync with the computer
+
+    async def _sync_before(self, panel, force=False):
+        """False when the job must not run now (settings replaced or a conflict)."""
+        def work():
+            try:
+                return ss.sync(self.settings, log=panel.tlog, force=force)
+            except ss.SyncConflict as c:
+                return c
+            except Exception as e:   # noqa: BLE001 - offline router ...: this phone's copy
+                panel.tlog("⚠ همگام‌سازی تنظیمات با روتر اصلی انجام نشد (%s)؛ با تنظیمات همین گوشی ادامه می‌دهم."
+                           % str(e)[:200])
+                return None
+        res = await asyncio.to_thread(work)
+        if isinstance(res, ss.SyncConflict):
+            await self.sync_conflict(res, panel)
+            return False
+        if res == "pulled":
+            self.refresh_all()
+            if not force:
+                await self.info("تنظیمات تازه", "تنظیمات تازه‌تری از کامپیوتر روی روتر اصلی بود و دریافت شد.\n"
+                                                "صفحه‌ها به‌روز شد؛ لطفاً همان کار را دوباره بزنید.")
+            return False
+        return True
+
+    async def sync_conflict(self, conflict, panel):
+        other = conflict.remote.get("device_name") or "دستگاه دیگر"
+        pick = await self.choose(
+            "همگام‌سازی تنظیمات",
+            "تنظیمات این گوشی و %s (%s) هر دو تغییر کرده‌اند:\n\n%s\n\nکدام نسخه بماند؟ نسخه‌ی کنار "
+            "گذاشته‌شده روی گوشی نگه داشته می‌شود." % (other, conflict.remote.get("time", ""), conflict.summary),
+            [("remote", "نسخه‌ی %s" % other), ("local", "نسخه‌ی این گوشی")])
+        if pick is None:
+            return
+        await asyncio.to_thread(ss.resolve_now, self.settings, conflict, pick == "remote", panel.tlog)
+        self.refresh_all()
+        await self.info("همگام‌سازی تنظیمات", "انجام شد؛ حالا کار را دوباره بزنید.")
+
+    async def sync_at_start(self):
+        await asyncio.sleep(2)
+        try:
+            log = lambda *_: None   # noqa: E731
+            res = await asyncio.to_thread(ss.sync, self.settings, None, log, True)
+        except ss.SyncConflict as c:
+            await self.sync_conflict(c, _NullPanel())
+            return
+        except Exception:   # noqa: BLE001 - offline: the next job tries again
+            return
+        if res == "pulled":
+            self.refresh_all()
 
     def guard(self, fn):
         """An async click handler that ends quietly on Cancel."""
@@ -624,7 +685,9 @@ class App:
                           for ic, sel, label in NAV])
         p.add(ft.Column([header, self.body], spacing=0, expand=True))
         self.select(0)
+        ss.install_hook()                 # every save goes to the shared copy on the main router
         p.run_task(self._quiet_features)
+        p.run_task(self.sync_at_start)
 
     def select(self, i):
         self.current = self.pages[i]
@@ -2039,7 +2102,8 @@ class MonitorPage:
         routers = list(self.app.settings.routers)
         if not routers:
             return await self.app.info("وضعیت", "اول در «سرورها» سرورها را تعریف کنید.")
-        self.status = await self.app.run(self.panel, lambda log, progress: monitor.poll(routers, connector_for))
+        self.status = await self.app.run(self.panel, lambda log, progress: monitor.poll(routers, connector_for),
+                                             sync=False)
         self.fill()
 
     def fill(self):
