@@ -162,10 +162,16 @@ def make_patches(ws, build, log=print, only_current=False):
     # the version users have now comes first: it was last in the list and, with
     # APK_HISTORY older ones kept, never got a patch (1.0.139 -> 146 was full size)
     history = sorted(apk_history(ws), key=lambda h: (h[0] != -1, -h[0]))
+    limit = APK_HISTORY
     if only_current:
+        # a tester may have any of the last test builds (one installed 1.0.160,
+        # 162 came and went, and 163 was the full 79 MB), or the public one
         history = [h for h in history if h[0] == -1]
+        betas = beta_history(ws)
         if os.path.isfile(ws.path(BETA_APK)):
-            history.insert(0, (-2, ws.path(BETA_APK)))
+            betas.insert(0, (-2, ws.path(BETA_APK)))
+        history = betas + history
+        limit = BETA_HISTORY + 2
     for _, path in history:
         try:
             with open(path, "rb") as f:
@@ -187,8 +193,21 @@ def make_patches(ws, build, log=print, only_current=False):
             continue
         if len(patch) <= PATCH_MAX_SHARE * len(build.apk):
             out[old_sha] = patch
-        if len(out) >= APK_HISTORY:
+        if len(out) >= limit:
             break
+    return out
+
+
+def beta_history(ws):
+    """[(version_code, path)] of earlier test builds kept, newest first."""
+    d = ws.path(BETA_OLD)
+    out = []
+    if os.path.isdir(d):
+        for n in os.listdir(d):
+            m = re.fullmatch(r"beta-(\d+)\.apk", n)
+            if m:
+                out.append((int(m.group(1)), os.path.join(d, n)))
+    out.sort(reverse=True)
     return out
 
 
@@ -209,6 +228,8 @@ def router_urls(cfg, path):
 
 
 BETA_APK, BETA_PATCHES, BETA_WIN = "beta.apk", "patches-beta", "beta-win.exe"
+BETA_OLD = "apks-beta"   # earlier test builds: testers may have skipped one
+BETA_HISTORY = 3
 
 
 def patch_name(from_sha):
@@ -569,6 +590,16 @@ def save_local(ws, cfg, envelope, build, patches=None, beta=False):
     """Called only after the router accepted the release. beta: build is the
     test build (beta.apk; the public app.apk and its history stay)."""
     if beta:
+        if os.path.isfile(ws.path(BETA_APK)):
+            try:
+                old_code = int(ws.load_config().get("app_update_beta", {}).get("version_code", 0))
+            except (ReleaseError, OSError, ValueError):
+                old_code = 0
+            if old_code and old_code != build.version_code:
+                os.makedirs(ws.path(BETA_OLD), exist_ok=True)
+                shutil.copyfile(ws.path(BETA_APK), os.path.join(ws.path(BETA_OLD), "beta-%d.apk" % old_code))
+                for _, path in beta_history(ws)[BETA_HISTORY:]:
+                    os.remove(path)
         with open(ws.path(BETA_APK), "wb") as f:
             f.write(build.apk)
         _write_patches(ws.path(BETA_PATCHES), patches or {})
@@ -599,7 +630,7 @@ def save_local(ws, cfg, envelope, build, patches=None, beta=False):
         _write_patches(ws.path("patches"), patches)
     # test builds no longer listed: their files go
     if not cfg.get("app_update_beta"):
-        for name in (BETA_APK, BETA_PATCHES):
+        for name in (BETA_APK, BETA_PATCHES, BETA_OLD):
             p = ws.path(name)
             if os.path.isdir(p):
                 shutil.rmtree(p, ignore_errors=True)

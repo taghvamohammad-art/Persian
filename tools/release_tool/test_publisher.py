@@ -253,6 +253,29 @@ class ReleaseFlow(unittest.TestCase):
         with open(self.srv_cfg["app_apk_file"], "rb") as f:
             self.assertEqual(f.read(), beta_apk)
 
+    def test_patches_from_skipped_test_builds(self):
+        """A tester on 1.0.17 when 19 comes (18 came and went): a patch from 17 too."""
+        import apkdelta
+        q = lambda *_: None
+        pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
+        betas = {c: b"PK" + os.urandom(3000) for c in (17, 18, 19, 20, 21)}
+        real = apkdelta.make_best_patch
+        apkdelta.make_best_patch = lambda old, new, log=None: b"P" + hashlib.sha256(old).digest()
+        try:
+            for c in (17, 18, 19):
+                pb.release(self.ws, pb.Build(betas[c], c, "b"), c, "", "", log=q, testers=["mohammad"])
+            self.assertEqual([c for c, _ in pb.beta_history(self.ws)], [18, 17])
+            out = pb.make_patches(self.ws, pb.Build(betas[20], 20, "b"), q, only_current=True)
+            want = {hashlib.sha256(b).hexdigest() for b in (betas[17], betas[18], betas[19], self.apk)}
+            self.assertEqual(set(out), want)
+            for c in (20, 21):
+                pb.release(self.ws, pb.Build(betas[c], c, "b"), c, "", "", log=q, testers=["mohammad"])
+            self.assertEqual([c for c, _ in pb.beta_history(self.ws)], [20, 19, 18])   # 3 kept
+        finally:
+            apkdelta.make_best_patch = real
+        pb.promote_beta(self.ws, log=q)
+        self.assertFalse(os.path.exists(self.ws.path(pb.BETA_OLD)))
+
     def test_router_gets_only_what_it_lacks(self):
         q = lambda *_: None
         pb.release(self.ws, pb.read_build(self.zip_path), 16, "", "", log=q)
