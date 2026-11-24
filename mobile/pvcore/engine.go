@@ -273,11 +273,18 @@ func getThrough(port int, timeout time.Duration) (int, error) {
 // ---------------------------------------------------------------- probing
 
 func probeXray(serverJSON, kind, user, pass string, timeout time.Duration) (int, error) {
+	if kind == "vless-xhttp-cdn" {
+		return probeCdn(serverJSON, user, pass, timeout)
+	}
+	return probeXrayWith(serverJSON, kind, user, pass, timeout, nil)
+}
+
+func probeXrayWith(serverJSON, kind, user, pass string, timeout time.Duration, mod func(*Protocol)) (int, error) {
 	port, err := freePort()
 	if err != nil {
 		return -1, err
 	}
-	cfg, err := XrayConfig(serverJSON, kind, user, pass, port)
+	cfg, err := xrayConfigWith(serverJSON, kind, user, pass, port, mod)
 	if err != nil {
 		return -1, err
 	}

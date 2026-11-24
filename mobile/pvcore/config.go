@@ -42,7 +42,9 @@ type Protocol struct {
 	ECHDNS     []string `json:"ech_dns"`
 	Domain     string   `json:"domain"`
 	Resolvers  []string `json:"resolvers"`
-	Plain      bool     `json:"plain"` // tests only: straight to the server, no TLS/ECH, no public resolvers
+	// set by the CDN probe for one test (not in the config)
+	variant *cdnVariant
+	Plain   bool `json:"plain"` // tests only: straight to the server, no TLS/ECH, no public resolvers
 }
 
 // Server is a Linux server of the app config.
@@ -157,21 +159,29 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 				"method": p.Method, "password": p.ServerKey + ":" + SSKey(user, pass)}}}}, nil
 	case "vless-xhttp-cdn":
 		addr, port := p.Host, p.Port
+		v := cdnVariantOf(p.Host)
+		if p.variant != nil {
+			v = *p.variant
+		}
 		if len(p.IPs) > 0 {
-			addr = p.IPs[0] // Cloudflare's address: no DNS lookup that could be tampered with
+			addr = p.IPs[v.ip%len(p.IPs)] // Cloudflare's address: no DNS lookup that could be tampered with
 		}
 		stream := map[string]any{"network": "xhttp",
 			"xhttpSettings": map[string]any{"path": p.Path, "host": p.Host, "mode": "packet-up"}}
 		if p.Plain {
 			addr = s.Host
 		} else {
-			ech, err := echConfig(p)
-			if err != nil {
-				return nil, err
+			tlsSet := map[string]any{"serverName": p.Host, "fingerprint": "chrome",
+				"alpn": []string{"h2", "http/1.1"}}
+			if !v.noECH {
+				ech, err := echConfig(p)
+				if err != nil {
+					return nil, err
+				}
+				tlsSet["echConfigList"] = ech
 			}
 			stream["security"] = "tls"
-			stream["tlsSettings"] = map[string]any{"serverName": p.Host, "fingerprint": "chrome",
-				"alpn": []string{"h2", "http/1.1"}, "echConfigList": ech}
+			stream["tlsSettings"] = tlsSet
 		}
 		return map[string]any{"tag": "proxy", "protocol": "vless",
 			"settings": map[string]any{"vnext": []any{map[string]any{"address": addr, "port": port,
@@ -228,6 +238,10 @@ func baseConfig(socksPort int, outs []any, rules []any, via map[string]any) map[
 // XrayConfig is the client config for one protocol of a server, with a SOCKS
 // inbound on 127.0.0.1:socksPort that the TUN is forwarded to.
 func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, error) {
+	return xrayConfigWith(serverJSON, kind, user, pass, socksPort, nil)
+}
+
+func xrayConfigWith(serverJSON, kind, user, pass string, socksPort int, mod func(*Protocol)) (string, error) {
 	s, err := parseServer(serverJSON)
 	if err != nil {
 		return "", err
@@ -235,6 +249,9 @@ func XrayConfig(serverJSON, kind, user, pass string, socksPort int) (string, err
 	p, err := s.protocol(kind)
 	if err != nil {
 		return "", err
+	}
+	if mod != nil {
+		mod(p)
 	}
 	out, err := outbound(s, p, user, pass)
 	if err != nil {

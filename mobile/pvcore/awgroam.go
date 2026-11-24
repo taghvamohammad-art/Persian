@@ -2,11 +2,11 @@ package pvcore
 
 import (
 	"fmt"
-	"sync"
 	"math/rand"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/device"
