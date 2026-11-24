@@ -28,6 +28,7 @@ private const val PROBE_TIMEOUT_MS = 7_000L
 private const val CHECK_EVERY_MS = 25_000L
 private const val CHECK_TIMEOUT_MS = 10_000L
 private const val CHECK_FAILURES = 2          // in a row before switching
+private const val FAILURE_WINDOW_MS = 60 * 60_000L  // breakdowns older than this are forgotten
 private const val XRAY_MTU = 1500
 private const val AWG_MTU = 1280
 private const val XRAY_ADDRESS = "172.19.0.1"
@@ -110,9 +111,11 @@ internal class LinuxTunnel(
     /**
      * The Xray protocols that work go together into one "pool": Xray keeps
      * measuring them and moves new connections to the fastest, so a slow or
-     * blocked protocol is left without the tunnel going down. AmneziaWG has
-     * its own tunnel and is only the fallback (on some networks its rekey
-     * handshake is dropped after a few minutes, so data stops); the DNS tunnel only as the last resort.
+     * blocked protocol is left without the tunnel going down. The pool and
+     * AmneziaWG (its own tunnel) are put in order by speed, where each time
+     * one of them broke down in the last hour on this phone counts as one
+     * more of its measured time: the fast and steady one first. The DNS
+     * tunnel only as the last resort.
      */
     private fun plan(all: List<Choice>): List<Choice> {
         val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
@@ -122,16 +125,35 @@ internal class LinuxTunnel(
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
-        val out = mutableListOf<Choice>()
-        if (pool != null) {
-            out += pool
-            awg?.let { out += it }
-        } else {
-            awg?.let { out += it }
-            pool?.let { out += it }
+        val out = listOfNotNull(pool, awg).sortedBy { score(it) }.toMutableList()
+        if (out.size == 2) {
+            service.logWriter?.report("plan: " + out.joinToString(" < ") {
+                "${it.kind} ${it.ms}ms×${1 + recentFailures(group(it))}"
+            })
         }
         out += all.filter { it.kind == "vless-dns" }
         return out
+    }
+
+    private fun group(c: Choice) = if (c.kind == "amneziawg") "amneziawg" else "pool"
+
+    private fun score(c: Choice): Long = c.ms * (1 + recentFailures(group(c)))
+
+    private fun failureKey(group: String) = "pv_failures_$group"
+
+    private fun recentFailures(group: String): Int = failureTimes(group).size
+
+    private fun failureTimes(group: String): List<Long> {
+        val now = System.currentTimeMillis()
+        return prefs.getString(failureKey(group), "").orEmpty().split(",")
+            .mapNotNull { it.toLongOrNull() }.filter { now - it < FAILURE_WINDOW_MS }
+    }
+
+    private fun noteFailure(c: Choice?) {
+        c ?: return
+        val g = group(c)
+        val times = failureTimes(g) + System.currentTimeMillis()
+        prefs.edit().putString(failureKey(g), times.takeLast(20).joinToString(",")).apply()
     }
 
     private suspend fun connect(c: Choice): Boolean {
@@ -272,6 +294,7 @@ internal class LinuxTunnel(
                 service.logWriter?.report("linux tunnel: $reason, switching")
                 val previous = current
                 if (reason == "check failed") {
+                    noteFailure(currentChoice)
                     // Probe first while the tunnel keeps carrying traffic: a short
                     // hiccup on a lossy network used to tear the tunnel down and
                     // build the very same one again, cutting every connection

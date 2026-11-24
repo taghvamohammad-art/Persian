@@ -409,7 +409,10 @@ func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error)
 	case !big:
 		return -1, fmt.Errorf("handshake ok but large packets are lost (MTU %d)", awgProbeBig)
 	}
-	return shook, nil
+	// handshake plus a round trip through the tunnel: comparable with the
+	// Xray protocols' time, which is a whole request (a handshake alone is
+	// one round trip and made AmneziaWG look three times faster than it is)
+	return int(time.Since(start).Milliseconds()), nil
 }
 
 // ---------------------------------------------------------------- data probe

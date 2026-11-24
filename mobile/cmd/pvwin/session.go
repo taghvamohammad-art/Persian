@@ -130,16 +130,19 @@ func plan(all []choice, noAwg bool) [][]choice {
 			}
 		}
 	}
+	// the faster of the two, counting how often each broke lately on this
+	// computer (a tunnel that drops every few minutes is not fast)
 	var out [][]choice
-	if len(pool) > 0 {
-		out = append(out, pool)
+	poolFirst := awg == nil || (len(pool) > 0 && score(pool[0].ms, "pool") <= score(awg.ms, "amneziawg"))
+	if poolFirst {
+		if len(pool) > 0 {
+			out = append(out, pool)
+		}
 		if awg != nil {
 			out = append(out, []choice{*awg})
 		}
 	} else {
-		if awg != nil {
-			out = append(out, []choice{*awg})
-		}
+		out = append(out, []choice{*awg})
 		if len(pool) > 0 {
 			out = append(out, pool)
 		}
@@ -148,6 +151,47 @@ func plan(all []choice, noAwg bool) [][]choice {
 		out = append(out, dns) // the DNS tunnel only when nothing else works
 	}
 	return out
+}
+
+// ---------------------------------------------------------------- stability
+
+// failures of each kind ("pool" or "amneziawg") in the last hour make it
+// count as slower: each one doubles, triples... its measured time
+var (
+	failMu sync.Mutex
+	fails  = map[string][]time.Time{}
+)
+
+const failWindow = time.Hour
+
+func kindOf(attempt []choice) string {
+	if len(attempt) > 0 && attempt[0].kind == "amneziawg" {
+		return "amneziawg"
+	}
+	return "pool"
+}
+
+func noteFailure(kind string) {
+	failMu.Lock()
+	defer failMu.Unlock()
+	fails[kind] = append(recent(fails[kind]), time.Now())
+}
+
+func recent(ts []time.Time) []time.Time {
+	var out []time.Time
+	for _, t := range ts {
+		if time.Since(t) < failWindow {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func score(ms int, kind string) int {
+	failMu.Lock()
+	n := len(recent(fails[kind]))
+	failMu.Unlock()
+	return ms * (1 + n)
 }
 
 func start(chosen []choice, user, pass string, bypass []string) ([]string, error) {
@@ -198,6 +242,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		var names []string
 		lastErr := "no protocol works"
 		up := false
+		kind := ""
 		for _, attempt := range plan(probeAll(servers, user, pass), len(bypass) > 0) {
 			select {
 			case <-stop:
@@ -206,7 +251,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			}
 			var err error
 			if names, err = start(attempt, user, pass, bypass); err == nil {
-				up = true
+				up, kind = true, kindOf(attempt)
 				break
 			}
 			lastErr = err.Error()
@@ -248,6 +293,9 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			} else {
 				failures = 0
 			}
+		}
+		if !sstp {
+			noteFailure(kind)
 		}
 		pvcore.Stop()
 		stopSstp()
