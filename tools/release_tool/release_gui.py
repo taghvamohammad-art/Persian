@@ -1869,15 +1869,10 @@ class NewServerPage(RouterPage):
         if tgt.get("role") == "linux":
             return self.fail("برای سرور لینوکس گزینه‌ی «سرور لینوکس» را بزنید؛ این گزینه برای روتر میکروتیک است.")
         if QMessageBox.question(self, "تأیید",
-                "روی میکروتیک «%s» یک کانتینر Xray ساخته می‌شود:
-Reality، XHTTP، Hysteria2 (Salamander) و "
-                "Shadowsocks، با هماهنگی یوزر منیجر.
-
-چند قانون dst-nat (با توضیح pv-xray) اضافه می‌شود و "
-                "تنظیمات فعلی روتر (GRE، SSTP و …) دست نمی‌خورد.
-روی %s هم دسترسی این سرور (RADIUS و REST) "
-                "ثبت می‌شود.
-ادامه می‌دهید؟" % (router_label(tgt), "، ".join(router_label(r) for r in ums))) \
+                "روی میکروتیک «%s» یک کانتینر Xray ساخته می‌شود:\nReality، XHTTP، Hysteria2 (Salamander) و "
+                "Shadowsocks، با هماهنگی یوزر منیجر.\n\nچند قانون dst-nat (با توضیح pv-xray) اضافه می‌شود و "
+                "تنظیمات فعلی روتر (GRE، SSTP و …) دست نمی‌خورد.\nروی %s هم دسترسی این سرور (RADIUS و REST) "
+                "ثبت می‌شود.\nادامه می‌دهید؟" % (router_label(tgt), "، ".join(router_label(r) for r in ums))) \
                 != QMessageBox.Yes:
             return
         import mtxray
@@ -1908,8 +1903,7 @@ Reality، XHTTP، Hysteria2 (Salamander) و "
                                      % "، ".join(x["type"] for x in entry["protocols"]))
             self.btn_cfg.allowed = True
             self.btn_cfg.setEnabled(True)
-            QMessageBox.information(self, "انجام شد", "سرور Xray روی میکروتیک آماده است.
-حالا «%s» را بزنید تا "
+            QMessageBox.information(self, "انجام شد", "سرور Xray روی میکروتیک آماده است.\nحالا «%s» را بزنید تا "
                                     "اپ‌ها آن را بشناسند." % self.btn_cfg.text())
         self.run(job, done)
 
