@@ -73,8 +73,9 @@ def used_ports(r):
 
 
 def pick_ports(p, used):
-    """The usual ports where free on this router, else random high ones;
-    kept across re-runs (p is saved)."""
+    """The usual ports where free on this router, else random high ones.
+    Ports chosen before (p is saved) stay: the apps already know them, and
+    the router's own dst-nat to the container lists them as "used"."""
     def free(proto, port, taken):
         return (proto, port) not in used and (proto, port) not in taken
 
@@ -82,13 +83,16 @@ def pick_ports(p, used):
     for key, proto, default in (("vision_port", "tcp", 443), ("xhttp_port", "tcp", 8443),
                                 ("hy2_port", "udp", 443), ("ss_port", "tcp", None),
                                 ("status_port", "tcp", None)):
-        port = p.get(key) or default
         protos = (proto, "udp") if key == "ss_port" else (proto,)
-        while not port or not all(free(x, port, taken) for x in protos):
-            port = 20000 + secrets.randbelow(40000)
+        port = p.get(key)
+        if not (port and p.get("box_ports_chosen") and all((x, port) not in taken for x in protos)):
+            port = port or default
+            while not port or not all(free(x, port, taken) for x in protos):
+                port = 20000 + secrets.randbelow(40000)
         p[key] = port
         for x in protos:
             taken.add((x, port))
+    p["box_ports_chosen"] = True
     return p
 
 

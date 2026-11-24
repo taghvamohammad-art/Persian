@@ -31,8 +31,12 @@ class Ports(unittest.TestCase):
         ports = [("tcp", p["vision_port"]), ("tcp", p["xhttp_port"]), ("tcp", p["ss_port"]),
                  ("tcp", p["status_port"])]
         self.assertEqual(len(set(ports)), 4)
-        # kept on a re-run
-        self.assertEqual(mtxray.pick_ports(dict(p), used), p)
+        # kept on a re-run, even though the router's dst-nat now "uses" them
+        used2 = used | {("tcp", p["vision_port"]), ("udp", p["hy2_port"])}
+        self.assertEqual(mtxray.pick_ports(dict(p), used2), p)
+        # ports given for a first run (tests) are still checked
+        q = mtxray.pick_ports({"vision_port": 443}, used)
+        self.assertNotEqual(q["vision_port"], 443)
 
     def test_template_and_agent(self):
         import linux
