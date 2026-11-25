@@ -166,6 +166,12 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 		if len(p.IPs) > 0 {
 			addr = p.IPs[v.ip%len(p.IPs)] // Cloudflare's address: no DNS lookup that could be tampered with
 		}
+		switch {
+		case v.addr == "@dns":
+			addr = p.Host
+		case v.addr != "":
+			addr = v.addr
+		}
 		stream := map[string]any{"network": "xhttp",
 			"xhttpSettings": map[string]any{"path": p.Path, "host": p.Host, "mode": "packet-up"}}
 		if p.Plain {

@@ -9,12 +9,16 @@ import (
 
 // The CDN route can fail on a network for reasons of its own: ECH (its
 // outer name is the same for every Cloudflare site and some networks slow
-// or drop it), or one Cloudflare address being blocked. The probe tries a
-// few ways at once and the one that works is used from then on (for this
-// run of the app); the first is the default.
+// or drop it), or the Cloudflare addresses in the config being filtered
+// there (the site itself still opens in a browser, through the addresses
+// the phone's DNS gives). Every Cloudflare address serves every site behind
+// it, so the probe also tries the name through DNS and a few addresses of
+// Cloudflare's that are often left open ("clean IPs"); the way that works
+// is used from then on (for this run of the app). The first is the default.
 type cdnVariant struct {
 	noECH bool
-	ip    int // index into the protocol's Cloudflare addresses
+	ip    int    // index into the protocol's Cloudflare addresses
+	addr  string // instead: "@dns" (the name, the phone's DNS) or an address
 }
 
 func (v cdnVariant) String() string {
@@ -22,10 +26,26 @@ func (v cdnVariant) String() string {
 	if v.noECH {
 		ech = "SNI"
 	}
+	switch {
+	case v.addr == "@dns":
+		return ech + "/dns"
+	case v.addr != "":
+		return ech + "/" + v.addr
+	}
 	return fmt.Sprintf("%s/ip%d", ech, v.ip+1)
 }
 
-var cdnVariants = []cdnVariant{{false, 0}, {true, 0}, {false, 1}, {true, 1}}
+// cleanIPs: Cloudflare addresses often reachable when others are filtered.
+var cleanIPs = []string{"188.114.96.3", "188.114.97.3"}
+
+var cdnVariants = func() []cdnVariant {
+	// at most six Xray instances at once on a phone
+	vs := []cdnVariant{{false, 0, ""}, {true, 0, ""}, {true, 1, ""}, {true, 0, "@dns"}}
+	for _, ip := range cleanIPs {
+		vs = append(vs, cdnVariant{true, 0, ip})
+	}
+	return vs
+}()
 
 var (
 	cdnMu     sync.Mutex
@@ -56,9 +76,12 @@ func probeCdn(serverJSON, user, pass string, timeout time.Duration) (int, error)
 	if err != nil {
 		return -1, err
 	}
-	vs := cdnVariants
-	if len(p.IPs) < 2 {
-		vs = vs[:2]
+	var vs []cdnVariant
+	for _, v := range cdnVariants {
+		if v.addr == "" && v.ip >= max(1, len(p.IPs)) {
+			continue
+		}
+		vs = append(vs, v)
 	}
 	if p.Plain {
 		vs = vs[:1]
