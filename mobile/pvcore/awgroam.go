@@ -226,7 +226,7 @@ func (r *awgRoam) run(dev *device.Device) {
 				}
 			}
 			rescues = recent
-			shook := time.Now().Add(-age).Truncate(time.Second)
+			shook := time.Now().Add(-age).Round(time.Second)
 			if len(rescues) >= 2 && age >= awgEarlyHop && !shook.Equal(earlyFor) && len(r.ports) > 2 {
 				earlyFor = shook
 				i := r.next(0) // a hop port, not the main one
