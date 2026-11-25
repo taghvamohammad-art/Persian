@@ -258,17 +258,25 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(srv.accounting[-1][1], pa.STOP)
         self.assertEqual(agent.state["sessions"], {})
 
-    def test_one_session_per_protocol(self):
+    def test_one_session_per_user(self):
+        """The app spreads a connection over several protocols (the pool); User
+        Manager ends sessions over the shared-users limit and their traffic is
+        lost, so all of a user's protocols go into one session."""
         agent, srv = self.make({"25g00001": "abc123"})
         pa.fetch_users = lambda routers: ({"25g00001": "abc123"}, "um1")
         agent.sync_users()
-        agent.xray.pending = {"25g00001@vless-vision": [10, 100], "25g00001@hy2": [5, 50]}
+        agent.xray.pending = {"25g00001@vless-vision": [10, 100], "25g00001@hy2": [5, 50000]}
         agent.account(agent.collect(), now=1000)
         self.assertEqual(len(srv.auth_seen), 1)                    # asked once for the user
-        self.assertEqual(set(agent.state["sessions"]), {"25g00001|vless-vision", "25g00001|hy2"})
-        self.assertEqual({p for p in srv.ports}, {"vless-vision", "hy2"})
+        self.assertEqual(set(agent.state["sessions"]), {"25g00001"})
+        self.assertEqual({p for p in srv.ports}, {"hy2"})          # the protocol with most traffic
         sids = {s for u, k, s, i, o in srv.accounting}
-        self.assertEqual(len(sids), 2)
+        self.assertEqual(len(sids), 1)
+        self.assertEqual(srv.accounting[-1][3:], (15, 50100))       # both protocols counted
+        agent.xray.pending = {"25g00001@vless-xhttp": [1, 2], "25g00001@ss": [3, 4]}
+        agent.account(agent.collect(), now=1060)
+        self.assertEqual(srv.accounting[-1][3:], (19, 50106))
+        self.assertEqual(len({s for u, k, s, i, o in srv.accounting}), 1)
         self.assertEqual(pa.split_email("25G00001@vless-cdn"), ("25g00001", "vless-cdn"))
         self.assertEqual(pa.split_email("plain"), ("plain", "xray"))
         clients = pa.xray_clients("vless", {"25G00001": "abc123"}, "vless-xhttp")

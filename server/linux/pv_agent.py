@@ -592,8 +592,20 @@ class Agent:
         pending = self.state.setdefault("pending", {})   # key -> [in, out, last]: below MIN_START
         for key in [k for k, p in pending.items() if now - p[2] > IDLE_STOP]:
             del pending[key]                                # a probe and nothing after it
+        # One accounting session per user, whatever protocols carry the traffic:
+        # the app spreads one connection over several (the pool), and User
+        # Manager allows only "shared users" sessions at a time - the others it
+        # ends (um-simultaneous-sessions) and their traffic was never counted.
+        per_user = {}
         for key, (up, down) in traffic.items():
             user, _, proto = key.partition("|")
+            u = per_user.setdefault(user, [0, 0, {}])
+            u[0] += up
+            u[1] += down
+            u[2][proto] = u[2].get(proto, 0) + up + down
+        for user, (up, down, by_proto) in per_user.items():
+            key = user
+            proto = max(by_proto, key=by_proto.get)
             name = names.get(user, user)
             s = sessions.get(key)
             if s is None:
@@ -606,10 +618,7 @@ class Agent:
                 up, down = p[0], p[1]
                 del pending[key]
                 password = self.users.get(name)
-                # one Access-Request per user: a second protocol of a user already
-                # in must not be turned away by User Manager's shared-users limit
-                already = any(k.partition("|")[0] == user for k in sessions)
-                if password is not None and not already:
+                if password is not None:
                     try:
                         if not self.radius.authorize(name, password):
                             self.block(name)
