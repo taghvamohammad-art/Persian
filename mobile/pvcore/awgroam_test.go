@@ -1,6 +1,9 @@
 package pvcore
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAwgPortList(t *testing.T) {
 	if got := awgPortList(5000, nil); len(got) != 1 || got[0] != 5000 {
@@ -40,5 +43,24 @@ func TestServerEntryHop(t *testing.T) {
 	js := `{"name":"a","host":"1.2.3.4","type":"linux","protocols":[{"type":"amneziawg","port":5000,"hop":[6000,6001]}]}`
 	if got := awgPortsOf(js); len(got) != 3 || got[0] != 5000 {
 		t.Fatalf("ports: %v", got)
+	}
+}
+
+func TestAwgStartPort(t *testing.T) {
+	uapi := "private_key=aa\npublic_key=bb\nendpoint=1.2.3.4:5000\nallowed_ip=0.0.0.0/0\n"
+	if awgHostOf(uapi) != "1.2.3.4" {
+		t.Fatal("host")
+	}
+	if got := withAwgPort(uapi, "1.2.3.4", 6001); !strings.Contains(got, "endpoint=1.2.3.4:6001\nallowed_ip") {
+		t.Fatalf("port: %q", got)
+	}
+	setAwgPort("1.2.3.4", 6001)
+	defer setAwgPort("1.2.3.4", 0)
+	if !strings.Contains(awgStartUAPI(uapi), "endpoint=1.2.3.4:6001") {
+		t.Fatal("start not on the probed port")
+	}
+	r := newAwgRoam(uapi, awgPortList(5000, []int{6000, 6003}))
+	if r.ports[r.cur] != 6001 {
+		t.Fatalf("roam starts at %d", r.ports[r.cur])
 	}
 }

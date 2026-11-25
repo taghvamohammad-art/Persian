@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -184,8 +185,18 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 	return awgOnLocked(tdev, uapi, awgPortsOf(serverJSON))
 }
 
+// awgStartUAPI: the UAPI with the port the last probe found working.
+func awgStartUAPI(uapi string) string {
+	host := awgHostOf(uapi)
+	if port := awgPortFor(host); port > 0 {
+		return withAwgPort(uapi, host, port)
+	}
+	return uapi
+}
+
 // awgOnLocked runs AmneziaWG on a TUN (which it closes on failure).
 func awgOnLocked(tdev tun.Device, uapi string, ports []int) error {
+	uapi = awgStartUAPI(uapi)
 	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()
@@ -360,11 +371,58 @@ func (t *nullTun) Close() error {
 	return nil
 }
 
+// probeAwg tries the main port and two of the server's hop ports at once (a
+// network may have cut the flow to one port only) and remembers the one that
+// answered first, for the connection that follows.
 func probeAwg(serverJSON, user, pass string, timeout time.Duration) (int, error) {
 	uapi, err := AwgUAPI(serverJSON, user, pass)
 	if err != nil {
 		return -1, err
 	}
+	ports := awgPortsOf(serverJSON)
+	host := awgHostOf(uapi)
+	if len(ports) < 2 || host == "" {
+		return probeAwgAt(uapi, user, timeout)
+	}
+	try := []int{ports[0]}
+	for _, i := range rand.Perm(len(ports) - 1)[:min(2, len(ports)-1)] {
+		try = append(try, ports[1+i])
+	}
+	type res struct {
+		port, ms int
+		err      error
+	}
+	out := make(chan res, len(try))
+	for _, port := range try {
+		port := port
+		go func() {
+			ms, err := probeAwgAt(withAwgPort(uapi, host, port), user, timeout)
+			out <- res{port, ms, err}
+		}()
+	}
+	var first error
+	best := res{ms: -1}
+	for range try {
+		r := <-out
+		if r.err != nil {
+			if r.port == ports[0] || first == nil {
+				first = r.err
+			}
+			continue
+		}
+		if best.ms < 0 || r.ms < best.ms {
+			best = r
+		}
+	}
+	if best.ms < 0 {
+		setAwgPort(host, 0)
+		return -1, first
+	}
+	setAwgPort(host, best.port)
+	return best.ms, nil
+}
+
+func probeAwgAt(uapi, user string, timeout time.Duration) (int, error) {
 	src, err := netip.ParseAddr(AwgAddress(user))
 	if err != nil {
 		return -1, err

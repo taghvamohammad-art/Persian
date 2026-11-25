@@ -53,6 +53,45 @@ func roamState() (int, []string) {
 	return roamPort, append([]string(nil), roamLog...)
 }
 
+// the port the last probe of each server found answering (0: the main one)
+var (
+	awgPortMu sync.Mutex
+	awgPorts  = map[string]int{}
+)
+
+func setAwgPort(host string, port int) {
+	awgPortMu.Lock()
+	awgPorts[host] = port
+	awgPortMu.Unlock()
+}
+
+func awgPortFor(host string) int {
+	awgPortMu.Lock()
+	defer awgPortMu.Unlock()
+	return awgPorts[host]
+}
+
+func awgHostOf(uapi string) string {
+	for _, line := range strings.Split(uapi, "\n") {
+		if v, ok := strings.CutPrefix(line, "endpoint="); ok {
+			if h, _, err := net.SplitHostPort(v); err == nil {
+				return h
+			}
+		}
+	}
+	return ""
+}
+
+func withAwgPort(uapi, host string, port int) string {
+	lines := strings.Split(uapi, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "endpoint=") {
+			lines[i] = "endpoint=" + net.JoinHostPort(host, strconv.Itoa(port))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 type awgRoam struct {
 	pub   string // peer public key (hex), as in the UAPI
 	host  string
@@ -109,6 +148,14 @@ func newAwgRoam(uapi string, ports []int) *awgRoam {
 	if r.pub == "" || r.host == "" {
 		return nil
 	}
+	if port := awgPortFor(r.host); port > 0 {
+		for i, x := range r.ports {
+			if x == port {
+				r.cur = i
+			}
+		}
+		roamNote(port, "")
+	}
 	return r
 }
 
@@ -134,8 +181,11 @@ func (r *awgRoam) set(dev *device.Device, i int) error {
 	return dev.IpcSet(fmt.Sprintf("listen_port=0\npublic_key=%s\nupdate_only=true\nendpoint=%s\n", r.pub, ep))
 }
 
+// awgFirstWait: how long the first handshake may take before other ports
+const awgFirstWait = 15 * time.Second
+
 func (r *awgRoam) run(dev *device.Device) {
-	tries, last := 0, time.Time{}
+	tries, last, began := 0, time.Time{}, time.Now()
 	for {
 		time.Sleep(3 * time.Second)
 		mu.Lock()
@@ -149,6 +199,9 @@ func (r *awgRoam) run(dev *device.Device) {
 			return
 		}
 		age, ok := handshakeAge(state)
+		if !ok && time.Since(began) > awgFirstWait {
+			age, ok = awgRoamAfter, true // never got through on this port
+		}
 		if !ok || age < awgRoamAfter {
 			if tries > 0 && ok {
 				roamNote(r.ports[r.cur], fmt.Sprintf("handshake ok on port %d", r.ports[r.cur]))
