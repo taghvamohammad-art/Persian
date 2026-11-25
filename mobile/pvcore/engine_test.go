@@ -18,8 +18,14 @@ func TestAwgHealth(t *testing.T) {
 	if awgHealth(state(50000, 60000)) < 0 {
 		t.Fatal("data both ways is healthy")
 	}
-	if awgHealth(state(50000, 200100)) < 0 {
+	if awgHealth(state(50000, 60200)) < 0 {
 		t.Fatal("idle (keepalives only) is healthy")
+	}
+	if awgHealth(state(50100, 200100)) >= 0 {
+		t.Fatal("140 KB sent and nothing back: the data is lost")
+	}
+	if awgHealth(state(90000, 300000)) < 0 {
+		t.Fatal("an upload with acknowledgements is healthy")
 	}
 	if awgHealth("last_handshake_time_sec=0\n") >= 0 {
 		t.Fatal("no handshake is not healthy")

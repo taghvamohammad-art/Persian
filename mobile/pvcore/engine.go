@@ -240,6 +240,11 @@ func Check(timeoutMs int) int {
 	}
 }
 
+const (
+	awgStallSent = 64 << 10 // bytes sent between two checks...
+	awgStallBack = 512      // ...with less than this back: data is lost
+)
+
 // awgHealth: a recent handshake, and replies to what was sent since the
 // last check (a filtered path can keep handshakes alive while data is lost).
 func awgHealth(state string) int {
@@ -254,9 +259,16 @@ func awgHealth(state string) int {
 		}
 	}
 	mu.Lock()
+	prx, ptx := awgRx, awgTx
 	awgRx, awgTx = rx, tx
 	mu.Unlock()
 	if sec <= 0 {
+		return -1
+	}
+	// apps sent a lot since the last check and nothing came back: the
+	// network passes the handshakes but drops the data (TCP alone would
+	// have brought acknowledgements)
+	if prx >= 0 && ptx >= 0 && rx >= prx && tx-ptx >= awgStallSent && rx-prx < awgStallBack {
 		return -1
 	}
 	age := time.Since(time.Unix(sec, 0))
