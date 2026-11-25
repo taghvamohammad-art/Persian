@@ -193,13 +193,18 @@ def setup_box(connect_box, um_routers, name, public_ip, params=None, log=print, 
     p = linux.new_params(params)
     for k in ("domain", "domain_info", "cf_token"):
         p.pop(k, None)                     # no CDN here (no web server for the domain)
+    import provision as pv
     r = connect_box()
     try:
         if not sv.has_package(r, "container"):
-            raise RouterOSError("پکیج container روی این روتر نصب نیست.")
+            log("نصب پکیج container (روتر یک بار ریبوت می‌شود؛ GRE و SSTP چند ثانیه قطع می‌شوند)…")
+            r = pv.install_packages(r, connect_box, ["container"], log)
         if not sv.device_mode_container(r):
-            raise RouterOSError("حالت کانتینر روی این روتر فعال نیست:\n/system/device-mode/update container=yes\n"
-                                "و بعد ظرف ۵ دقیقه خاموش و روشن کردن از پنل سرور.")
+            pv.request_container_mode(r, log)
+            raise RouterOSError(
+                "حالت کانتینر درخواست شد. حالا ظرف ۵ دقیقه سرور را از پنل شرکت سرور مجازی یک بار کامل "
+                "خاموش و روشن کنید (Power off / Power on یا Reset؛ ریبوت از داخل روتر قبول نمی‌شود).\n"
+                "بعد از بالا آمدن روتر، دوباره «شروع» را بزنید.")
         pick_ports(p, used_ports(r))
     finally:
         r.close()
