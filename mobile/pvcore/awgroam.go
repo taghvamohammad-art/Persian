@@ -184,8 +184,19 @@ func (r *awgRoam) set(dev *device.Device, i int) error {
 // awgFirstWait: how long the first handshake may take before other ports
 const awgFirstWait = 15 * time.Second
 
+// A network that cuts every flow after a couple of minutes: once the
+// tunnel has been rescued twice in awgCutWindow, it moves to a new port
+// before each rekey (at awgEarlyHop), so the handshake never meets a cut
+// flow and the data does not stop while the next port is searched.
+const (
+	awgCutWindow = 15 * time.Minute
+	awgEarlyHop  = 100 * time.Second
+)
+
 func (r *awgRoam) run(dev *device.Device) {
 	tries, last, began := 0, time.Time{}, time.Now()
+	var rescues []time.Time
+	var earlyFor time.Time // the handshake an early move was made for
 	for {
 		time.Sleep(3 * time.Second)
 		mu.Lock()
@@ -202,11 +213,30 @@ func (r *awgRoam) run(dev *device.Device) {
 		if !ok && time.Since(began) > awgFirstWait {
 			age, ok = awgRoamAfter, true // never got through on this port
 		}
-		if !ok || age < awgRoamAfter {
-			if tries > 0 && ok {
+		if ok && age < awgRoamAfter {
+			if tries > 0 {
 				roamNote(r.ports[r.cur], fmt.Sprintf("handshake ok on port %d", r.ports[r.cur]))
+				rescues = append(rescues, time.Now())
 			}
 			tries = 0
+			var recent []time.Time
+			for _, t := range rescues {
+				if time.Since(t) < awgCutWindow {
+					recent = append(recent, t)
+				}
+			}
+			rescues = recent
+			shook := time.Now().Add(-age).Truncate(time.Second)
+			if len(rescues) >= 2 && age >= awgEarlyHop && !shook.Equal(earlyFor) && len(r.ports) > 2 {
+				earlyFor = shook
+				i := r.next(0) // a hop port, not the main one
+				if err := r.set(dev, i); err == nil {
+					roamNote(r.ports[i], fmt.Sprintf("this network cuts flows: before the rekey, port %d", r.ports[i]))
+				}
+			}
+			continue
+		}
+		if !ok {
 			continue
 		}
 		if time.Since(last) < awgRoamEvery {
