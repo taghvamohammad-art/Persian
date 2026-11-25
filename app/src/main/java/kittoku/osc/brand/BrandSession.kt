@@ -115,9 +115,27 @@ internal object BrandSession {
         }
     }
 
-    /** The user's protocol choice: "auto", "xray" (no AmneziaWG) or "awg". */
-    internal fun protocolChoice(prefs: SharedPreferences): String =
-        prefs.getString("pv_protocol", "auto") ?: "auto"
+    /**
+     * A tester (in the test build's list): only testers may choose the
+     * protocol. Remembered for this account, so the choice stays after the
+     * test build has gone public and the list is empty.
+     */
+    internal fun isTester(context: Context, prefs: SharedPreferences): Boolean {
+        val user = username(prefs)
+        if (user.isBlank()) return false
+        val hash = testerHash(user)
+        val listed = runCatching {
+            ConfigManager.current(context).appUpdateBeta?.testers?.contains(hash) == true
+        }.getOrDefault(false)
+        if (listed && prefs.getString("pv_tester_of", null) != hash) {
+            prefs.edit().putString("pv_tester_of", hash).apply()
+        }
+        return listed || prefs.getString("pv_tester_of", null) == hash
+    }
+
+    /** The protocol choice: "auto", "xray" (no AmneziaWG) or "awg"; always "auto" for customers. */
+    internal fun protocolChoice(context: Context, prefs: SharedPreferences): String =
+        if (isTester(context, prefs)) prefs.getString("pv_protocol", "auto") ?: "auto" else "auto"
 
     internal fun setProtocolChoice(prefs: SharedPreferences, choice: String) {
         prefs.edit().putString("pv_protocol", choice).apply()

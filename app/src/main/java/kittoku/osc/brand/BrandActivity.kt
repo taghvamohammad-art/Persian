@@ -179,6 +179,8 @@ class BrandActivity : AppCompatActivity() {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.brand_menu, menu)
+        // the protocol choice is for testers (the operator), not customers
+        menu.findItem(R.id.brand_protocol)?.isVisible = BrandSession.isTester(this, prefs)
         return true
     }
 
@@ -202,7 +204,7 @@ class BrandActivity : AppCompatActivity() {
         val keys = arrayOf("auto", "xray", "awg")
         val labels = arrayOf(getString(R.string.brand_protocol_auto), getString(R.string.brand_protocol_xray),
             getString(R.string.brand_protocol_awg))
-        val current = keys.indexOf(BrandSession.protocolChoice(prefs)).coerceAtLeast(0)
+        val current = keys.indexOf(BrandSession.protocolChoice(this, prefs)).coerceAtLeast(0)
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(R.string.brand_protocol_title)
             .setSingleChoiceItems(labels, current) { dialog, which ->

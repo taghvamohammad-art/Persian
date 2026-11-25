@@ -124,7 +124,7 @@ internal class LinuxTunnel(
         val members = xray.firstOrNull()?.let { best -> xray.filter { it.server == best.server } }.orEmpty()
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
-        val choice = BrandSession.protocolChoice(prefs)
+        val choice = BrandSession.protocolChoice(service, prefs)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
             .takeIf { choice != "xray" }
         val out = when {
