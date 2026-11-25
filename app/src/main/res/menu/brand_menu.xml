@@ -2,6 +2,10 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/brand_protocol"
+        android:title="@string/brand_protocol_title"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/brand_import_config"
         android:title="@string/brand_import_title"
         app:showAsAction="never" />

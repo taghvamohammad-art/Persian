@@ -149,4 +149,9 @@
     <string name="brand_diag_copy">کپی</string>
     <string name="brand_diag_share">ارسال</string>
     <string name="brand_diag_copied">گزارش کپی شد</string>
+    <string name="brand_protocol_title">انتخاب پروتکل</string>
+    <string name="brand_protocol_auto">خودکار (پیشنهادی): سریع‌ترین و پایدارترین</string>
+    <string name="brand_protocol_xray">فقط Xray (بدون AmneziaWG)</string>
+    <string name="brand_protocol_awg">فقط AmneziaWG</string>
+    <string name="brand_protocol_note">از اتصال بعدی اعمال می‌شود.</string>
 </resources>

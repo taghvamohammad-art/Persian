@@ -183,6 +183,10 @@ class BrandActivity : AppCompatActivity() {
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.brand_protocol) {
+            showProtocolChoice()
+            return true
+        }
         if (item.itemId == R.id.brand_import_config) {
             showImportDialog()
             return true
@@ -192,6 +196,21 @@ class BrandActivity : AppCompatActivity() {
             return true
         }
         return super.onOptionsItemSelected(item)
+    }
+
+    private fun showProtocolChoice() {
+        val keys = arrayOf("auto", "xray", "awg")
+        val labels = arrayOf(getString(R.string.brand_protocol_auto), getString(R.string.brand_protocol_xray),
+            getString(R.string.brand_protocol_awg))
+        val current = keys.indexOf(BrandSession.protocolChoice(prefs)).coerceAtLeast(0)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.brand_protocol_title)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                BrandSession.setProtocolChoice(prefs, keys[which])
+                dialog.dismiss()
+                android.widget.Toast.makeText(this, R.string.brand_protocol_note, android.widget.Toast.LENGTH_LONG).show()
+            }
+            .show()
     }
 
     override fun onStart() {

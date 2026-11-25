@@ -124,8 +124,15 @@ internal class LinuxTunnel(
         val members = xray.firstOrNull()?.let { best -> xray.filter { it.server == best.server } }.orEmpty()
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
+        val choice = BrandSession.protocolChoice(prefs)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
-        val out = listOfNotNull(pool, awg).sortedBy { score(it) }.toMutableList()
+            .takeIf { choice != "xray" }
+        val out = when {
+            // the user's choice goes first; the other stays as a fallback so
+            // a blocked choice does not leave the phone without internet
+            choice == "awg" && awg != null -> listOfNotNull(awg, pool).toMutableList()
+            else -> listOfNotNull(pool, awg).sortedBy { score(it) }.toMutableList()
+        }
         if (out.size == 2) {
             service.logWriter?.report("plan: " + out.joinToString(" < ") {
                 "${it.kind} ${it.ms}ms×${1 + recentFailures(group(it))}"

@@ -115,6 +115,14 @@ internal object BrandSession {
         }
     }
 
+    /** The user's protocol choice: "auto", "xray" (no AmneziaWG) or "awg". */
+    internal fun protocolChoice(prefs: SharedPreferences): String =
+        prefs.getString("pv_protocol", "auto") ?: "auto"
+
+    internal fun setProtocolChoice(prefs: SharedPreferences, choice: String) {
+        prefs.edit().putString("pv_protocol", choice).apply()
+    }
+
     /** Hotspot sharing (a proxy for devices on this phone's hotspot). */
     internal fun shareEnabled(prefs: SharedPreferences) = prefs.getBoolean("pv_share", false)
 
