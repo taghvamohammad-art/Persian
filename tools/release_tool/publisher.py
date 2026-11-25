@@ -291,6 +291,9 @@ def prepare_release(ws, build, version_code, version_name, notes, public_repo=No
     if beta:
         entry["testers"] = tester_hashes(testers)
         cfg["app_update_beta"] = entry
+        # who may use the testers' extras (protocol choice); stays after the
+        # test build goes public
+        cfg["testers"] = tester_hashes(testers)
     else:
         cfg["app_update"] = carry_required(cfg.get("app_update"), entry, required)
         if int((cfg.get("app_update_beta") or {}).get("version_code", 0)) <= version_code:
@@ -477,6 +480,7 @@ def prepare_config_only(ws, public_repo=None, with_patches=True, win=None, win_n
                 raise ReleaseError("برای نسخه‌ی آزمایشی، یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
             entry["testers"] = tester_hashes(win_testers)
             cfg["windows_update_beta"] = entry
+            cfg["testers"] = tester_hashes(win_testers)
         else:
             cfg["windows_update"] = carry_required(cfg.get("windows_update"), entry, win_required)
             if int((cfg.get("windows_update_beta") or {}).get("version_code", 0)) <= win.version_code:

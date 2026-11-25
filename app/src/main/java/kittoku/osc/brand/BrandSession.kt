@@ -125,7 +125,8 @@ internal object BrandSession {
         if (user.isBlank()) return false
         val hash = testerHash(user)
         val listed = runCatching {
-            ConfigManager.current(context).appUpdateBeta?.testers?.contains(hash) == true
+            val cfg = ConfigManager.current(context)
+            hash in cfg.testers || cfg.appUpdateBeta?.testers?.contains(hash) == true
         }.getOrDefault(false)
         if (listed && prefs.getString("pv_tester_of", null) != hash) {
             prefs.edit().putString("pv_tester_of", hash).apply()

@@ -42,6 +42,8 @@ internal data class AppConfig(
     @SerialName("app_update") val appUpdate: AppUpdate? = null,
     // a test build, offered only to the usernames whose tester hash is listed
     @SerialName("app_update_beta") val appUpdateBeta: AppUpdate? = null,
+    // the testers (hashes as in AppUpdate.testers), kept after a test build goes public
+    val testers: List<String> = emptyList(),
     // Xray / AmneziaWG servers (tools/release_tool/linux.py server_entry);
     // kept as raw JSON and handed to the pvcore engine as is
     @SerialName("linux_servers") val linuxServers: List<kotlinx.serialization.json.JsonObject> = emptyList(),
