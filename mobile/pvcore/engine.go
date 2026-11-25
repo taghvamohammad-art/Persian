@@ -30,6 +30,7 @@ var (
 	xrayInst *core.Instance
 	tunOn    bool
 	awgDev   *device.Device
+	awgLive  *liveTun
 	running  string
 	socksAt  int
 	// AmneziaWG byte counters at the last Check: sending without receiving
@@ -76,6 +77,7 @@ func stopLocked() {
 	if awgDev != nil {
 		awgDev.Close()
 		awgDev = nil
+		awgLive = nil
 	}
 	if extraStop != nil { // system routes of the Windows AmneziaWG tunnel
 		extraStop()
@@ -182,7 +184,7 @@ func StartAwg(serverJSON, user, pass string, tunFd int) error {
 		closeFd(tunFd)
 		return fmt.Errorf("awg tun: %w", err)
 	}
-	return awgOnLocked(tdev, uapi, awgPortsOf(serverJSON))
+	return awgOnLocked(tdev, uapi, awgPortsOf(serverJSON), user)
 }
 
 // awgStartUAPI: the UAPI with the port the last probe found working.
@@ -195,9 +197,10 @@ func awgStartUAPI(uapi string) string {
 }
 
 // awgOnLocked runs AmneziaWG on a TUN (which it closes on failure).
-func awgOnLocked(tdev tun.Device, uapi string, ports []int) error {
+func awgOnLocked(tdev tun.Device, uapi string, ports []int, user string) error {
 	uapi = awgStartUAPI(uapi)
-	dev := device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
+	live := newLiveTun(tdev, user)
+	dev := device.NewDevice(live, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "awg: "))
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()
 		return fmt.Errorf("awg config: %w", err)
@@ -207,6 +210,7 @@ func awgOnLocked(tdev tun.Device, uapi string, ports []int) error {
 		return fmt.Errorf("awg up: %w", err)
 	}
 	awgDev = dev
+	awgLive = live
 	running = "amneziawg"
 	if r := newAwgRoam(uapi, ports); r != nil {
 		go r.run(dev)
@@ -220,7 +224,7 @@ func awgOnLocked(tdev tun.Device, uapi string, ports []int) error {
 // while keepalives flow), so no extra traffic is made.
 func Check(timeoutMs int) int {
 	mu.Lock()
-	kind, port, dev := running, socksAt, awgDev
+	kind, port, dev, live := running, socksAt, awgDev, awgLive
 	mu.Unlock()
 	switch {
 	case kind == "":
@@ -230,7 +234,16 @@ func Check(timeoutMs int) int {
 		if err != nil {
 			return -1
 		}
-		return awgHealth(state)
+		ms := awgHealth(state)
+		if ms < 0 || live == nil {
+			return ms
+		}
+		// the counters cannot tell a throttled or filtered tunnel from a quiet
+		// one: a ping through it, alongside the apps' own traffic
+		if live.ping(4*time.Second) == pingLost {
+			return -1
+		}
+		return ms
 	default:
 		ms, err := getThrough(port, time.Duration(timeoutMs)*time.Millisecond)
 		if err != nil {

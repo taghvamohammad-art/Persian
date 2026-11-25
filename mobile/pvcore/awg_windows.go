@@ -102,7 +102,7 @@ func StartAwgWindows(serverJSON, user, pass string) error {
 		cleanup()
 		return fail("dns", err)
 	}
-	if err := awgOnLocked(tdev, uapi, awgPortsOf(serverJSON)); err != nil {
+	if err := awgOnLocked(tdev, uapi, awgPortsOf(serverJSON), user); err != nil {
 		cleanup()
 		return err
 	}
