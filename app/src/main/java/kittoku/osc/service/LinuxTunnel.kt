@@ -281,7 +281,13 @@ internal class LinuxTunnel(
                 if (BrandSession.shareEnabled(prefs)) BrandSession.updateShareNets(service)
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
                 failures = if (ms < 0) failures + 1 else 0
-                if (ms < 0) service.logWriter?.report("check $current failed ($failures)")
+                if (ms < 0) {
+                    service.logWriter?.report("check $current failed ($failures)")
+                    // every failed check counts against that kind, kept across
+                    // reconnects: a tunnel that stalls and is reconnected by hand
+                    // must not be picked again just for being fast
+                    noteFailure(currentChoice)
+                }
                 if (failures >= CHECK_FAILURES) {
                     failover("check failed")
                     return@launch
@@ -301,7 +307,6 @@ internal class LinuxTunnel(
                 service.logWriter?.report("linux tunnel: $reason, switching")
                 val previous = current
                 if (reason == "check failed") {
-                    noteFailure(currentChoice)
                     // Probe first while the tunnel keeps carrying traffic: a short
                     // hiccup on a lossy network used to tear the tunnel down and
                     // build the very same one again, cutting every connection

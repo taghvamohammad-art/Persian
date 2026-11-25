@@ -335,12 +335,10 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			if !ok {
 				failures++
 				note("check failed (%d)", failures)
+				noteFailure(kind) // every failed check counts against that kind
 			} else {
 				failures = 0
 			}
-		}
-		if !sstp {
-			noteFailure(kind)
 		}
 		note("tunnel stopped working, starting over")
 		pvcore.Stop()
