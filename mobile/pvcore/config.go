@@ -137,8 +137,9 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 		return map[string]any{"tag": "proxy", "protocol": "vless",
 			"settings": map[string]any{"vnext": []any{map[string]any{"address": s.Host, "port": p.Port,
 				"users": []any{map[string]any{"id": VlessUUID(user, pass), "encryption": "none"}}}}},
-			"streamSettings": map[string]any{"network": "xhttp", "xhttpSettings": map[string]any{"path": p.Path},
-				"security": "reality", "realitySettings": reality(p)}}, nil
+			"streamSettings": map[string]any{"network": "xhttp",
+				"xhttpSettings": map[string]any{"path": p.Path, "extra": xhttpExtra()},
+				"security":      "reality", "realitySettings": reality(p)}}, nil
 	case "hysteria2":
 		stream := map[string]any{"network": "hysteria",
 			"hysteriaSettings": map[string]any{"version": 2, "auth": Hy2Auth(user, pass)},
@@ -173,7 +174,7 @@ func outbound(s *Server, p *Protocol, user, pass string) (map[string]any, error)
 			addr = v.addr
 		}
 		stream := map[string]any{"network": "xhttp",
-			"xhttpSettings": map[string]any{"path": p.Path, "host": p.Host, "mode": "packet-up"}}
+			"xhttpSettings": map[string]any{"path": p.Path, "host": p.Host, "mode": "packet-up", "extra": xhttpExtra()}}
 		if p.Plain {
 			addr = s.Host
 		} else {
@@ -362,4 +363,20 @@ func Types(serverJSON string) (string, error) {
 	}
 	b, _ := json.Marshal(out)
 	return string(b), nil
+}
+
+// xhttpExtra: the traffic spread over several short-lived connections that
+// are replaced every few minutes, with random padding, instead of one long
+// heavy flow to one foreign address (a mark of a VPN server). Client side
+// only: servers and older apps are unaffected.
+func xhttpExtra() map[string]any {
+	return map[string]any{
+		"xPaddingBytes": "100-1000",
+		"xmux": map[string]any{
+			"maxConcurrency":   "8-16",
+			"cMaxReuseTimes":   "32-64",
+			"hMaxRequestTimes": "600-900",
+			"hMaxReusableSecs": "120-300",
+		},
+	}
 }

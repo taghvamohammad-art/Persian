@@ -1266,6 +1266,7 @@ class ServicesPage(RouterPage):
         r8.addWidget(self.button("حذف پروتکل‌های آزمایشی", lambda: self.lab(False)))
         l6.addLayout(r8)
         l6.addWidget(self.button("📈 سرعت و بار خود سرور", self.server_speed))
+        l6.addWidget(self.button("🌐 IPهای اضافه‌ی یک سرور لینوکس", self.extra_ips))
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1678,7 +1679,15 @@ class ServicesPage(RouterPage):
                     p = linux.refresh_xray_config(h, p, log)
                 done[r["id"]] = p
                 if r["host"] in entries:
-                    new_cfg = pv.add_linux_server(new_cfg, linux.refreshed_entry(entries[r["host"]], p))
+                    main = linux.refreshed_entry(entries[r["host"]], p)
+                    new_cfg = pv.add_linux_server(new_cfg, main)
+                    # the extra addresses: old entries out, the current ones in
+                    new_cfg["linux_servers"] = [e for e in new_cfg["linux_servers"]
+                                                if e.get("extra_of") != main["name"]]
+                    awg = any(x.get("type") == "amneziawg" for x in main["protocols"])
+                    for e in linux.extra_entries(main["name"], p, awg):
+                        new_cfg = pv.add_linux_server(new_cfg, e)
+                        log("  + IP اضافه %s (%s)" % (e["host"], e["name"]))
                 else:
                     log("⚠ %s در تنظیمات اپ نیست؛ فقط خود سرور به‌روز شد." % r["host"])
             before = ws.path("config.before-%s.json" % bk.stamp())
@@ -1702,6 +1711,44 @@ class ServicesPage(RouterPage):
             QMessageBox.information(self, "انجام شد",
                                     "سرورها به‌روز شدند و تنظیمات اپ (نسخه‌ی %s) منتشر شد." % fa(cfg["version"]))
         self.run(job, done)
+
+    def extra_ips(self):
+        """Extra addresses of a Linux server (from the provider): each one is
+        published as one more server for the apps, with its own Reality name."""
+        import ipaddress
+        from PySide6.QtWidgets import QInputDialog
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+        r = servers[0]
+        if len(servers) > 1:
+            labels = [x.get("name") or x["host"] for x in servers]
+            pick, ok = QInputDialog.getItem(self, "IPهای اضافه", "کدام سرور لینوکس؟", labels, 0, False)
+            if not ok:
+                return
+            r = servers[labels.index(pick)]
+        p = st.decrypt_blob(r.get("params")) or {}
+        text, ok = QInputDialog.getText(
+            self, "IPهای اضافه",
+            "IPهای اضافه‌ی %s (با فاصله یا ویرگول جدا کنید؛ خالی = هیچ):\n"
+            "اول IP را در تنظیمات شبکه‌ی خود سرور اضافه کنید (طبق راهنمای دیتاسنتر)." % (r.get("name") or r["host"]),
+            text=" ".join(p.get("extra_ips") or []))
+        if not ok:
+            return
+        ips = []
+        for part in text.replace("،", " ").replace(",", " ").split():
+            try:
+                ip = str(ipaddress.IPv4Address(part))
+            except ValueError:
+                return QMessageBox.warning(self, "خطا", "«%s» آدرس IPv4 درست نیست." % part)
+            if ip != r["host"] and ip not in ips:
+                ips.append(ip)
+        p["extra_ips"] = ips
+        r["params"] = st.encrypt_blob(p)
+        self.settings.save()
+        QMessageBox.information(self, "ذخیره شد",
+                                "%d IP اضافه ذخیره شد. برای اعمال روی سرور و انتشار برای اپ، دکمه‌ی "
+                                "«تنظیمات تازه‌ی Xray روی سرورها و انتشار برای اپ» را بزنید." % len(ips))
 
     def update_xrays(self):
         servers = [r for r in self.settings.routers if r.get("role") == "linux"]

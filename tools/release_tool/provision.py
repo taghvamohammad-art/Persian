@@ -512,7 +512,9 @@ def remove_linux_server(cfg, host):
     """The app config without a Linux server: (new config, whether it was there)."""
     out = dict(cfg)
     before = out.get("linux_servers", [])
-    out["linux_servers"] = [s for s in before if s.get("host") != host]
+    gone = {s.get("name") for s in before if s.get("host") == host}
+    # its extra addresses go with it
+    out["linux_servers"] = [s for s in before if s.get("host") != host and s.get("extra_of") not in gone]
     return out, len(out["linux_servers"]) != len(before)
 
 

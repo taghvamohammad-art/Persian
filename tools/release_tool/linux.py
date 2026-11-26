@@ -174,9 +174,23 @@ def hy2_mask(p):
     return {"finalmask": {"udp": [{"type": "salamander", "settings": {"password": p["hy2_obfs"]}}]}}
 
 
+def reality_sni(p):
+    """The name Reality shows: the server's own subdomain when it has one
+    (it resolves to this server and has a real certificate), else the
+    borrowed big site."""
+    return p.get("own_sni") or p["sni"]
+
+
+def reality_target(p):
+    return "127.0.0.1:%d" % OWN_SITE_PORT if p.get("own_sni") else "%s:443" % p["sni"]
+
+
 def xray_template(p):
     """Full Xray config with empty user lists (pv-agent fills them)."""
-    reality = {"show": False, "target": "%s:443" % p["sni"], "serverNames": [p["sni"]],
+    # the borrowed name too, for apps that have not fetched the new settings yet
+    names = [reality_sni(p)] + [n for n in (p.get("own_names") or {}).values() if n != p.get("own_sni")] \
+        + ([p["sni"]] if p.get("own_sni") else [])
+    reality = {"show": False, "target": reality_target(p), "serverNames": names,
                "privateKey": p["reality_private"], "shortIds": [p["short_id"]]}
     return {
         "log": {"loglevel": "warning", "access": "/var/log/xray/access.log"},
@@ -393,6 +407,151 @@ def cloudflare_setup(h, p, ip, log):
             "تونل DNS خودشان کار می‌کنند." % res.get("status"))
     else:
         log("  رکوردهای دامنه و حالت SSL تنظیم شد.")
+
+
+OWN_SITE_PORT = 8443          # nginx, local only: the site Reality shows with the real certificate
+OWN_SITE_DIR = "/etc/pv-reality"
+OWN_WORDS = ["portal", "cloud", "files", "static", "media", "app", "docs", "panel", "shop", "store"]
+
+CF_RECORD_PY = r"""
+import json, os, sys, urllib.request
+TOKEN, ZONE, NAME, IP = os.environ["CF_TOKEN"], sys.argv[1], sys.argv[2], sys.argv[3]
+def api(method, path, body=None):
+    req = urllib.request.Request("https://api.cloudflare.com/client/v4" + path, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return json.load(e)
+z = api("GET", "/zones?name=" + ZONE)
+if not z.get("success") or not z.get("result"):
+    print(json.dumps({"error": "zone"})); sys.exit(0)
+zid = z["result"][0]["id"]
+have = api("GET", "/zones/%s/dns_records?name=%s" % (zid, NAME)).get("result") or []
+body = {"type": "A", "name": NAME, "content": IP, "ttl": 300, "proxied": False}
+a = [r for r in have if r["type"] == "A"]
+res = api("PUT", "/zones/%s/dns_records/%s" % (zid, a[0]["id"]), body) if a else \
+    api("POST", "/zones/%s/dns_records" % zid, body)
+print(json.dumps({"ok": bool(res.get("success")), "detail": res.get("errors")}))
+"""
+
+
+def own_names_missing(p):
+    """Whether an address of the server (its own or an extra one) has no own name yet."""
+    have = p.get("own_names") or {}
+    return not p.get("own_sni") or any(ip not in have for ip in p.get("extra_ips") or [])
+
+
+def ensure_own_reality(h, p, log=print):
+    """Reality shows the server's own subdomain instead of a big site whose
+    name does not match this IP (a known way of picking out such servers):
+    a DNS-only record to this server, a Let's Encrypt certificate (DNS
+    check through the Cloudflare token), and the decoy site on 127.0.0.1:8443
+    with it, which Reality passes probes to. Each extra address of the server
+    (extra_ips) gets a name of its own on the same certificate, so every
+    address shows a name that resolves to itself. Needs the domain and token
+    of the CDN setup. Returns True when in place; on any trouble the
+    borrowed name stays."""
+    if not (p.get("domain") and p.get("cf_token")):
+        log("ℹ برای Reality با زیردامنه‌ی خود سرور، دامنه و توکن Cloudflare لازم است (از «سرور جدید» با دامنه).")
+        return False
+    ip = h.run("ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'").strip()
+    if not re.fullmatch(r"[\d.]+", ip or ""):
+        log("⚠ IP سرور پیدا نشد؛ Reality با نام قبلی می‌ماند.")
+        return False
+    tries = dict(p.get("own_names_try") or {})
+    if p.get("own_sni_try") and ip not in tries:
+        tries[ip] = p["own_sni_try"]
+    used = set(tries.values())
+
+    def fresh():
+        while True:
+            n = "%s%d.%s" % (secrets.choice(OWN_WORDS), secrets.randbelow(90) + 10, p["domain"])
+            if n not in used:
+                used.add(n)
+                return n
+    for a in [ip] + [x for x in p.get("extra_ips") or [] if x != ip]:
+        tries.setdefault(a, fresh())
+    p["own_names_try"] = tries
+    p["own_sni_try"] = tries[ip]
+    names = [tries[ip]] + [n for a, n in tries.items() if a != ip and a in (p.get("extra_ips") or [])]
+    log("Reality با زیردامنه‌ی خود سرور: %s …" % "، ".join(names))
+    h.write("/tmp/pv-cfa.py", CF_RECORD_PY)
+    for a, n in tries.items():
+        if n not in names:
+            continue
+        out = h.run("CF_TOKEN=%s python3 /tmp/pv-cfa.py %s %s %s"
+                    % (shell_quote(p["cf_token"]), shell_quote(p["domain"]), shell_quote(n), shell_quote(a)),
+                    check=False)
+        try:
+            if not json.loads(out.strip().splitlines()[-1]).get("ok"):
+                raise ValueError
+        except (ValueError, IndexError):
+            h.run("rm -f /tmp/pv-cfa.py", check=False)
+            log("⚠ رکورد DNS ساخته نشد (توکن Cloudflare باید DNS Edit داشته باشد):\n%s" % out[-300:])
+            return False
+    h.run("rm -f /tmp/pv-cfa.py", check=False)
+    # the certificate must hold every name and stay valid for a month more
+    have_cert = h.run("test -s %(d)s/cert.pem && openssl x509 -in %(d)s/cert.pem -noout -checkend 2592000 "
+                      ">/dev/null && openssl x509 -in %(d)s/cert.pem -noout -ext subjectAltName 2>/dev/null"
+                      " || true" % {"d": OWN_SITE_DIR}, check=False)
+    if not all("DNS:" + n in have_cert for n in names):
+        log("  گرفتن گواهی Let's Encrypt (چند دقیقه)…")
+        doms = " ".join("-d " + shell_quote(n) for n in names)
+        res = h.run(r"""set -e
+mkdir -p %(dir)s
+command -v socat >/dev/null || (export DEBIAN_FRONTEND=noninteractive; apt-get install -y -q socat >/dev/null)
+[ -x ~/.acme.sh/acme.sh ] || curl -fsSL https://get.acme.sh | sh -s email=admin@%(zone)s >/dev/null
+export CF_Token=%(token)s
+~/.acme.sh/acme.sh --issue --force --server letsencrypt --dns dns_cf %(doms)s --keylength ec-256 --dnssleep 30 >/tmp/pv-acme.log 2>&1
+~/.acme.sh/acme.sh --install-cert -d %(first)s --ecc --key-file %(dir)s/key.pem --fullchain-file %(dir)s/cert.pem --reloadcmd 'systemctl reload nginx' >/dev/null
+echo CERT_OK""" % {"dir": OWN_SITE_DIR, "zone": shell_quote(p["domain"]), "token": shell_quote(p["cf_token"]),
+                   "doms": doms, "first": shell_quote(names[0])}, timeout=900, check=False)
+        if "CERT_OK" not in res:
+            log("⚠ گواهی گرفته نشد؛ Reality با نام قبلی می‌ماند.\n%s"
+                % h.run("tail -n 8 /tmp/pv-acme.log 2>/dev/null || true", check=False)[-600:])
+            return False
+    h.write("/etc/nginx/sites-available/pv-reality", """server {
+    listen 127.0.0.1:%(port)d ssl http2;
+    server_name %(name)s;
+    ssl_certificate %(dir)s/cert.pem;
+    ssl_certificate_key %(dir)s/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    root /var/www/pv;
+    index index.html;
+    server_tokens off;
+    access_log off;
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+""" % {"port": OWN_SITE_PORT, "name": " ".join(names), "dir": OWN_SITE_DIR})
+    test = h.run("ln -sf /etc/nginx/sites-available/pv-reality /etc/nginx/sites-enabled/pv-reality; "
+                 "nginx -t 2>&1 && systemctl reload nginx && echo NGINX_OK", check=False)
+    if "NGINX_OK" not in test:
+        h.run("rm -f /etc/nginx/sites-enabled/pv-reality; systemctl reload nginx", check=False)
+        log("⚠ nginx سایت گواهی‌دار را قبول نکرد؛ Reality با نام قبلی می‌ماند.\n%s" % test[-400:])
+        return False
+    p["own_sni"] = names[0]
+    p["own_names"] = {a: n for a, n in tries.items() if n in names}
+    log("✓ Reality حالا خودش را %s نشان می‌دهد (گواهی واقعی، همین IP)." % "، ".join(names))
+    return True
+
+
+def check_extra_ips(h, p, log=print):
+    """Extra addresses must be on the server itself (the provider gives
+    them, they are added to the network settings); one that is not is left
+    out of the app settings."""
+    have = h.run("ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1", check=False).split()
+    ok = []
+    for ip in p.get("extra_ips") or []:
+        if ip in have:
+            ok.append(ip)
+        else:
+            log("⚠ IP %s روی خود سرور تنظیم نشده (ip addr آن را نشان نمی‌دهد)؛ فعلاً منتشر نمی‌شود." % ip)
+    return ok
 
 
 def domain_lookup(h, domain):
@@ -699,6 +858,12 @@ def refresh_xray_config(h, p, log=print):
     except LinuxError as e:
         log("⚠ پورت‌های جایگزین AmneziaWG اضافه نشد: %s" % str(e)[-300:])
         p["awg"].pop("hop", None)
+    p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
+    if own_names_missing(p):
+        try:
+            ensure_own_reality(h, p, log)
+        except Exception as e:   # noqa: BLE001 - the borrowed name stays
+            log("⚠ Reality با زیردامنه راه نیفتاد: %s" % str(e)[-300:])
     log("تنظیمات جدید Xray…")
     new = XRAY_CONF_DIR + "/template.new.json"   # Xray reads the format from the extension
     h.write(new, json.dumps(xray_template(p), indent=1))
@@ -720,6 +885,22 @@ def refreshed_entry(old_entry, p):
     """The app-config entry of a server after refresh_xray_config."""
     awg = any(x.get("type") == "amneziawg" for x in old_entry.get("protocols", []))
     return server_entry(old_entry["name"], old_entry["host"], p, awg)
+
+
+def extra_entries(name, p, awg=True):
+    """One more app entry for each extra address of the server (same keys
+    and users): when one address is slowed or blocked the apps measure and
+    take another. The CDN and DNS ways go through the domain and stay with
+    the main entry only."""
+    out = []
+    for i, ip in enumerate(p.get("extra_ips_live") or [], 2):
+        e = server_entry("%s-%d" % (name, i), ip, p, awg)
+        own = (p.get("own_names") or {}).get(ip)
+        e["protocols"] = [dict(x, **({"sni": own} if own and "sni" in x else {})) for x in e["protocols"]
+                          if x["type"] not in ("vless-xhttp-cdn", "vless-dns")]
+        e["extra_of"] = name
+        out.append(e)
+    return out
 
 
 def update_xray(h, log=print):
@@ -1162,9 +1343,9 @@ def server_entry(name, host, p, awg=True):
     """What the apps need to connect (no secrets of other users: the per-user
     parts come from each user's own username and password)."""
     entry = {"name": name, "host": host, "type": "linux", "protocols": [
-        {"type": "vless-reality-vision", "port": p["vision_port"], "sni": p["sni"],
+        {"type": "vless-reality-vision", "port": p["vision_port"], "sni": reality_sni(p),
          "public_key": p["reality_public"], "short_id": p["short_id"]},
-        {"type": "vless-xhttp-reality", "port": p["xhttp_port"], "sni": p["sni"], "path": p["xhttp_path"],
+        {"type": "vless-xhttp-reality", "port": p["xhttp_port"], "sni": reality_sni(p), "path": p["xhttp_path"],
          "public_key": p["reality_public"], "short_id": p["short_id"]},
         dict({"type": "hysteria2", "port": p["hy2_port"], "pin_sha256": p["hy2_pin"]},
              **({"obfs": p["hy2_obfs"]} if p.get("hy2_obfs") else {})),

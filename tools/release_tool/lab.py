@@ -34,12 +34,12 @@ def lab_params(p):
 
 
 def _reality_server(p):
-    return {"show": False, "target": "%s:443" % p["sni"], "serverNames": [p["sni"]],
+    return {"show": False, "target": linux.reality_target(p), "serverNames": [linux.reality_sni(p)],
             "privateKey": p["reality_private"], "shortIds": [p["short_id"]]}
 
 
 def _reality_client(p):
-    return {"serverName": p["sni"], "publicKey": p["reality_public"], "shortId": p["short_id"],
+    return {"serverName": linux.reality_sni(p), "publicKey": p["reality_public"], "shortId": p["short_id"],
             "fingerprint": "chrome"}
 
 
