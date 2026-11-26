@@ -146,7 +146,7 @@ internal class LinuxTunnel(
     }.getOrNull()
 
     /** Probes [probe] (all or some protocols of [server]); choices keep the full entry. */
-    private fun probeOne(server: String, probe: String): List<Choice> {
+    private suspend fun probeOne(server: String, probe: String): List<Choice> {
         val name = nameOf(server)
         val result = try {
             JSONObject(Pvcore.probe(probe, user, pass, PROBE_TIMEOUT_MS))
@@ -224,9 +224,15 @@ internal class LinuxTunnel(
         }
         // the first probe tries only the disguised protocols: CDN is probed
         // now, when the direct address turns out slow
-        val cdn = probed ?: (listOf(sample.server) + servers.filter { it != sample.server }).firstNotNullOfOrNull { sv ->
-            onlyKinds(sv, setOf(CDN))?.let { part -> probeOne(sv, part).firstOrNull() }
-        } ?: return@withContext choices
+        var found = probed
+        if (found == null) {
+            for (sv in listOf(sample.server) + servers.filter { it != sample.server }) {
+                val part = onlyKinds(sv, setOf(CDN)) ?: continue
+                found = probeOne(sv, part).firstOrNull()
+                if (found != null) break
+            }
+        }
+        val cdn = found ?: return@withContext choices
         val viaCdn = runCatching { Pvcore.speed(cdn.server, CDN, user, pass, SPEED_SECONDS) }.getOrDefault(-1L)
         service.logWriter?.report("speed ${sample.name}/${sample.kind}: $direct KB/s, ${cdn.name}/cdn: $viaCdn KB/s")
         if (viaCdn >= SPEED_SLOW_KBPS && viaCdn >= 2 * maxOf(direct, 1L)) {
