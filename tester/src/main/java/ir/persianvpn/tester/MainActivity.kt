@@ -335,6 +335,7 @@ class MainActivity : AppCompatActivity() {
                     val t = tests.getJSONObject(k)
                     val lab = t.optString("id").startsWith("lab:")
                     if (!lab && u.isEmpty()) continue
+                    if (t.optString("id") == "pool") continue   // made from the ones that connect, below
                     queue += Item(item, t, name, addRow(t.optString("label"), lab))
                 }
             }
@@ -354,6 +355,25 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     q.row.set("✗ ${r.optString("error")}", bad)
                     line("✗ ${q.name} · $label · ${r.optString("error")}")
+                }
+            }
+            // the pool as the app makes it: the Xray protocols that connected
+            val okKinds = passed.map { it.test.getString("id") }
+                .filter { !it.startsWith("lab:") && !it.startsWith("awg@") && !it.startsWith("cdn#") && it != "vless-dns" && !it.startsWith("pool") }
+                .distinct()
+            if (okKinds.isNotEmpty() && !stop) {
+                val first = passed.first { !it.test.getString("id").startsWith("lab:") }
+                val t = JSONObject().put("id", "pool:" + okKinds.joinToString(","))
+                    .put("label", "مجموعه‌ی Xray از وصل‌شده‌ها (مثل اپ)")
+                val row = addRow(t.getString("label"), false)
+                val r = JSONObject(Pvcore.benchRun(first.server.toString(), t.getString("id"), u, p, 0))
+                if (r.optBoolean("ok")) {
+                    row.set("✓ ${r.optInt("ms")}ms (${r.optInt("got")}/${r.optInt("tries")})", accent)
+                    passed += Item(first.server, t, first.name, row)
+                    line("✓ ${first.name} · ${t.getString("label")} · ${r.optInt("ms")}ms")
+                } else {
+                    row.set("✗ ${r.optString("error")}", bad)
+                    line("✗ ${first.name} · ${t.getString("label")} · ${r.optString("error")}")
                 }
             }
             // 2) the speed of those that connected

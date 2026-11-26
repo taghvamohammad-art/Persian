@@ -19,8 +19,13 @@ import (
 // first whether it connects (three requests), then its speed (a download
 // for a few seconds). Nothing here touches the VPN; the test app has none.
 
-// BenchSpeedURL: a large download from a fast, widely reachable host.
-var BenchSpeedURL = "https://speed.cloudflare.com/__down?bytes=100000000"
+// BenchSpeedURLs: large downloads from fast, widely reachable hosts (the
+// next one when one answers with an error).
+var BenchSpeedURLs = []string{"https://speed.cloudflare.com/__down?bytes=25000000",
+	"https://cachefly.cachefly.net/10mb.test"}
+
+// benchMinBytes: less than this is no speed measurement.
+const benchMinBytes = 200 << 10
 
 type benchItem struct {
 	Name   string          `json:"name"`
@@ -147,16 +152,26 @@ func benchRun(itemJSON, id, user, pass string, speed time.Duration) benchResult 
 		}
 		v := cdnVariants[i]
 		cfg, err = xrayConfigWith(server, "vless-xhttp-cdn", user, pass, port, func(q *Protocol) { q.variant = &v })
-	case id == "pool":
+	case id == "pool" || strings.HasPrefix(id, "pool:"):
+		// "pool:kind,kind": only these (the ones that connected, as the app does)
 		s, perr := parseServer(server)
 		if perr != nil {
 			return benchResult{Error: perr.Error()}
 		}
+		only := map[string]bool{}
+		for _, k := range strings.Split(strings.TrimPrefix(strings.TrimPrefix(id, "pool"), ":"), ",") {
+			if k != "" {
+				only[k] = true
+			}
+		}
 		var choices []map[string]any
 		for _, p := range s.Protocols {
-			if p.Type != "amneziawg" && p.Type != "vless-dns" {
+			if p.Type != "amneziawg" && p.Type != "vless-dns" && (len(only) == 0 || only[p.Type]) {
 				choices = append(choices, map[string]any{"server": json.RawMessage(server), "kind": p.Type})
 			}
+		}
+		if len(choices) == 0 {
+			return benchResult{Error: "no protocol to pool"}
 		}
 		cj, _ := json.Marshal(choices)
 		cfg, err = PoolConfig(string(cj), user, pass, port)
@@ -206,39 +221,70 @@ func benchHTTP(tr *http.Transport, speed time.Duration) benchResult {
 	if speed <= 0 {
 		return res
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), speed+5*time.Second)
+	var last2 error
+	for _, u := range BenchSpeedURLs {
+		n, el, err := benchDownload(tr, u, speed)
+		res.MB = float64(n) / 1e6
+		if n > 0 && el >= time.Second {
+			res.Mbps = float64(n) * 8 / el.Seconds() / 1e6
+			if n < benchMinBytes {
+				res.Error = "speed: very slow"
+			}
+			return res
+		}
+		last2 = err
+		if err == nil {
+			last2 = fmt.Errorf("only %d KB in %ds", n>>10, int(speed.Seconds()))
+		}
+		if n > 0 {
+			break // data came, slowly: that is the answer, not the host
+		}
+	}
+	res.Error = "speed: " + shortBenchErr(last2)
+	return res
+}
+
+// benchDownload: bytes read in `speed` from the first byte on (the time to
+// the first byte is the connection's, measured above).
+func benchDownload(tr *http.Transport, u string, speed time.Duration) (int64, time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), speed+8*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", BenchSpeedURL, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 14) PersianVPN-test")
 	start := time.Now()
 	resp, err := (&http.Client{Transport: tr}).Do(req)
 	if err != nil {
-		res.Error = "speed: " + shortBenchErr(err)
-		return res
+		return 0, 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
 	buf := make([]byte, 64<<10)
 	var n int64
-	first := time.Time{}
-	for time.Since(start) < speed+5*time.Second {
+	var first time.Time
+	for {
 		k, err := resp.Body.Read(buf)
 		if k > 0 && first.IsZero() {
 			first = time.Now()
 		}
 		n += int64(k)
-		if err != nil || (!first.IsZero() && time.Since(first) >= speed) {
-			if err != nil && err != io.EOF && n == 0 {
-				res.Error = "speed: " + shortBenchErr(err)
+		if !first.IsZero() && time.Since(first) >= speed {
+			return n, time.Since(first), nil
+		}
+		if err != nil {
+			if first.IsZero() {
+				return n, 0, err
 			}
-			break
+			if err == io.EOF {
+				return n, time.Since(first), nil
+			}
+			return n, time.Since(first), err
+		}
+		if first.IsZero() && time.Since(start) > speed+5*time.Second {
+			return 0, 0, fmt.Errorf("timeout")
 		}
 	}
-	if !first.IsZero() {
-		if el := time.Since(first).Seconds(); el > 0 {
-			res.Mbps = float64(n) * 8 / el / 1e6
-		}
-	}
-	res.MB = float64(n) / 1e6
-	return res
 }
 
 func shortBenchErr(err error) string {
