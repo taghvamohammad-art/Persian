@@ -1442,6 +1442,8 @@ class ServicesPage:
                             b("به‌روزرسانی Xray همه", self.update_xrays, icon=ft.Icons.DOWNLOAD)),
                  button_row(b("تنظیمات تازه‌ی Xray و اپ", self.refresh_servers, icon=ft.Icons.TUNE),
                             b("عیب‌یابی یک کاربر", self.user_check, icon=ft.Icons.SEARCH)),
+                 button_row(b("تعمیر: فقط تسترها", lambda: self.maintenance(True), icon=ft.Icons.BUILD),
+                            b("پایان تعمیر", lambda: self.maintenance(False), icon=ft.Icons.CHECK_CIRCLE)),
                  icon=ft.Icons.DNS),
             card("یوزر منیجر دوم", ft.Row([self.um2]),
                  hint("دیتابیس یوزر منیجر روتر اصلی هر ۵ دقیقه روی این روتر کپی می‌شود."),
@@ -1512,6 +1514,32 @@ class ServicesPage:
         await self.app.info("انجام شد" if not bad else "ناقص",
                             "pv-agent همه‌ی سرورها به‌روز شد." if not bad
                             else "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
+
+    async def maintenance(self, on):
+        """«فقط تسترها»: everyone but the testers off the Linux servers (to SSTP)."""
+        servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return await self.app.info("خطا", "سرور لینوکسی تعریف نشده است.")
+        testers = list(self.app.settings.testers)
+        if on and not testers:
+            return await self.app.info("خطا", "یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+
+        def job(log, progress):
+            bad = []
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                try:
+                    with linux_connector(r)() as h:
+                        linux.set_maintenance(h, testers if on else None, log)
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    bad.append(r["host"])
+            return bad
+        bad = await self.app.run(self.panel, job)
+        await self.app.info("انجام شد" if not bad else "ناقص",
+                            ("حالت تعمیر روشن شد: فقط %s روی لینوکس، بقیه روی SSTP." % "، ".join(testers)
+                             if on else "حالت تعمیر خاموش شد: همه دوباره روی لینوکس پذیرفته می‌شوند.")
+                            if not bad else "روی این سرورها انجام نشد: %s" % "، ".join(bad))
 
     async def user_check(self):
         servers = [r for r in self.app.settings.routers if r.get("role") == "linux"]

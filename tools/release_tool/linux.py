@@ -541,6 +541,33 @@ def update_agent(h, log=print):
     log("pv-agent به‌روز شد ✓")
 
 
+ONLY_USERS = "/etc/pv-agent/only-users"
+
+
+def set_maintenance(h, testers, log=print):
+    """«فقط تسترها»: only these usernames stay on this server; pv-agent takes
+    everyone else off Xray and AmneziaWG within a minute, and their apps
+    move to SSTP. testers=None ends it (everyone let in again).
+    The pv-agent code is brought up to date first (older ones ignore the file)."""
+    update_agent(h, log)
+    if testers is None:
+        h.run("rm -f %s" % ONLY_USERS)
+        log("✓ همه‌ی کاربرها دوباره روی این سرور پذیرفته می‌شوند (تا یک دقیقه).")
+        return
+    names = sorted({t.strip().lower() for t in testers if t.strip()})
+    if not names:
+        raise LinuxError("یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+    h.write(ONLY_USERS, ("\n".join(names) + "\n").encode(), "600")
+    log("✓ حالت تعمیر: فقط %s روی این سرور؛ بقیه تا یک دقیقه روی SSTP می‌روند." % "، ".join(names))
+
+
+def maintenance_state(h):
+    """The usernames of «فقط تسترها», or None when off."""
+    out = h.run("cat %s 2>/dev/null || true" % ONLY_USERS)
+    names = [l.strip() for l in out.splitlines() if l.strip()]
+    return names or None
+
+
 def user_check(h, p, username, client_ip="", seconds=25, log=print):
     """Why one user cannot connect, seen from the server (lines of text):
     their AmneziaWG peer (present, last handshake, the address it came from,

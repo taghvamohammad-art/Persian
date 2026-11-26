@@ -241,6 +241,18 @@ class AgentTests(unittest.TestCase):
         agent.xray = FakeXray()
         return agent, srv
 
+    def test_maintenance_only_users(self):
+        agent, srv = self.make({})
+        tmp = tempfile.mkdtemp()
+        agent.cfg["only_users_file"] = os.path.join(tmp, "only-users")
+        users = {"Mohammad": "a", "25g00001": "b"}
+        self.assertEqual(agent.allowed_now(users), users)            # no file: everyone
+        with open(agent.cfg["only_users_file"], "w") as f:
+            f.write("mohammad\n")
+        self.assertEqual(agent.allowed_now(users), {"Mohammad": "a"})
+        os.remove(agent.cfg["only_users_file"])
+        self.assertEqual(agent.allowed_now(users), users)
+
     def test_session_lifecycle(self):
         agent, srv = self.make({"25g00001": "abc123"})
         router_users = {"25g00001": "abc123"}

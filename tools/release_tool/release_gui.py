@@ -1257,6 +1257,10 @@ class ServicesPage(RouterPage):
         l6.addLayout(r6)
         l6.addWidget(self.button("تنظیمات تازه‌ی Xray روی سرورها و انتشار برای اپ", self.refresh_servers))
         l6.addWidget(self.button("🔍 عیب‌یابی یک کاربر (از دید سرور)", self.user_check))
+        r7 = QHBoxLayout()
+        r7.addWidget(self.button("🔧 حالت تعمیر: فقط تسترها روی لینوکس", lambda: self.maintenance(True)))
+        r7.addWidget(self.button("✅ پایان تعمیر: همه به لینوکس", lambda: self.maintenance(False)))
+        l6.addLayout(r7)
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1476,6 +1480,43 @@ class ServicesPage(RouterPage):
                 QMessageBox.warning(self, "ناقص", "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
+        self.run(job, done)
+
+    def maintenance(self, on):
+        """«فقط تسترها»: everyone but the testers off the Linux servers (to SSTP)."""
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+        testers = list(self.settings.testers)
+        if on:
+            if not testers:
+                return QMessageBox.warning(self, "خطا", "یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+            text = ("روی %d سرور لینوکس فقط این یوزرها پذیرفته می‌شوند: %s\n\n"
+                    "بقیه‌ی کاربرها تا حدود ۲ دقیقه خودکار روی SSTP میکروتیک می‌روند (یک قطعی کوتاه). "
+                    "به CPU روتر اصلی دقت کنید.\nادامه؟" % (len(servers), "، ".join(testers)))
+        else:
+            text = ("همه‌ی کاربرها دوباره روی سرورهای لینوکس پذیرفته می‌شوند.\n"
+                    "کسانی که الان روی SSTP هستند با قطع و وصل بعدی (یا قطع SSTP) به لینوکس برمی‌گردند.\nادامه؟")
+        if QMessageBox.question(self, "حالت تعمیر", text) != QMessageBox.Yes:
+            return
+
+        def job(log, progress):
+            bad = []
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                try:
+                    with linux_connector(r)() as h:
+                        linux.set_maintenance(h, testers if on else None, log)
+                except Exception as e:   # noqa: BLE001 - the others still get it
+                    log("✗ %s" % e)
+                    bad.append(r["host"])
+            return bad
+
+        def done(bad):
+            if bad:
+                QMessageBox.warning(self, "ناقص", "روی این سرورها انجام نشد: %s" % "، ".join(bad))
+            else:
+                QMessageBox.information(self, "انجام شد", "حالت تعمیر روشن شد." if on else "حالت تعمیر خاموش شد.")
         self.run(job, done)
 
     def user_check(self):

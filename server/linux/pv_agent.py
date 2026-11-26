@@ -63,6 +63,7 @@ MIN_START = 100 * 1024   # bytes before a User Manager session is opened: the ap
                          # shared-users slot (a 1-user account would be refused elsewhere)
 BLOCK_RETRY = 120        # a user User Manager rejected is asked again after this long
                          # (often only a session elsewhere still closing: retry soon)
+ONLY_USERS = "/etc/pv-agent/only-users"   # maintenance: release tool «فقط تسترها»
 XRAY_RESTART_GAP = 120   # at most one fallback restart of Xray per this many seconds
 
 
@@ -517,12 +518,26 @@ class Agent:
     # ---------------------------------------------------------------- users
 
     def allowed_now(self, from_router):
-        """Router's list minus users User Manager rejected a short while ago."""
+        """Router's list minus users User Manager rejected a short while ago,
+        and, in maintenance (only-users file), everyone not listed."""
         blocked = self.state.setdefault("blocked", {})
         now = time.time()
         for name in [n for n, t in blocked.items() if now - t > BLOCK_RETRY]:
             del blocked[name]
-        return {n: p for n, p in from_router.items() if n.lower() not in blocked}
+        only = self.only_users()
+        return {n: p for n, p in from_router.items()
+                if n.lower() not in blocked and (only is None or n.lower() in only)}
+
+    def only_users(self):
+        """Maintenance: the usernames (one per line) still let in; None when
+        the file is absent. Everyone else is taken off Xray and AmneziaWG, so
+        their apps move to SSTP until the file is removed."""
+        path = self.cfg.get("only_users_file", ONLY_USERS)
+        try:
+            with open(path) as f:
+                return {l.strip().lower() for l in f if l.strip()}
+        except OSError:
+            return None
 
     def sync_users(self):
         try:
