@@ -371,7 +371,30 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		lastErr := "no protocol works"
 		up := false
 		kind := ""
-		for _, attempt := range plan(probeAll(servers, user, pass, fullNext), len(bypass) > 0) {
+		attempts := plan(probeAll(servers, user, pass, fullNext), len(bypass) > 0)
+		if !fullNext {
+			// the quick probe tries only some protocols: when what it found
+			// cannot be used here, every protocol of every server after it
+			attempts = append(attempts, [][]choice{nil}...)
+		}
+		for _, attempt := range attempts {
+			if attempt == nil {
+				if up {
+					break
+				}
+				for _, a := range plan(probeAll(servers, user, pass, true), len(bypass) > 0) {
+					if names2, err := start(a, user, pass, bypass); err == nil {
+						names, up, kind = names2, true, kindOf(a)
+						lastGood = a[0].name
+						note("connected: %v", names)
+						break
+					} else {
+						lastErr = err.Error()
+						note("start failed: %s", lastErr)
+					}
+				}
+				break
+			}
 			select {
 			case <-stop:
 				return

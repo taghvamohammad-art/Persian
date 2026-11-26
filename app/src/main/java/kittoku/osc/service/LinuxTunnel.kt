@@ -95,18 +95,26 @@ internal class LinuxTunnel(
             Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
         }
         // after a breakdown every protocol is tried, so the fallbacks are there too
-        val probes = probeAll(full = exclude != null)
-        val choices = bySpeed(plan(probes), probes).filter { "${it.name}/${it.kind}" != exclude }
-        for (c in choices) {
-            if (closed || !isActive) return@withContext false
-            if (connect(c)) return@withContext true
-        }
-        false
+        val full = exclude != null
+        if (tryChoices(probeAll(full), exclude)) return@withContext true
+        // the quick probe found nothing usable here (e.g. only AmneziaWG while
+        // the protocol choice is Xray): every protocol of every server
+        !full && !closed && isActive && tryChoices(probeAll(full = true), exclude)
     }
 
-    /** Whether any Linux protocol (not the DNS tunnel) works now; nothing is started. */
+    private suspend fun tryChoices(probes: List<Choice>, exclude: String?): Boolean {
+        val choices = bySpeed(plan(probes), probes).filter { "${it.name}/${it.kind}" != exclude }
+        for (c in choices) {
+            if (closed) return false
+            if (connect(c)) return true
+        }
+        return false
+    }
+
+    /** Whether a Linux tunnel could be started now (not the DNS tunnel); nothing is started. */
     internal suspend fun anyWorks(): Boolean = withContext(Dispatchers.IO) {
-        probeAll().any { it.kind != "vless-dns" }
+        plan(probeAll()).any { it.kind != "vless-dns" } ||
+            plan(probeAll(full = true)).any { it.kind != "vless-dns" }
     }
 
     /**

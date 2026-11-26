@@ -333,10 +333,17 @@ class SstpVpnService : VpnService() {
                 // (a probe-only LinuxTunnel holds nothing; its close() would stop the engine)
                 if (!works || controller == null || linuxTunnel != null) continue
                 logWriter?.report("Linux servers work again, leaving SSTP")
-                controller?.kill(false, null)
+                // the service stays: SSTP goes down, then the Linux tunnel starts
+                // (closing the service here used to end the whole VPN)
+                val old = controller
                 controller = null
-                startShield(quiet = true)
-                startConnection()
+                if (old == null) return@launch
+                old.kill(false, null) {
+                    if (linuxTunnel == null && controller == null) {
+                        startShield(quiet = true)
+                        startConnection()
+                    }
+                }
                 return@launch
             }
         }
