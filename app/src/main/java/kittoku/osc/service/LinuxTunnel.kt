@@ -37,6 +37,11 @@ private const val SPEED_SLOW_KBPS = 40L       // below this the path counts as t
 private const val SPEED_CHECK_EVERY_MS = 15 * 60_000L  // while connected and in use
 private const val SPEED_RECHECK_MS = 60_000L  // a slow result is confirmed once before switching
 private const val CDN = "vless-xhttp-cdn"
+private const val LAST_GOOD_KEY = "pv_last_good_server"
+/** Tried first: they look like ordinary HTTPS (Reality) or have their own disguise. */
+private val STEALTH_KINDS = setOf("vless-reality-vision", "vless-xhttp-reality", "amneziawg")
+/** Carry traffic only when nothing disguised works. */
+private val WEAK_KINDS = setOf("shadowsocks-2022", "hysteria2")
 private const val XRAY_MTU = 1500
 private const val AWG_MTU = 1280
 private const val XRAY_ADDRESS = "172.19.0.1"
@@ -89,7 +94,8 @@ internal class LinuxTunnel(
             val dns = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
             Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
         }
-        val probes = probeAll()
+        // after a breakdown every protocol is tried, so the fallbacks are there too
+        val probes = probeAll(full = exclude != null)
         val choices = bySpeed(plan(probes), probes).filter { "${it.name}/${it.kind}" != exclude }
         for (c in choices) {
             if (closed || !isActive) return@withContext false
@@ -103,23 +109,56 @@ internal class LinuxTunnel(
         probeAll().any { it.kind != "vless-dns" }
     }
 
-    private suspend fun probeAll(): List<Choice> = coroutineScope {
-        servers.map { server ->
-            async(Dispatchers.IO) {
-                val name = runCatching { JSONObject(server).optString("name", "") }.getOrDefault("")
-                val result = try {
-                    JSONObject(Pvcore.probe(server, user, pass, PROBE_TIMEOUT_MS))
-                } catch (e: Exception) {
-                    Log.w(TAG, "probe failed: $e")
-                    return@async emptyList<Choice>()
-                }
-                service.logWriter?.report("probe $name: $result")
-                result.keys().asSequence().filter { it != "errors" }.mapNotNull { kind ->
-                    val ms = result.optLong(kind, -1)
-                    if (ms >= 0) Choice(server, name, kind, ms) else null
-                }.toList()
-            }
-        }.awaitAll().flatten().sortedBy { it.ms }
+    /**
+     * First only the disguised protocols (Reality looks like ordinary HTTPS,
+     * AmneziaWG has its own disguise), one server at a time, the one that
+     * worked last first, stopping at the first server where one works: trying
+     * every protocol of every server from one phone within seconds, on every
+     * connect, is itself a pattern a filter can see. Only when none of them
+     * works, every protocol of every server together.
+     */
+    private suspend fun probeAll(full: Boolean = false): List<Choice> {
+        val last = prefs.getString(LAST_GOOD_KEY, "").orEmpty()
+        val ordered = servers.sortedBy { if (nameOf(it) == last) 0 else 1 }
+        if (!full) for (server in ordered) {
+            val part = onlyKinds(server, STEALTH_KINDS) ?: continue
+            val res = probeOne(server, part)
+            if (res.isNotEmpty()) return res.sortedBy { it.ms }
+        }
+        return coroutineScope {
+            servers.map { server -> async(Dispatchers.IO) { probeOne(server, server) } }.awaitAll()
+        }.flatten().sortedBy { it.ms }
+    }
+
+    private fun nameOf(server: String) =
+        runCatching { JSONObject(server).optString("name", "") }.getOrDefault("")
+
+    /** The server entry with only the given protocols; null when it has none of them. */
+    private fun onlyKinds(server: String, kinds: Set<String>): String? = runCatching {
+        val o = JSONObject(server)
+        val list = o.optJSONArray("protocols") ?: return@runCatching null
+        val keep = org.json.JSONArray()
+        for (i in 0 until list.length()) {
+            val pr = list.optJSONObject(i) ?: continue
+            if (pr.optString("type") in kinds) keep.put(pr)
+        }
+        if (keep.length() == 0) null else o.put("protocols", keep).toString()
+    }.getOrNull()
+
+    /** Probes [probe] (all or some protocols of [server]); choices keep the full entry. */
+    private fun probeOne(server: String, probe: String): List<Choice> {
+        val name = nameOf(server)
+        val result = try {
+            JSONObject(Pvcore.probe(probe, user, pass, PROBE_TIMEOUT_MS))
+        } catch (e: Exception) {
+            Log.w(TAG, "probe failed: $e")
+            return emptyList()
+        }
+        service.logWriter?.report("probe $name: $result")
+        return result.keys().asSequence().filter { it != "errors" }.mapNotNull { kind ->
+            val ms = result.optLong(kind, -1)
+            if (ms >= 0) Choice(server, name, kind, ms) else null
+        }.toList()
     }
 
     /**
@@ -132,11 +171,17 @@ internal class LinuxTunnel(
      * tunnel only as the last resort.
      */
     private suspend fun plan(all: List<Choice>): List<Choice> {
-        val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" }
+        val xray = all.filter { it.kind != "amneziawg" && it.kind != "vless-dns" && it.kind !in WEAK_KINDS }
         // one server at a time: traffic spread over two servers would open two
         // User Manager sessions, and a one-user account is refused on the second
-        val members = xray.firstOrNull()?.let { best -> xray.filter { it.server == best.server } }.orEmpty()
+        val members = xray.firstOrNull()?.let { best -> xray.filter { it.name == best.name } }.orEmpty()
         val pool = members.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, members) }
+        // Shadowsocks (plain random bytes) and Hysteria2 (QUIC-like) are what
+        // filters pick out by statistics, and then the whole address is slowed:
+        // they carry traffic only when nothing disguised works
+        val weakAll = all.filter { it.kind in WEAK_KINDS }
+        val weakMembers = weakAll.firstOrNull()?.let { b -> weakAll.filter { it.name == b.name } }.orEmpty()
+        val weak = weakMembers.firstOrNull()?.let { Choice("", it.name, "pool", it.ms, weakMembers) }
         // hotspot sharing needs the Xray tunnel (its proxy goes through it)
         val choice = BrandSession.protocolChoice(service, prefs)
         val awg = all.firstOrNull { it.kind == "amneziawg" && !BrandSession.shareEnabled(prefs) }
@@ -152,6 +197,7 @@ internal class LinuxTunnel(
                 "${it.kind} ${it.ms}ms×${1 + recentFailures(group(it))}"
             })
         }
+        if (weak != null) out += weak
         out += all.filter { it.kind == "vless-dns" }
         return out
     }
@@ -167,14 +213,20 @@ internal class LinuxTunnel(
         if (first.kind == CDN || first.kind == "vless-dns") return@withContext choices
         val sample = if (first.kind == "pool") first.members.firstOrNull { it.kind != CDN } else first
         sample ?: return@withContext choices
-        val cdn = probes.firstOrNull { it.kind == CDN && it.server == sample.server }
+        val probed = probes.firstOrNull { it.kind == CDN && it.server == sample.server }
             ?: probes.firstOrNull { it.kind == CDN }
-            ?: return@withContext choices
+        val hasCdn = probed != null || servers.any { onlyKinds(it, setOf(CDN)) != null }
+        if (!hasCdn) return@withContext choices
         val direct = runCatching { Pvcore.speed(sample.server, sample.kind, user, pass, SPEED_SECONDS) }.getOrDefault(-1L)
         if (direct >= SPEED_GOOD_KBPS) {
             service.logWriter?.report("speed ${sample.name}/${sample.kind}: $direct KB/s")
             return@withContext choices
         }
+        // the first probe tries only the disguised protocols: CDN is probed
+        // now, when the direct address turns out slow
+        val cdn = probed ?: (listOf(sample.server) + servers.filter { it != sample.server }).firstNotNullOfOrNull { sv ->
+            onlyKinds(sv, setOf(CDN))?.let { part -> probeOne(sv, part).firstOrNull() }
+        } ?: return@withContext choices
         val viaCdn = runCatching { Pvcore.speed(cdn.server, CDN, user, pass, SPEED_SECONDS) }.getOrDefault(-1L)
         service.logWriter?.report("speed ${sample.name}/${sample.kind}: $direct KB/s, ${cdn.name}/cdn: $viaCdn KB/s")
         if (viaCdn >= SPEED_SLOW_KBPS && viaCdn >= 2 * maxOf(direct, 1L)) {
@@ -267,6 +319,7 @@ internal class LinuxTunnel(
         }
         current = "${c.name}/${c.kind}"
         currentChoice = c
+        prefs.edit().putString(LAST_GOOD_KEY, c.name).apply()
         onConnected(c)
         return true
     }
@@ -402,11 +455,14 @@ internal class LinuxTunnel(
 
     private fun sameChoice(a: Choice, b: Choice): Boolean {
         if (a.kind != b.kind) return false
-        if (a.kind != "pool") return a.server == b.server
+        if (a.kind != "pool") return a.name == b.name
         // a pool on the same server is kept even if a probe in the middle of a
         // hiccup missed one of its protocols: Xray's balancer inside the pool
         // already leaves a failing protocol out and takes it back when it returns
-        return a.members.map { it.server }.toSet() == b.members.map { it.server }.toSet()
+        // (the weak pool is not the same as the disguised one)
+        val weakA = a.members.any { it.kind in WEAK_KINDS }
+        val weakB = b.members.any { it.kind in WEAK_KINDS }
+        return weakA == weakB && a.members.map { it.name }.toSet() == b.members.map { it.name }.toSet()
     }
 
     /** The hotspot proxy, when the user turned sharing on (BrandSession.shareEnabled). */

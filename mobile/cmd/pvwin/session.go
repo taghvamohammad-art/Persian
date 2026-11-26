@@ -110,7 +110,84 @@ func (s *session) Connect(cfg *pvcore.SignedConfig, user, pass string, bypass []
 	}()
 }
 
-func probeAll(servers []json.RawMessage, user, pass string) []choice {
+// The protocols tried first: they look like ordinary HTTPS (Reality) or
+// carry their own disguise (AmneziaWG). Trying every protocol of every
+// server from the same computer within seconds, on each connect, is itself
+// a pattern a filter can see; the rest are tried only when these fail.
+var stealthKinds = map[string]bool{"vless-reality-vision": true, "vless-xhttp-reality": true, "amneziawg": true}
+
+// lastGood: the server that worked last (its name), tried first.
+var lastGood string
+
+// onlyKinds is the server entry with just the given protocols (nil: all).
+func onlyKinds(sv json.RawMessage, kinds map[string]bool) json.RawMessage {
+	if kinds == nil {
+		return sv
+	}
+	var m map[string]any
+	if json.Unmarshal(sv, &m) != nil {
+		return sv
+	}
+	list, _ := m["protocols"].([]any)
+	var keep []any
+	for _, p := range list {
+		if pm, ok := p.(map[string]any); ok && kinds[fmt.Sprint(pm["type"])] {
+			keep = append(keep, pm)
+		}
+	}
+	if len(keep) == 0 {
+		return nil
+	}
+	m["protocols"] = keep
+	out, err := json.Marshal(m)
+	if err != nil {
+		return sv
+	}
+	return out
+}
+
+func serverName(sv json.RawMessage) string {
+	var meta struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(sv, &meta)
+	return meta.Name
+}
+
+func probeOne(sv json.RawMessage, user, pass string) []choice {
+	var res []choice
+	var r map[string]any
+	name := serverName(sv)
+	raw := pvcore.Probe(string(sv), user, pass, 7000)
+	note("probe %s: %s", name, raw)
+	json.Unmarshal([]byte(raw), &r)
+	for k, v := range r {
+		if ms, ok := v.(float64); ok && ms >= 0 {
+			res = append(res, choice{sv, name, k, int(ms)})
+		}
+	}
+	return res
+}
+
+// probeAll: first the disguised protocols, one server at a time (the one
+// that worked last first), stopping at the first server where one works;
+// only when none does, every protocol of every server together.
+func probeAll(servers []json.RawMessage, user, pass string, full bool) []choice {
+	ordered := append([]json.RawMessage(nil), servers...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return serverName(ordered[i]) == lastGood && serverName(ordered[j]) != lastGood
+	})
+	for _, sv := range ordered {
+		if full {
+			break
+		}
+		if part := onlyKinds(sv, stealthKinds); part != nil {
+			if res := probeOne(part, user, pass); len(res) > 0 {
+				sort.Slice(res, func(i, j int) bool { return res[i].ms < res[j].ms })
+				return res
+			}
+		}
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var res []choice
@@ -119,21 +196,10 @@ func probeAll(servers []json.RawMessage, user, pass string) []choice {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var meta struct {
-				Name string `json:"name"`
-			}
-			json.Unmarshal(sv, &meta)
-			var r map[string]any
-			raw := pvcore.Probe(string(sv), user, pass, 7000)
-			note("probe %s: %s", meta.Name, raw)
-			json.Unmarshal([]byte(raw), &r)
-			for k, v := range r {
-				if ms, ok := v.(float64); ok && ms >= 0 {
-					mu.Lock()
-					res = append(res, choice{sv, meta.Name, k, int(ms)})
-					mu.Unlock()
-				}
-			}
+			r := probeOne(sv, user, pass)
+			mu.Lock()
+			res = append(res, r...)
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
@@ -141,11 +207,16 @@ func probeAll(servers []json.RawMessage, user, pass string) []choice {
 	return res
 }
 
+// fallbackKinds are carried only when nothing disguised works: their
+// traffic is plain random bytes (Shadowsocks) or QUIC-like (Hysteria2),
+// which filters pick out by statistics and then slow down the whole address.
+var fallbackKinds = map[string]bool{"shadowsocks-2022": true, "hysteria2": true}
+
 // attempts in order: each is a list of choices started together (one
 // AmneziaWG server, or a pool of Xray protocols).
 // noAwg: programs must bypass the tunnel, which only the Xray TUN can do.
 func plan(all []choice, noAwg bool) [][]choice {
-	var pool, dns []choice
+	var pool, weak, dns []choice
 	var awg *choice
 	for i, c := range all {
 		if noAwg && c.kind == "amneziawg" {
@@ -161,7 +232,11 @@ func plan(all []choice, noAwg bool) [][]choice {
 		default:
 			// one server at a time: traffic over two servers opens two User
 			// Manager sessions, and a one-user account is refused on the second
-			if len(pool) == 0 || string(pool[0].server) == string(c.server) {
+			if fallbackKinds[c.kind] {
+				if len(weak) == 0 || weak[0].name == c.name {
+					weak = append(weak, c)
+				}
+			} else if len(pool) == 0 || pool[0].name == c.name {
 				pool = append(pool, c)
 			}
 		}
@@ -185,6 +260,9 @@ func plan(all []choice, noAwg bool) [][]choice {
 		if len(pool) > 0 {
 			out = append(out, pool)
 		}
+	}
+	if len(weak) > 0 {
+		out = append(out, weak) // Shadowsocks/Hysteria2 only when the above fail
 	}
 	if len(dns) > 0 {
 		out = append(out, dns) // the DNS tunnel only when nothing else works
@@ -281,6 +359,8 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 	// not; a return that ends on SSTP again doubles the gap.
 	returnGap := 5 * time.Minute
 	triedReturn := false
+	// after a breakdown every protocol is tried, so the fallbacks are there too
+	fullNext := false
 	for {
 		select {
 		case <-stop:
@@ -291,7 +371,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		lastErr := "no protocol works"
 		up := false
 		kind := ""
-		for _, attempt := range plan(probeAll(servers, user, pass), len(bypass) > 0) {
+		for _, attempt := range plan(probeAll(servers, user, pass, fullNext), len(bypass) > 0) {
 			select {
 			case <-stop:
 				return
@@ -300,12 +380,14 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			var err error
 			if names, err = start(attempt, user, pass, bypass); err == nil {
 				up, kind = true, kindOf(attempt)
+				lastGood = attempt[0].name
 				note("connected: %v", names)
 				break
 			}
 			lastErr = err.Error()
 			note("start failed: %s", lastErr)
 		}
+		fullNext = !up
 		sstp := false
 		if !up && len(cfg.Servers) > 0 {
 			// the last resort: Windows' own SSTP client to the MikroTik
@@ -342,7 +424,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			}
 			if sstp && len(servers) > 0 && time.Since(onSince) >= returnGap {
 				onSince = time.Now()
-				for _, c := range probeAll(servers, user, pass) {
+				for _, c := range probeAll(servers, user, pass, false) {
 					if c.kind != "vless-dns" {
 						back = true
 						break
@@ -374,6 +456,7 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 			continue
 		}
 		note("tunnel stopped working, starting over")
+		fullNext = true
 		s.set("retry", nil, "tunnel stopped working")
 	}
 }
