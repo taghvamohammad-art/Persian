@@ -308,12 +308,18 @@ internal class Controller(internal val bridge: SharedBridge) {
         }
     }
 
+    @Volatile private var instead: (() -> Unit)? = null
+
     /**
-     * [instead]: when given, it runs once SSTP is down in place of closing the
-     * whole VPN service (leaving SSTP for a Linux tunnel keeps the service).
+     * SSTP down, then [then] in place of closing the whole VPN service
+     * (leaving SSTP for a Linux tunnel keeps the service).
      */
-    internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?,
-                      instead: (() -> Unit)? = null) {
+    internal fun handOver(then: () -> Unit) {
+        instead = then
+        kill(false, null)
+    }
+
+    internal fun kill(isReconnectionRequested: Boolean, cleanup: (suspend () -> Unit)?) {
         if (!mutex.tryLock()) return
         isClosing = true
 
@@ -330,8 +336,9 @@ internal class Controller(internal val bridge: SharedBridge) {
 
             closeTerminals()
 
-            if (instead != null) {
-                instead()
+            val then = instead
+            if (then != null) {
+                then()
             } else if (isReconnectionRequested && isReconnectionAvailable) {
                 bridge.service.launchJobReconnect()
             } else {

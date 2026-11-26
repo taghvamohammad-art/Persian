@@ -338,7 +338,7 @@ class SstpVpnService : VpnService() {
                 val old = controller
                 controller = null
                 if (old == null) return@launch
-                old.kill(false, null) {
+                old.handOver {
                     if (linuxTunnel == null && controller == null) {
                         startShield(quiet = true)
                         startConnection()
