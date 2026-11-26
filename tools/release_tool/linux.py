@@ -320,8 +320,20 @@ def install_web(h, p, log):
     }
 }
 """ % {"cdn": cdn, "token": p["status_token"], "allow": allow})
-    h.run("rm -f /etc/nginx/sites-enabled/default; ln -sf /etc/nginx/sites-available/pv /etc/nginx/sites-enabled/pv; "
-          "nginx -t 2>&1 && systemctl enable nginx >/dev/null 2>&1; systemctl restart nginx")
+    # a server without IPv6 refuses "[::]:80" only when nginx starts (the
+    # test passes); another web server the provider put there holds port 80
+    h.run(r"""[ -s /proc/net/if_inet6 ] || sed -i '/listen \[::\]:80/d' /etc/nginx/sites-available/pv
+for s in apache2 httpd lighttpd caddy; do
+  systemctl is-active -q $s 2>/dev/null && { systemctl stop $s; systemctl disable $s >/dev/null 2>&1; }
+done
+true""", check=False)
+    out = h.run("rm -f /etc/nginx/sites-enabled/default; ln -sf /etc/nginx/sites-available/pv /etc/nginx/sites-enabled/pv; "
+                "nginx -t 2>&1 && systemctl enable nginx >/dev/null 2>&1; systemctl restart nginx && echo NGINX_UP",
+                check=False)
+    if "NGINX_UP" not in out:
+        why = h.run("journalctl -u nginx -n 15 --no-pager 2>&1 | grep -i emerg | tail -n 3; "
+                    "ss -ltnp 2>/dev/null | grep -E ':(80|443) ' || true", check=False)
+        raise LinuxError("nginx اجرا نشد:\n%s\n%s" % (out[-400:], why[-800:]))
 
 
 def free_port_53(h):
