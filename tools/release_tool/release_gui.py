@@ -1488,15 +1488,25 @@ class ServicesPage(RouterPage):
         if not servers:
             return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
         testers = list(self.settings.testers)
+        if on and not testers:
+            return QMessageBox.warning(self, "خطا", "یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+        if len(servers) > 1:
+            from PySide6.QtWidgets import QInputDialog
+            labels = ["همه‌ی سرورها"] + [r.get("name") or r["host"] for r in servers]
+            pick, ok = QInputDialog.getItem(self, "حالت تعمیر" if on else "پایان تعمیر", "کدام سرور لینوکس؟",
+                                            labels, 0, False)
+            if not ok:
+                return
+            if pick != labels[0]:
+                servers = [servers[labels.index(pick) - 1]]
         if on:
-            if not testers:
-                return QMessageBox.warning(self, "خطا", "یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
             text = ("روی %d سرور لینوکس فقط این یوزرها پذیرفته می‌شوند: %s\n\n"
                     "بقیه‌ی کاربرها تا حدود ۲ دقیقه خودکار روی SSTP میکروتیک می‌روند (یک قطعی کوتاه). "
                     "به CPU روتر اصلی دقت کنید.\nادامه؟" % (len(servers), "، ".join(testers)))
         else:
-            text = ("همه‌ی کاربرها دوباره روی سرورهای لینوکس پذیرفته می‌شوند.\n"
-                    "کسانی که الان روی SSTP هستند با قطع و وصل بعدی (یا قطع SSTP) به لینوکس برمی‌گردند.\nادامه؟")
+            text = ("همه‌ی کاربرها دوباره روی %d سرور لینوکس پذیرفته می‌شوند.\n"
+                    "کسانی که روی SSTP رفته‌اند، با نسخه‌ی جدید اپ ظرف چند دقیقه خودکار برمی‌گردند؛ "
+                    "نسخه‌های قدیمی با قطع و وصل بعدی.\nادامه؟" % len(servers))
         if QMessageBox.question(self, "حالت تعمیر", text) != QMessageBox.Yes:
             return
 

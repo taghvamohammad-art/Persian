@@ -61,7 +61,9 @@ internal const val NOTIFICATION_DISCONNECT_ID = 3
 internal const val NOTIFICATION_CERTIFICATE_ID = 4
 
 
-internal class SstpVpnService : VpnService() {
+internal private const val LINUX_RETURN_EVERY_MS = 5 * 60_000L   // on SSTP: how often Linux is tried again
+
+class SstpVpnService : VpnService() {
     private lateinit var prefs: SharedPreferences
     private lateinit var listener: SharedPreferences.OnSharedPreferenceChangeListener
     private lateinit var notificationManager: NotificationManagerCompat
@@ -72,6 +74,7 @@ internal class SstpVpnService : VpnService() {
 
     private var jobReconnect: Job? = null
     private var jobConnect: Job? = null
+    private var jobLinuxReturn: Job? = null
     private var linuxTunnel: LinuxTunnel? = null
 
     private fun setRootState(state: Boolean) {
@@ -303,10 +306,45 @@ internal class SstpVpnService : VpnService() {
             if (!isActive) return@launch
             logWriter?.report("no Linux protocol works, falling back to SSTP")
             initializeClient()
+            watchLinuxReturn(linux)
+        }
+    }
+
+    /**
+     * On SSTP because no Linux protocol worked (a server down, «حالت تعمیر»,
+     * a filter): every few minutes the Linux servers are probed again (this
+     * app's own traffic is outside the tunnel) and the connection moves back
+     * as soon as one works.
+     */
+    private fun watchLinuxReturn(linux: List<String>) {
+        jobLinuxReturn?.cancel()
+        jobLinuxReturn = scope.launch {
+            while (isActive) {
+                delay(LINUX_RETURN_EVERY_MS)
+                if (controller == null || linuxTunnel != null) return@launch
+                val probe = LinuxTunnel(this@SstpVpnService, prefs, linux)
+                val works = try {
+                    probe.anyWorks()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    false
+                }
+                // (a probe-only LinuxTunnel holds nothing; its close() would stop the engine)
+                if (!works || controller == null || linuxTunnel != null) continue
+                logWriter?.report("Linux servers work again, leaving SSTP")
+                controller?.kill(false, null)
+                controller = null
+                startShield(quiet = true)
+                startConnection()
+                return@launch
+            }
         }
     }
 
     private fun stopLinux() {
+        jobLinuxReturn?.cancel()
+        jobLinuxReturn = null
         jobConnect?.cancel()
         jobConnect = null
         linuxTunnel?.close()

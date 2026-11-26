@@ -275,6 +275,12 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		}
 	}
 	backoff := 5 * time.Second
+	// on SSTP because no Linux protocol worked: Linux is tried again every
+	// returnGap. The probes may go out through the SSTP tunnel (Windows'
+	// client takes the default route) and pass where the direct way does
+	// not; a return that ends on SSTP again doubles the gap.
+	returnGap := 5 * time.Minute
+	triedReturn := false
 	for {
 		select {
 		case <-stop:
@@ -321,10 +327,32 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 		}
 		backoff = 5 * time.Second
 		s.set("connected", names, "")
+		if sstp && triedReturn && returnGap < time.Hour {
+			returnGap *= 2
+		}
+		if !sstp {
+			returnGap, triedReturn = 5*time.Minute, false
+		}
+		onSince := time.Now()
 		failures := 0
+		back := false
 		for failures < 2 {
 			if !wait(25 * time.Second) {
 				return
+			}
+			if sstp && len(servers) > 0 && time.Since(onSince) >= returnGap {
+				onSince = time.Now()
+				for _, c := range probeAll(servers, user, pass) {
+					if c.kind != "vless-dns" {
+						back = true
+						break
+					}
+				}
+				if back {
+					note("Linux servers work again, leaving SSTP")
+					triedReturn = true
+					break
+				}
 			}
 			ok := false
 			if sstp {
@@ -340,9 +368,12 @@ func (s *session) run(cfg *pvcore.SignedConfig, user, pass string, bypass []stri
 				failures = 0
 			}
 		}
-		note("tunnel stopped working, starting over")
 		pvcore.Stop()
 		stopSstp()
+		if back {
+			continue
+		}
+		note("tunnel stopped working, starting over")
 		s.set("retry", nil, "tunnel stopped working")
 	}
 }

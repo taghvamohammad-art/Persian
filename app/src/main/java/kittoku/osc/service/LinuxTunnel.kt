@@ -89,6 +89,11 @@ internal class LinuxTunnel(
         false
     }
 
+    /** Whether any Linux protocol (not the DNS tunnel) works now; nothing is started. */
+    internal suspend fun anyWorks(): Boolean = withContext(Dispatchers.IO) {
+        probeAll().any { it.kind != "vless-dns" }
+    }
+
     private suspend fun probeAll(): List<Choice> = coroutineScope {
         servers.map { server ->
             async(Dispatchers.IO) {

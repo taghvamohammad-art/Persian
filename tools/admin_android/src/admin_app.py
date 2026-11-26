@@ -1523,6 +1523,14 @@ class ServicesPage:
         testers = list(self.app.settings.testers)
         if on and not testers:
             return await self.app.info("خطا", "یوزرهای تست را در تنظیمات (⚙) وارد کنید.")
+        if len(servers) > 1:
+            pick = await self.app.choose("حالت تعمیر" if on else "پایان تعمیر", "کدام سرور لینوکس؟",
+                                         [("*", "همه‌ی سرورها")] + [(r["id"], r.get("name") or r["host"])
+                                                                    for r in servers])
+            if pick is None:
+                return
+            if pick != "*":
+                servers = [r for r in servers if r["id"] == pick]
 
         def job(log, progress):
             bad = []
