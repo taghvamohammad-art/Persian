@@ -61,7 +61,7 @@ internal const val NOTIFICATION_DISCONNECT_ID = 3
 internal const val NOTIFICATION_CERTIFICATE_ID = 4
 
 
-internal private const val LINUX_RETURN_EVERY_MS = 5 * 60_000L   // on SSTP: how often Linux is tried again
+private const val LINUX_RETURN_EVERY_MS = 5 * 60_000L   // on SSTP: how often Linux is tried again
 
 class SstpVpnService : VpnService() {
     private lateinit var prefs: SharedPreferences
