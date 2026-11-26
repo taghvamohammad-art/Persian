@@ -22,7 +22,7 @@ import (
 // BenchSpeedURLs: large downloads from fast, widely reachable hosts (the
 // next one when one answers with an error).
 var BenchSpeedURLs = []string{"https://speed.cloudflare.com/__down?bytes=25000000",
-	"https://cachefly.cachefly.net/10mb.test"}
+	"https://cachefly.cachefly.net/10mb.test", "http://speedtest.tele2.net/10MB.zip"}
 
 // benchMinBytes: less than this is no speed measurement.
 const benchMinBytes = 200 << 10
@@ -221,26 +221,31 @@ func benchHTTP(tr *http.Transport, speed time.Duration) benchResult {
 	if speed <= 0 {
 		return res
 	}
+	// the best of the hosts (one may throttle or be slow to this server);
+	// a good result on the first is enough
 	var last2 error
 	for _, u := range BenchSpeedURLs {
 		n, el, err := benchDownload(tr, u, speed)
-		res.MB = float64(n) / 1e6
 		if n > 0 && el >= time.Second {
-			res.Mbps = float64(n) * 8 / el.Seconds() / 1e6
-			if n < benchMinBytes {
-				res.Error = "speed: very slow"
+			if mbps := float64(n) * 8 / el.Seconds() / 1e6; mbps > res.Mbps {
+				res.Mbps, res.MB = mbps, float64(n)/1e6
 			}
-			return res
+			if res.Mbps >= 2 {
+				break
+			}
+			continue
 		}
 		last2 = err
-		if err == nil {
-			last2 = fmt.Errorf("only %d KB in %ds", n>>10, int(speed.Seconds()))
-		}
-		if n > 0 {
-			break // data came, slowly: that is the answer, not the host
-		}
 	}
-	res.Error = "speed: " + shortBenchErr(last2)
+	switch {
+	case res.Mbps == 0:
+		if last2 == nil {
+			last2 = fmt.Errorf("no data")
+		}
+		res.Error = "speed: " + shortBenchErr(last2)
+	case res.MB < float64(benchMinBytes)/1e6:
+		res.Error = "speed: very slow"
+	}
 	return res
 }
 

@@ -133,10 +133,7 @@ def lab_defs(p, host):
                      "settings": {"vnext": [{"address": host, "port": port,
                                              "users": [{"id": uid, "security": "auto"}]}]},
                      "streamSettings": dict({"network": net}, **setting)}))
-    vless(13, "lab-vless-ws", "VLESS WebSocket (بدون TLS)",
-          ({"network": "ws", "wsSettings": {"path": path}}, {"network": "ws", "wsSettings": {"path": path}}))
-    vless(14, "lab-vless-plain", "VLESS TCP (بدون رمزنگاری لایه‌ی انتقال)",
-          ({"network": "raw"}, {"network": "raw"}))
+    # (VLESS without TLS: the Xray client refuses it for a public address)
     # Shadowsocks
     for i, key, label, method, pw in ((15, "lab-ss2022", "Shadowsocks-2022 (یک کاربر)",
                                        "2022-blake3-aes-128-gcm", p["lab_ss_key"]),
@@ -167,10 +164,15 @@ def lab_defs(p, host):
                      "settings": {"version": 2, "users": [{"auth": p["lab_pass"]}]}, "streamSettings": s_stream},
                     {"tag": "proxy", "protocol": "hysteria",
                      "settings": {"version": 2, "address": host, "port": port}, "streamSettings": c_stream}))
-    # mKCP (UDP)
-    vless(19, "lab-mkcp", "VLESS mKCP (UDP)",
-          ({"network": "mkcp", "kcpSettings": {"seed": p["lab_pass"]}},
-           {"network": "mkcp", "kcpSettings": {"seed": p["lab_pass"]}}))
+    # mKCP (UDP), as VMess (encrypted itself)
+    port = base + 19
+    kcp = {"network": "mkcp", "kcpSettings": {"seed": p["lab_pass"]}}
+    out.append(("lab-mkcp", "VMess mKCP (UDP)",
+                {"tag": "lab-mkcp", "port": port, "protocol": "vmess", "settings": {"clients": [{"id": uid}]},
+                 "streamSettings": kcp},
+                {"tag": "proxy", "protocol": "vmess",
+                 "settings": {"vnext": [{"address": host, "port": port, "users": [{"id": uid, "security": "auto"}]}]},
+                 "streamSettings": kcp}))
     # WireGuard (plain, as the app's AmneziaWG without its disguise)
     if p.get("lab_wg_server_priv") and p.get("lab_wg_client_pub"):
         port = base + 20

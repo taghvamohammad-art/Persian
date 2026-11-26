@@ -544,6 +544,50 @@ def update_agent(h, log=print):
 ONLY_USERS = "/etc/pv-agent/only-users"
 
 
+SPEED_SCRIPT = r"""
+wan=$(ip route show default | awk '{print $5; exit}')
+r1=$(cat /sys/class/net/$wan/statistics/rx_bytes); t1=$(cat /sys/class/net/$wan/statistics/tx_bytes)
+sleep 5
+r2=$(cat /sys/class/net/$wan/statistics/rx_bytes); t2=$(cat /sys/class/net/$wan/statistics/tx_bytes)
+echo "use_in=$(( (r2-r1)*8/5/1000000 ))"
+echo "use_out=$(( (t2-t1)*8/5/1000000 ))"
+echo "load=$(cut -d' ' -f1-3 /proc/loadavg)"
+echo "cpus=$(nproc)"
+echo "conns=$(ss -Htn state established 2>/dev/null | wc -l)"
+for u in 'https://speed.cloudflare.com/__down?bytes=25000000' 'https://cachefly.cachefly.net/10mb.test' \
+         'http://speedtest.tele2.net/10MB.zip'; do
+  echo "dl=$u $(curl -s -o /dev/null --max-time 15 -w '%{http_code} %{speed_download} %{size_download}' "$u" || echo fail)"
+done
+"""
+
+
+def server_speed(h, log=print):
+    """The server's own side: how busy its line is right now, its load, and
+    how fast it downloads by itself (if this is slow, every protocol is)."""
+    out = h.run(SPEED_SCRIPT, timeout=90)
+    vals, lines = {}, []
+    for line in out.splitlines():
+        k, _, v = line.partition("=")
+        if k == "dl":
+            u, _, rest = v.partition(" ")
+            parts = rest.split()
+            if len(parts) == 3 and parts[0] == "200":
+                mbps = float(parts[1]) * 8 / 1e6
+                lines.append("  دانلود خود سرور از %s: %.0f Mbit/s (%.1f MB)" % (u.split("/")[2], mbps,
+                                                                              float(parts[2]) / 1e6))
+            else:
+                lines.append("  دانلود خود سرور از %s: ناموفق (%s)" % (u.split("/")[2], rest.strip()))
+        else:
+            vals[k] = v.strip()
+    head = ["  ترافیک همین الان کارت شبکه: ورودی %s و خروجی %s Mbit/s" % (vals.get("use_in", "?"),
+                                                                      vals.get("use_out", "?")),
+            "  بار پردازنده (۱/۵/۱۵ دقیقه): %s روی %s هسته" % (vals.get("load", "?"), vals.get("cpus", "?")),
+            "  اتصال‌های TCP باز: %s" % vals.get("conns", "?")]
+    for l in head + lines:
+        log(l)
+    return head + lines
+
+
 def set_maintenance(h, testers, log=print):
     """«فقط تسترها»: only these usernames stay on this server; pv-agent takes
     everyone else off Xray and AmneziaWG within a minute, and their apps

@@ -1265,6 +1265,7 @@ class ServicesPage(RouterPage):
         r8.addWidget(self.button("🧪 پروتکل‌های آزمایشی + خروجی برای اپ تست", lambda: self.lab(True)))
         r8.addWidget(self.button("حذف پروتکل‌های آزمایشی", lambda: self.lab(False)))
         l6.addLayout(r8)
+        l6.addWidget(self.button("📈 سرعت و بار خود سرور", self.server_speed))
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1485,6 +1486,21 @@ class ServicesPage(RouterPage):
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
         self.run(job, done)
+
+    def server_speed(self):
+        servers = [r for r in self.settings.routers if r.get("role") == "linux"]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی تعریف نشده است.")
+
+        def job(log, progress):
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                try:
+                    with linux_connector(r)() as h:
+                        linux.server_speed(h, log)
+                except Exception as e:   # noqa: BLE001
+                    log("✗ %s" % e)
+        self.run(job, lambda _: None)
 
     def lab(self, install):
         """xray-lab (every protocol worth trying) on the Linux servers, and the
