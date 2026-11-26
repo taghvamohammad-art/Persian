@@ -96,6 +96,29 @@ func TestLivePing(t *testing.T) {
 	}
 }
 
+func TestLivePingLateStart(t *testing.T) {
+	// the ping leaves near the end of the wait: it still gets its time
+	f := &fakeTun{in: make(chan []byte), events: make(chan tun.Event, 1)}
+	lt := newLiveTun(f, "25g00001")
+	go func() {
+		bufs := [][]byte{make([]byte, 2000)}
+		sizes := []int{0}
+		for {
+			if _, err := lt.Read(bufs, sizes, 0); err != nil {
+				return
+			}
+			p := append([]byte(nil), bufs[0][:sizes[0]]...)
+			if len(p) >= 28 && p[9] == 1 {
+				go func() { time.Sleep(200 * time.Millisecond); lt.Write([][]byte{reply(p)}, 0) }()
+			}
+		}
+	}()
+	go func() { time.Sleep(250 * time.Millisecond); f.in <- []byte("x"); f.in <- []byte("y") }()
+	if r := lt.ping(300 * time.Millisecond); r != pingOK {
+		t.Fatalf("late ping: %v", r)
+	}
+}
+
 func TestLivePingIdle(t *testing.T) {
 	f := &fakeTun{in: make(chan []byte), events: make(chan tun.Event, 1)}
 	lt := newLiveTun(f, "25g00001")

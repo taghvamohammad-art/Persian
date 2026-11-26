@@ -37,6 +37,9 @@ const (
 
 const liveID = 0x7077
 
+// liveAnswerWait: the time a ping has for its answer once it has left.
+var liveAnswerWait = 3 * time.Second
+
 func newLiveTun(inner tun.Device, user string) *liveTun {
 	src, _ := netip.ParseAddr(AwgAddress(user))
 	return &liveTun{Device: inner, src: src, out: make(chan []byte, 4), sent: make(chan struct{}, 4),
@@ -96,17 +99,29 @@ func (t *liveTun) ping(wait time.Duration) pingResult {
 	default:
 		return pingNotSent
 	}
-	deadline := time.After(wait)
+	// wait for it to leave (with the apps' next packet), then for the answer:
+	// a ping that left late must still get a full round trip's time
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
 	went := false
 	for {
 		select {
 		case <-t.sent:
-			went = true
+			if !went {
+				went = true
+				if !deadline.Stop() {
+					select {
+					case <-deadline.C:
+					default:
+					}
+				}
+				deadline.Reset(liveAnswerWait)
+			}
 		case got := <-t.replies:
 			if got == seq {
 				return pingOK
 			}
-		case <-deadline:
+		case <-deadline.C:
 			if !went {
 				select {
 				case <-t.out: // take it back: it never left

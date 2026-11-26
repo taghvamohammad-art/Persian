@@ -444,6 +444,11 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
                             inboundBuffer.capacityAfterLimit
                         )
 
+                        if (readSize < 0) {
+                            // the server closed the connection: a clean error, not a
+                            // negative buffer limit (or one byte of data lost)
+                            throw java.io.EOFException("SSTP server closed the connection")
+                        }
                         inboundBuffer.limit(inboundBuffer.limit() + readSize)
                     } catch (_: SocketTimeoutException) { }
                 }
