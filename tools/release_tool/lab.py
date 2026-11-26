@@ -207,7 +207,9 @@ def _free_base(h, p):
     used |= {int(p.get(k) or 0) for k in ("vision_port", "xhttp_port", "hy2_port", "ss_port", "cdn_local_port")}
     hop = (p.get("awg") or {}).get("hop") or [0, -1]
     while True:
-        b = 20000 + secrets.randbelow(38000)
+        # below the ephemeral range (32768+): an outgoing connection's own port
+        # there would make the listen fail ("address already in use")
+        b = 20000 + secrets.randbelow(32768 - 20000 - LAB_PORTS)
         ports = range(b, b + LAB_PORTS)
         if not any(x in used or hop[0] <= x <= hop[1] for x in ports):
             return b
