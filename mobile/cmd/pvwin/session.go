@@ -247,7 +247,9 @@ func plan(all []choice, noAwg bool) [][]choice {
 		note("plan: pool %dms×%d, amneziawg %dms×%d", pool[0].ms, 1+failCount("pool"), awg.ms, 1+failCount("amneziawg"))
 	}
 	var out [][]choice
-	poolFirst := awg == nil || (len(pool) > 0 && score(pool[0].ms, "pool") <= score(awg.ms, "amneziawg"))
+	// AmneziaWG first (it holds up better here and carries its own disguise),
+	// unless it broke down often lately on this computer
+	poolFirst := awg == nil || (len(pool) > 0 && failCount("amneziawg") >= 3)
 	if poolFirst {
 		if len(pool) > 0 {
 			out = append(out, pool)

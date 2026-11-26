@@ -38,6 +38,7 @@ private const val SPEED_CHECK_EVERY_MS = 15 * 60_000L  // while connected and in
 private const val SPEED_RECHECK_MS = 60_000L  // a slow result is confirmed once before switching
 private const val CDN = "vless-xhttp-cdn"
 private const val LAST_GOOD_KEY = "pv_last_good_server"
+private const val AWG_FAILS_BEFORE_XRAY = 3   // in the last hour, before Xray goes first
 /** Tried first: they look like ordinary HTTPS (Reality) or have their own disguise. */
 private val STEALTH_KINDS = setOf("vless-reality-vision", "vless-xhttp-reality", "amneziawg")
 /** Carry traffic only when nothing disguised works. */
@@ -198,6 +199,10 @@ internal class LinuxTunnel(
             // the user's choice goes first; the other stays as a fallback so
             // a blocked choice does not leave the phone without internet
             choice == "awg" && awg != null -> listOfNotNull(awg, pool).toMutableList()
+            // automatic: AmneziaWG first (it holds up better here and carries its
+            // own disguise), unless it broke down often lately on this phone
+            choice != "xray" && awg != null && recentFailures("amneziawg") < AWG_FAILS_BEFORE_XRAY ->
+                listOfNotNull(awg, pool).toMutableList()
             else -> listOfNotNull(pool, awg).sortedBy { score(it) }.toMutableList()
         }
         if (out.size == 2) {

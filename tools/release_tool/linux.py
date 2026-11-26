@@ -1377,9 +1377,24 @@ WantedBy=multi-user.target
     return p, server_entry(name, public_ip, p, awg)
 
 
+# Shadowsocks (plain random bytes) and Hysteria2 (QUIC-like) are what filters
+# pick out by statistics, after which the whole address is slowed: not
+# offered to the apps for now (they stay on the server, so turning this back
+# on needs only «تنظیمات تازه‌ی Xray»).
+PUBLISH_WEAK = False
+WEAK_TYPES = ("hysteria2", "shadowsocks-2022")
+
+
 def server_entry(name, host, p, awg=True):
     """What the apps need to connect (no secrets of other users: the per-user
     parts come from each user's own username and password)."""
+    entry = _server_entry(name, host, p, awg)
+    if not PUBLISH_WEAK:
+        entry["protocols"] = [x for x in entry["protocols"] if x["type"] not in WEAK_TYPES]
+    return entry
+
+
+def _server_entry(name, host, p, awg=True):
     entry = {"name": name, "host": host, "type": "linux", "protocols": [
         {"type": "vless-reality-vision", "port": p["vision_port"], "sni": reality_sni(p),
          "public_key": p["reality_public"], "short_id": p["short_id"]},

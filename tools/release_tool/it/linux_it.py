@@ -134,6 +134,7 @@ def agent_log(n=40):
 
 def main():
     import linux
+    linux.PUBLISH_WEAK = True   # the server still runs them: they are tested too
     from linux import LinuxHost
 
     step("User Manager 1 and 2")
