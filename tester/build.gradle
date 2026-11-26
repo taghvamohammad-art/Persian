@@ -18,6 +18,13 @@ android {
         versionName ciBuild ? "1.0.${ciBuild}" : "1.0.0"
     }
 
+    // the published app config bundled with the app (its servers when offline)
+    sourceSets {
+        main {
+            assets.srcDirs += ['../app/src/main/assets']
+        }
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging false
