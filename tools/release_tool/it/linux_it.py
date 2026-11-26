@@ -21,6 +21,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "server", "linux"))
 import chr as base          # noqa: E402
 import pvcreds              # noqa: E402
+import linux                # noqa: E402
+linux.PUBLISH_WEAK = True   # the servers still run them: they are tested too (also box_it)
 
 base.VM.update({"A": {"ssh": 2222}, "B": {"ssh": 2223}})
 ROOT_PW = os.environ.get("ROOT_PW", "R00t-test-pw")
@@ -134,7 +136,6 @@ def agent_log(n=40):
 
 def main():
     import linux
-    linux.PUBLISH_WEAK = True   # the server still runs them: they are tested too
     from linux import LinuxHost
 
     step("User Manager 1 and 2")
