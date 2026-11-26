@@ -1903,14 +1903,17 @@ class NewServerPage(RouterPage):
         self.mode_sec = QRadioButton("سرور فرعی (احراز هویت از سرور اصلی)")
         self.mode_linux = QRadioButton("سرور لینوکس (Xray و AmneziaWG)")
         self.mode_box = QRadioButton("Xray روی میکروتیک (کانتینر)")
-        self.mode_main.setChecked(True)
+        self.mode_linux.setChecked(True)
+        mrow.addWidget(self.mode_linux)
         mrow.addWidget(self.mode_main)
         mrow.addWidget(self.mode_sec)
-        mrow.addWidget(self.mode_linux)
         mrow.addWidget(self.mode_box)
         mrow.addStretch()
         l1.addLayout(mrow)
-        hint = QLabel("روتر جدید را اول در تب «سرورها و بکاپ» اضافه کنید (CHR تازه، با کاربر pvtool).")
+        hint = QLabel("سرور لینوکس: «＋ سرور تازه» را بزنید، مشخصات SSH را وارد کنید و «شروع» را بزنید؛ نصب، "
+                      "ثبت در یوزر منیجر، زیردامنه‌ی Reality، بات و انتشار برای اپ همه خودکار انجام می‌شود.\n"
+                      "میکروتیک: روتر را اول در تب «سرورها و بکاپ» اضافه کنید (CHR تازه، با کاربر pvtool).")
+        hint.setWordWrap(True)
         hint.setObjectName("Hint")
         l1.addWidget(hint)
         lay.addWidget(c1)
@@ -1928,7 +1931,13 @@ class NewServerPage(RouterPage):
             return lb
 
         self.target = self.router_combo()
-        row("روتر جدید:", self.target)
+        trow = QHBoxLayout()
+        trow.addWidget(self.target, 1)
+        trow.addWidget(self.button("＋ سرور تازه", self.add_target))
+        tw = QWidget()
+        tw.setLayout(trow)
+        trow.setContentsMargins(0, 0, 0, 0)
+        row("سرور جدید:", tw)
         self.source = self.router_combo(("main",))
         row("سرور اصلی فعلی/قدیم:", self.source)
         self.backup = QComboBox()
@@ -1947,6 +1956,10 @@ class NewServerPage(RouterPage):
         self.cf_token.setEchoMode(QLineEdit.Password)
         self.cf_token.setPlaceholderText("API Token با اجازه‌ی DNS Edit و Zone Settings Edit")
         self.lbl_cf = row("توکن Cloudflare:", self.cf_token)
+        self.extra = QLineEdit()
+        self.extra.setLayoutDirection(Qt.LeftToRight)
+        self.extra.setPlaceholderText("اختیاری: IPهای اضافه‌ی همین سرور، با فاصله (اول روی خود سرور تنظیم شوند)")
+        self.lbl_extra = row("IPهای اضافه:", self.extra)
         l2.addLayout(grid)
         orow = QHBoxLayout()
         self.chk_bot = QCheckBox("بات روی سرور قدیم متوقف شود (اگر در دسترس است)")
@@ -1989,9 +2002,27 @@ class NewServerPage(RouterPage):
         self.chk_bot.setVisible(main)
         self.backup.setVisible(not lin and not box)
         self.lbl_backup.setVisible(not lin and not box)
-        for w in (self.domain, self.lbl_domain, self.cf_token, self.lbl_cf):
+        for w in (self.domain, self.lbl_domain, self.cf_token, self.lbl_cf, self.extra, self.lbl_extra):
             w.setVisible(lin)
+        self.source.setVisible(not lin and not box)
         self.btn_cfg.setText("به‌روزرسانی سرورهای اپ و انتشار" if main else "اضافه کردن به سرورهای اپ و انتشار")
+        # a Linux server is published by «شروع» itself; the button only for a retry
+        self.btn_cfg.setVisible(not lin)
+        self.btn_go.setText("شروع (نصب کامل و انتشار برای اپ)" if lin else "شروع / ادامه")
+
+    def add_target(self):
+        """A new server defined right here (the same form as in «سرورها و بکاپ»)."""
+        lin = self.mode_linux.isChecked()
+        role = "linux" if lin else ("main" if not self.settings.routers else "secondary")
+        d = RouterDialog(self, {"id": self.settings.new_router_id(), "role": role})
+        if d.exec():
+            self.settings.routers.append(d.router)
+            self.settings.save()
+            self.main.servers.reload()
+            self.reload()
+            i = self.target.findData(d.router["id"])
+            if i >= 0:
+                self.target.setCurrentIndex(i)
 
     def fill_ip(self):
         r = self.chosen(self.target)
@@ -2003,6 +2034,17 @@ class NewServerPage(RouterPage):
                 self.domain.setText(p["domain"])
             if (p or {}).get("cf_token"):
                 self.cf_token.setText(p["cf_token"])
+            self.extra.setText(" ".join((p or {}).get("extra_ips") or []))
+        # domain and token are the same for every server: the last ones used fill empty fields
+        if not self.domain.text().strip() or not self.cf_token.text().strip():
+            for o in self.settings.routers:
+                q = st.decrypt_blob(o.get("params")) if o.get("role") == "linux" and o.get("params") else {}
+                if (q or {}).get("domain") and (q or {}).get("cf_token"):
+                    if not self.domain.text().strip():
+                        self.domain.setText(q["domain"])
+                    if not self.cf_token.text().strip():
+                        self.cf_token.setText(q["cf_token"])
+                    break
 
     def fill_backups(self):
         self.backup.clear()
@@ -2043,10 +2085,23 @@ class NewServerPage(RouterPage):
             return self.fail("اول روتر یوزر منیجر (اصلی) را در تب «سرورها و بکاپ» تعریف کنید.")
         if tgt.get("role") != "linux":
             return self.fail("نقش این سرور در تب «سرورها و بکاپ» باید «سرور لینوکس» باشد.")
+        import ipaddress
+        extra = []
+        for part in self.extra.text().replace("،", " ").replace(",", " ").split():
+            try:
+                ip = str(ipaddress.IPv4Address(part))
+            except ValueError:
+                return self.fail("«%s» آدرس IPv4 درست نیست." % part)
+            if ip != new_ip and ip not in extra:
+                extra.append(ip)
         if QMessageBox.question(self, "تأیید",
-                "روی «%s» این‌ها نصب و تنظیم می‌شود:\nXray (Reality، XHTTP، Hysteria2، Shadowsocks)، AmneziaWG و "
-                "سرویس هماهنگی با یوزر منیجر.\n\nروی %s هم دسترسی این سرور (RADIUS و REST) ثبت می‌شود.\nادامه می‌دهید؟"
-                % (router_label(tgt), "، ".join(router_label(r) for r in ums))) != QMessageBox.Yes:
+                "روی «%s» همه‌ی این‌ها خودکار انجام می‌شود:\n"
+                "• نصب Xray (Reality، XHTTP، Hysteria2، Shadowsocks، CDN)، AmneziaWG با پورت‌های جایگزین و pv-agent\n"
+                "• زیردامنه‌ی Reality با گواهی واقعی (اگر دامنه و توکن هست)\n"
+                "• ثبت دسترسی روی %s و خبر دادن به بات\n"
+                "• اضافه شدن به تنظیمات اپ%s و انتشار آن\n\nادامه می‌دهید؟"
+                % (router_label(tgt), "، ".join(router_label(r) for r in ums),
+                   " (با %d IP اضافه)" % len(extra) if extra else "")) != QMessageBox.Yes:
             return
         name = re.sub(r"[^A-Za-z0-9_-]", "-", tgt.get("name") or tgt["id"])
         params = st.decrypt_blob(tgt.get("params")) or {}
@@ -2060,6 +2115,7 @@ class NewServerPage(RouterPage):
         else:
             params.pop("domain", None)
         params["cf_token"] = self.cf_token.text().strip()
+        params["extra_ips"] = extra
         if domain and not params["cf_token"] and QMessageBox.question(
                 self, "توکن Cloudflare", "توکن Cloudflare خالی است؛ رکوردهای دامنه را باید خودتان بسازید.\n"
                 "بدون توکن ادامه می‌دهید؟") != QMessageBox.Yes:
@@ -2089,13 +2145,9 @@ class NewServerPage(RouterPage):
             self.log.appendPlainText("\n✓ سرور لینوکس آماده است: %s" % "، ".join(x["type"] for x in entry["protocols"]))
             self.btn_cfg.allowed = True
             self.btn_cfg.setEnabled(True)
-            msg = "سرور لینوکس آماده است.\nحالا «%s» را بزنید تا اپ‌ها آن را بشناسند." % self.btn_cfg.text()
-            if not any(x["type"] == "amneziawg" for x in entry["protocols"]):
-                msg += ("\n\n⚠ AmneziaWG نصب نشد (بقیه‌ی پروتکل‌ها کار می‌کنند). دلیلش در گزارش بالا با علامت ⚠ "
-                        "آمده است؛ همان چند خط را بفرستید.")
-                QMessageBox.warning(self, "انجام شد، بدون AmneziaWG", msg)
-            else:
-                QMessageBox.information(self, "انجام شد", msg)
+            self.result["extra"] = linux.extra_entries(entry["name"], p,
+                                                       any(x["type"] == "amneziawg" for x in entry["protocols"]))
+            self.publish_servers(auto=True)
         self.run(job, done)
 
     def go_box(self, tgt, new_ip):
@@ -2228,7 +2280,7 @@ class NewServerPage(RouterPage):
                     "سرور آماده است.\nحالا «%s» را بزنید تا اپ‌ها سرور جدید را بشناسند." % self.btn_cfg.text())
         self.run(job, done)
 
-    def publish_servers(self):
+    def publish_servers(self, auto=False):
         res = self.result
         if not res:
             return
@@ -2241,6 +2293,11 @@ class NewServerPage(RouterPage):
         tgt = self.settings.router(res["target"])
         if res.get("linux"):
             new_cfg = pv.add_linux_server(cfg, res["entry"])
+            # its extra addresses: old entries out, the current ones in
+            new_cfg["linux_servers"] = [e for e in new_cfg["linux_servers"]
+                                        if e.get("extra_of") != res["entry"]["name"]]
+            for e in res.get("extra") or []:
+                new_cfg = pv.add_linux_server(new_cfg, e)
             text = "سرور لینوکس %s به تنظیمات اپ اضافه می‌شود." % res["new_ip"]
         elif res["main"]:
             new_cfg = pv.move_server_in_config(cfg, res["old_ip"], res["new_ip"])
@@ -2248,7 +2305,7 @@ class NewServerPage(RouterPage):
         else:
             new_cfg = pv.add_server_to_config(cfg, tgt.get("name") or tgt["id"], res["new_ip"])
             text = "سرور %s به لیست سرورهای اپ اضافه می‌شود." % res["new_ip"]
-        if QMessageBox.question(self, "تأیید", text + "\nبعد تنظیمات امضا و منتشر می‌شود. ادامه می‌دهید؟") != QMessageBox.Yes:
+        if not auto and QMessageBox.question(self, "تأیید", text + "\nبعد تنظیمات امضا و منتشر می‌شود. ادامه می‌دهید؟") != QMessageBox.Yes:
             return
         import json
         import shutil
@@ -2272,8 +2329,18 @@ class NewServerPage(RouterPage):
             self.btn_cfg.allowed = False
             self.btn_cfg.setEnabled(False)
             self.main.refresh_state()
-            QMessageBox.information(self, "انجام شد",
-                "تنظیمات جدید (نسخه‌ی %s) منتشر شد.\nگوشی‌ها با باز کردن برنامه آن را می‌گیرند." % fa(cfg["version"]))
+            msg = "تنظیمات جدید (نسخه‌ی %s) منتشر شد.\nگوشی‌ها با باز کردن برنامه آن را می‌گیرند." % fa(cfg["version"])
+            if res.get("linux"):
+                msg = "✓ سرور لینوکس نصب و برای اپ منتشر شد.\n\n" + msg
+                if res.get("extra"):
+                    msg += "\nIPهای اضافه: %s" % "، ".join(e["host"] for e in res["extra"])
+                if not any(x["type"] == "amneziawg" for x in res["entry"]["protocols"]):
+                    msg += ("\n\n⚠ AmneziaWG نصب نشد (بقیه‌ی پروتکل‌ها کار می‌کنند). دلیلش در گزارش بالا با "
+                            "علامت ⚠ آمده است؛ همان چند خط را بفرستید.")
+            QMessageBox.information(self, "انجام شد", msg)
+            self.btn_cfg.setVisible(not self.mode_linux.isChecked())
+        # visible for a retry, if publishing fails
+        self.btn_cfg.setVisible(True)
         self.run(job, done, clear=False)
 
 

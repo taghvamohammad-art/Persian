@@ -1297,11 +1297,23 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
         install_web(h, p, log)
         if p.get("domain"):
             cloudflare_setup(h, p, public_ip, log)
+        p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
+        if own_names_missing(p):
+            try:
+                ensure_own_reality(h, p, log)
+            except Exception as e:   # noqa: BLE001 - the borrowed name stays
+                log("⚠ Reality با زیردامنه راه نیفتاد: %s" % str(e)[-300:])
         h.write(XRAY_CONF_DIR + "/template.json", json.dumps(xray_template(p), indent=1))
         h.write(XRAY_CONF_DIR + "/config.json", json.dumps(xray_template(p), indent=1))
         h.run("/usr/local/bin/xray run -test -config %s/config.json" % XRAY_CONF_DIR)
         h.run("systemctl enable xray >/dev/null 2>&1; systemctl restart xray")
         awg = install_awg(h, p, log) if install_awg_too else False
+        if awg:
+            try:
+                ensure_awg_hop(h, p, log)
+            except LinuxError as e:
+                log("⚠ پورت‌های جایگزین AmneziaWG اضافه نشد: %s" % str(e)[-300:])
+                p["awg"].pop("hop", None)
 
         log("نصب pv-agent…")
         h.run("mkdir -p %s /etc/pv-agent /var/lib/pv-agent" % AGENT_DIR)
