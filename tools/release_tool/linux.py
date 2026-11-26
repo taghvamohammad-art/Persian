@@ -320,6 +320,7 @@ def install_web(h, p, log):
     }
 }
 """ % {"cdn": cdn, "token": p["status_token"], "allow": allow})
+    fix_own_site_port(h)
     # a server without IPv6 refuses "[::]:80" only when nginx starts (the
     # test passes); another web server the provider put there holds port 80
     h.run(r"""[ -s /proc/net/if_inet6 ] || sed -i '/listen \[::\]:80/d' /etc/nginx/sites-available/pv
@@ -449,6 +450,16 @@ res = api("PUT", "/zones/%s/dns_records/%s" % (zid, a[0]["id"]), body) if a else
     api("POST", "/zones/%s/dns_records" % zid, body)
 print(json.dumps({"ok": bool(res.get("success")), "detail": res.get("errors")}))
 """
+
+
+def fix_own_site_port(h):
+    """The Reality site from an older setup listened on 127.0.0.1:8443, which
+    is Xray's XHTTP port: nginx then does not start, and Reality has no site
+    behind it. The site is moved to OWN_SITE_PORT (the Xray template points
+    there)."""
+    h.run("f=/etc/nginx/sites-available/pv-reality; [ -f $f ] && "
+          "sed -i -E 's/listen 127\\.0\\.0\\.1:[0-9]+/listen 127.0.0.1:%d/' $f; true" % OWN_SITE_PORT,
+          check=False)
 
 
 def own_names_missing(p):
@@ -872,6 +883,8 @@ def refresh_xray_config(h, p, log=print):
         log("⚠ پورت‌های جایگزین AmneziaWG اضافه نشد: %s" % str(e)[-300:])
         p["awg"].pop("hop", None)
     p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
+    fix_own_site_port(h)
+    h.run("nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true", check=False)
     if own_names_missing(p):
         try:
             ensure_own_reality(h, p, log)
