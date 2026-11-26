@@ -29,6 +29,14 @@ private const val CHECK_EVERY_MS = 25_000L
 private const val CHECK_TIMEOUT_MS = 10_000L
 private const val CHECK_FAILURES = 2          // in a row before switching
 private const val FAILURE_WINDOW_MS = 60 * 60_000L  // breakdowns older than this are forgotten
+// Speed: a filter can let the server's address answer small requests fast
+// while carrying only a few KB/s; then CDN (Cloudflare, not that address) goes first.
+private const val SPEED_SECONDS = 3L
+private const val SPEED_GOOD_KBPS = 150L      // fast enough: nothing to compare
+private const val SPEED_SLOW_KBPS = 40L       // below this the path counts as throttled
+private const val SPEED_CHECK_EVERY_MS = 15 * 60_000L  // while connected and in use
+private const val SPEED_RECHECK_MS = 60_000L  // a slow result is confirmed once before switching
+private const val CDN = "vless-xhttp-cdn"
 private const val XRAY_MTU = 1500
 private const val AWG_MTU = 1280
 private const val XRAY_ADDRESS = "172.19.0.1"
@@ -81,7 +89,8 @@ internal class LinuxTunnel(
             val dns = cm.getLinkProperties(cm.activeNetwork)?.dnsServers.orEmpty()
             Pvcore.setResolvers(dns.mapNotNull { it.hostAddress }.filter { !it.contains(":") }.joinToString(","))
         }
-        val choices = plan(probeAll()).filter { "${it.name}/${it.kind}" != exclude }
+        val probes = probeAll()
+        val choices = bySpeed(plan(probes), probes).filter { "${it.name}/${it.kind}" != exclude }
         for (c in choices) {
             if (closed || !isActive) return@withContext false
             if (connect(c)) return@withContext true
@@ -145,6 +154,33 @@ internal class LinuxTunnel(
         }
         out += all.filter { it.kind == "vless-dns" }
         return out
+    }
+
+    /**
+     * The first choice's real speed (a download of at most 1 MB): when it is
+     * throttled and CDN of the same server carries clearly more, CDN alone
+     * goes first (in a pool Xray's balancer measures latency only and would
+     * keep the throttled address). The rest stay as fallbacks.
+     */
+    private suspend fun bySpeed(choices: List<Choice>, probes: List<Choice>): List<Choice> = withContext(Dispatchers.IO) {
+        val first = choices.firstOrNull() ?: return@withContext choices
+        if (first.kind == CDN || first.kind == "vless-dns") return@withContext choices
+        val sample = if (first.kind == "pool") first.members.firstOrNull { it.kind != CDN } else first
+        sample ?: return@withContext choices
+        val cdn = probes.firstOrNull { it.kind == CDN && it.server == sample.server }
+            ?: probes.firstOrNull { it.kind == CDN }
+            ?: return@withContext choices
+        val direct = runCatching { Pvcore.speed(sample.server, sample.kind, user, pass, SPEED_SECONDS) }.getOrDefault(-1L)
+        if (direct >= SPEED_GOOD_KBPS) {
+            service.logWriter?.report("speed ${sample.name}/${sample.kind}: $direct KB/s")
+            return@withContext choices
+        }
+        val viaCdn = runCatching { Pvcore.speed(cdn.server, CDN, user, pass, SPEED_SECONDS) }.getOrDefault(-1L)
+        service.logWriter?.report("speed ${sample.name}/${sample.kind}: $direct KB/s, ${cdn.name}/cdn: $viaCdn KB/s")
+        if (viaCdn >= SPEED_SLOW_KBPS && viaCdn >= 2 * maxOf(direct, 1L)) {
+            service.logWriter?.report("plan: cdn first (the server's address is slow)")
+            listOf(cdn) + choices
+        } else choices
     }
 
     private fun group(c: Choice) = if (c.kind == "amneziawg") "amneziawg" else "pool"
@@ -280,6 +316,9 @@ internal class LinuxTunnel(
         watchdog?.cancel()
         watchdog = service.scope.launch {
             var failures = 0
+            var lastSpeed = System.currentTimeMillis()
+            var lastDown = SessionTraffic.downloaded.get()
+            var slowOnce = false
             while (isActive && !closed) {
                 delay(CHECK_EVERY_MS)
                 // a hotspot turned on (or off) after connecting
@@ -297,6 +336,29 @@ internal class LinuxTunnel(
                     failover("check failed")
                     return@launch
                 }
+                // a tunnel that works but crawls (the server's address throttled)
+                val now = System.currentTimeMillis()
+                val every = if (slowOnce) SPEED_RECHECK_MS else SPEED_CHECK_EVERY_MS
+                if (ms >= 0 && now - lastSpeed >= every) {
+                    lastSpeed = now
+                    val down = SessionTraffic.downloaded.get()
+                    // more than the checks' own downloads: someone is using the tunnel
+                    val used = down - lastDown > 2_000_000L
+                    lastDown = down
+                    if (used || slowOnce) {
+                        val kbps = withContext(Dispatchers.IO) { Pvcore.speedRunning(SPEED_SECONDS) }
+                        if (kbps >= -1L) service.logWriter?.report("speed $current: $kbps KB/s")
+                        when {
+                            kbps < 0L -> slowOnce = false          // not measurable / the check above covers failures
+                            kbps >= SPEED_SLOW_KBPS -> slowOnce = false
+                            slowOnce -> {
+                                failover("slow")
+                                return@launch
+                            }
+                            else -> slowOnce = true
+                        }
+                    }
+                }
             }
         }
     }
@@ -311,12 +373,13 @@ internal class LinuxTunnel(
             try {
                 service.logWriter?.report("linux tunnel: $reason, switching")
                 val previous = current
-                if (reason == "check failed") {
+                if (reason == "check failed" || reason == "slow") {
                     // Probe first while the tunnel keeps carrying traffic: a short
                     // hiccup on a lossy network used to tear the tunnel down and
                     // build the very same one again, cutting every connection
                     // for ten seconds. Only a better choice is worth that.
-                    val best = plan(probeAll()).firstOrNull()
+                    val probes = probeAll()
+                    val best = bySpeed(plan(probes), probes).firstOrNull()
                     if (closed) return@launch
                     val now = currentChoice
                     if (best != null && now != null && sameChoice(best, now)) {
