@@ -1,0 +1,64 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+// «اپ تست سرورها»: every protocol and way of every server, connection
+// first, then speed. Separate from the VPN app (no VPN here at all).
+android {
+    namespace 'ir.persianvpn.tester'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "ir.persianvpn.tester"
+        minSdk 23
+        targetSdk 36
+        def ciBuild = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode ciBuild ? ciBuild.toInteger() : 1
+        versionName ciBuild ? "1.0.${ciBuild}" : "1.0.0"
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+
+    signingConfigs {
+        release {
+            def ks = System.getenv("KEYSTORE_FILE")
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (System.getenv("KEYSTORE_FILE")) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    // the same engine as the app (app/libs/pvcore.aar, put there by the build)
+    implementation fileTree(dir: '../app/libs', include: ['*.aar'])
+    implementation 'androidx.core:core-ktx:1.16.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+}

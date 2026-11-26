@@ -1261,6 +1261,10 @@ class ServicesPage(RouterPage):
         r7.addWidget(self.button("🔧 حالت تعمیر: فقط تسترها روی لینوکس", lambda: self.maintenance(True)))
         r7.addWidget(self.button("✅ پایان تعمیر: همه به لینوکس", lambda: self.maintenance(False)))
         l6.addLayout(r7)
+        r8 = QHBoxLayout()
+        r8.addWidget(self.button("🧪 پروتکل‌های آزمایشی + خروجی برای اپ تست", lambda: self.lab(True)))
+        r8.addWidget(self.button("حذف پروتکل‌های آزمایشی", lambda: self.lab(False)))
+        l6.addLayout(r8)
         lay.addWidget(c6)
 
         c4, l4 = card("یوزر منیجر دوم (پشتیبان)")
@@ -1480,6 +1484,77 @@ class ServicesPage(RouterPage):
                 QMessageBox.warning(self, "ناقص", "این سرورها به‌روز نشدند: %s" % "، ".join(bad))
             else:
                 QMessageBox.information(self, "انجام شد", "pv-agent همه‌ی سرورها به‌روز شد.")
+        self.run(job, done)
+
+    def lab(self, install):
+        """xray-lab (every protocol worth trying) on the Linux servers, and the
+        export for the test app (copied, and saved in the workspace)."""
+        import lab
+        servers = [r for r in self.settings.routers if r.get("role") == "linux" and r.get("params")]
+        if not servers:
+            return QMessageBox.warning(self, "خطا", "سرور لینوکسی (با تنظیمات ذخیره‌شده) تعریف نشده است.")
+        if len(servers) > 1:
+            from PySide6.QtWidgets import QInputDialog
+            labels = ["همه‌ی سرورها"] + [r.get("name") or r["host"] for r in servers]
+            pick, ok = QInputDialog.getItem(self, "پروتکل‌های آزمایشی", "کدام سرور لینوکس؟", labels, 0, False)
+            if not ok:
+                return
+            if pick != labels[0]:
+                servers = [servers[labels.index(pick) - 1]]
+        if install and QMessageBox.question(
+                self, "پروتکل‌های آزمایشی",
+                "روی %d سرور یک Xray جدا (xray-lab) با حدود ۲۰ پروتکل آزمایشی و یک حساب تست نصب می‌شود؛ "
+                "Xray اصلی، pv-agent و کاربرها دست نمی‌خورند.\nبعد خروجی برای «اپ تست» کپی می‌شود.\nادامه؟"
+                % len(servers)) != QMessageBox.Yes:
+            return
+        published = {}
+        try:
+            for e in pb.Workspace(self.settings.workspace).load_config().get("linux_servers", []):
+                published[e.get("host")] = e
+        except Exception:   # noqa: BLE001 - then the entries are built from the params
+            pass
+
+        def job(log, progress):
+            items, saved = [], {}
+            for r in servers:
+                log("— %s" % (r.get("name") or r["host"]))
+                p = st.decrypt_blob(r.get("params")) or {}
+                try:
+                    with linux_connector(r)() as h:
+                        if not install:
+                            lab.remove_lab(h, log)
+                            continue
+                        p, outs = lab.setup_lab(h, p, r["host"], log)
+                    saved[r["id"]] = p
+                    name = re.sub(r"[^A-Za-z0-9_-]", "-", r.get("name") or r["id"])
+                    entry = published.get(r["host"]) or linux.server_entry(name, r["host"], p)
+                    items.append({"name": entry.get("name", name), "server": entry, "lab": outs})
+                except Exception as e:   # noqa: BLE001 - the others still go on
+                    log("✗ %s" % e)
+            return items, saved
+
+        def done(res):
+            items, saved = res
+            for r in self.settings.routers:
+                if r.get("id") in saved:
+                    r["params"] = st.encrypt_blob(saved[r["id"]])
+            self.settings.save()
+            if not install:
+                return QMessageBox.information(self, "انجام شد", "پروتکل‌های آزمایشی برداشته شدند.")
+            if not items:
+                return QMessageBox.warning(self, "خطا", "روی هیچ سروری نصب نشد؛ گزارش پایین صفحه را ببینید.")
+            text = lab.export(items)
+            QApplication.clipboard().setText(text)
+            path = pb.Workspace(self.settings.workspace).path("test-app-servers.json")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            except OSError:
+                path = "(ذخیره نشد)"
+            QMessageBox.information(self, "آماده", "خروجی %d سرور کپی شد و در این فایل هم هست:\n%s\n\n"
+                                    "آن را (مثلاً در «پیام‌های ذخیره‌شده»ی تلگرام) برای گوشی بفرستید؛ در «اپ تست» "
+                                    "متن را کپی و «چسباندن سرورها» را بزنید، یا از تلگرام با «اشتراک» به اپ تست بفرستید."
+                                    % (len(items), path))
         self.run(job, done)
 
     def maintenance(self, on):

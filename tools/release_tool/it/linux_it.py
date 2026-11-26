@@ -273,6 +273,9 @@ def main():
     elif not any(t in um_usage("A", USER) for t in ("vless-vision", "ss", "hy2", "vless-xhttp")):
         problems.append("UM1 sessions carry no protocol (nas-port-id)")
 
+    step("lab protocols (xray-lab, for the test app)")
+    problems += lab_test(params, connect_linux)
+
     step("AmneziaWG peer")
     if any(p["type"] == "amneziawg" for p in entry["protocols"]):
         pub = sh("echo %s | awg pubkey" % pvcreds.awg_private(USER, PASS)).strip()
@@ -320,6 +323,48 @@ def main():
     if problems:
         raise SystemExit("PROBLEMS:\n  " + "\n  ".join(problems))
     print("\nLINUX ALL OK")
+
+
+def lab_test(params, connect_linux):
+    """Every lab protocol the server's Xray accepted: a real client (Xray on
+    this runner) through it. Ones that pass xray -test but cannot connect
+    are listed, not failed (some transports may be broken in a given Xray);
+    at least the main ones must work."""
+    import lab
+    try:
+        with connect_linux() as h:
+            p, outs = lab.setup_lab(h, dict(params), "127.0.0.1", log=print)
+    except Exception as e:   # noqa: BLE001
+        return ["lab setup: %s" % e]
+    ok, bad = [], []
+    for o in outs:
+        cfg = {"log": {"loglevel": "warning"},
+               "inbounds": [{"listen": "127.0.0.1", "port": 1180, "protocol": "socks", "settings": {"udp": True}}],
+               "outbounds": [dict(o["outbound"], tag="proxy")]}
+        path = tempfile.mktemp(suffix=".json")
+        with open(path, "w") as f:
+            json.dump(cfg, f)
+        proc = subprocess.Popen(["/usr/local/bin/xray", "run", "-config", path], stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        time.sleep(1.5)
+        try:
+            code = sh("curl -s -o /dev/null -w '%{http_code}' --max-time 12 -x socks5h://127.0.0.1:1180 "
+                      "https://www.google.com/generate_204", check=False).strip()
+        finally:
+            proc.terminate()
+            log = proc.communicate(timeout=10)[0].decode(errors="replace")
+        (ok if code == "204" else bad).append(o["id"])
+        print("lab %-32s %s" % (o["id"], code))
+        if code != "204":
+            print(log[-800:])
+    print("lab ok: %s\nlab not working: %s" % (ok, bad))
+    must = {"lab-vless-vision-reality", "lab-ss2022", "lab-vless-tls"}
+    missing = must - set(ok)
+    with connect_linux() as h:
+        lab.remove_lab(h, log=print)
+        if h.run("systemctl is-active xray || true").strip() != "active":
+            return ["production xray stopped after the lab"]
+    return ["lab: %s do not work" % sorted(missing)] if missing else []
 
 
 def backup_tunnel_test(params, connect_linux, server_ip):

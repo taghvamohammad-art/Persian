@@ -103,3 +103,12 @@ jobs:
             app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # «اپ تست سرورها» (tester/): a separate app, installed beside the VPN app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: persian-vpn-tester-${{ github.run_number }}
+          path: |
+            tester/build/outputs/apk/release/*.apk
+            tester/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
