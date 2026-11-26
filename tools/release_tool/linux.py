@@ -421,7 +421,8 @@ def cloudflare_setup(h, p, ip, log):
         log("  رکوردهای دامنه و حالت SSL تنظیم شد.")
 
 
-OWN_SITE_PORT = 8443          # nginx, local only: the site Reality shows with the real certificate
+OWN_SITE_PORT = 9443          # nginx, local only: the site Reality shows with the real certificate
+                              # (not 8443: Xray's XHTTP listens there on every address)
 OWN_SITE_DIR = "/etc/pv-reality"
 OWN_WORDS = ["portal", "cloud", "files", "static", "media", "app", "docs", "panel", "shop", "store"]
 
