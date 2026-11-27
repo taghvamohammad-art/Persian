@@ -38,6 +38,8 @@ private const val SPEED_CHECK_EVERY_MS = 15 * 60_000L  // while connected and in
 private const val SPEED_RECHECK_MS = 60_000L  // a slow result is confirmed once before switching
 private const val CDN = "vless-xhttp-cdn"
 private const val LAST_GOOD_KEY = "pv_last_good_server"
+private const val DOWN_KEY = "pv_server_down_"
+private const val DOWN_FOR_MS = 30 * 60 * 1000L
 private const val AWG_FAILS_BEFORE_XRAY = 3   // in the last hour, before Xray goes first
 /** Tried first: they look like ordinary HTTPS (Reality) or have their own disguise. */
 private val STEALTH_KINDS = setOf("vless-reality-vision", "vless-xhttp-reality", "amneziawg")
@@ -128,15 +130,38 @@ internal class LinuxTunnel(
      */
     private suspend fun probeAll(full: Boolean = false): List<Choice> {
         val last = prefs.getString(LAST_GOOD_KEY, "").orEmpty()
-        val ordered = servers.sortedBy { if (nameOf(it) == last) 0 else 1 }
+        val home = homeServer()
+        val now = System.currentTimeMillis()
+        fun down(name: String) = now - prefs.getLong(DOWN_KEY + name, 0L) < DOWN_FOR_MS
+        // each user has a server of their own (by a hash of the username), so
+        // users spread over the servers instead of all staying on the one they
+        // had; one that just failed here waits a while behind the others
+        val ordered = servers.sortedBy {
+            val n = nameOf(it)
+            when {
+                down(n) -> 3
+                n == home -> 0
+                n == last -> 1
+                else -> 2
+            }
+        }
         if (!full) for (server in ordered) {
             val part = onlyKinds(server, STEALTH_KINDS) ?: continue
             val res = probeOne(server, part)
             if (res.isNotEmpty()) return res.sortedBy { it.ms }
+            prefs.edit().putLong(DOWN_KEY + nameOf(server), now).apply()
         }
         return coroutineScope {
             servers.map { server -> async(Dispatchers.IO) { probeOne(server, server) } }.awaitAll()
         }.flatten().sortedBy { it.ms }
+    }
+
+    /** The user's own server: the same on every device and platform (CRC32 of the username). */
+    private fun homeServer(): String {
+        val names = servers.map { nameOf(it) }.sorted()
+        if (names.isEmpty()) return ""
+        val crc = java.util.zip.CRC32().apply { update(user.toByteArray()) }.value
+        return names[(crc % names.size).toInt()]
     }
 
     private fun nameOf(server: String) =

@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"net/http"
 	"sort"
 	"sync"
@@ -119,6 +120,23 @@ var stealthKinds = map[string]bool{"vless-reality-vision": true, "vless-xhttp-re
 // lastGood: the server that worked last (its name), tried first.
 var lastGood string
 
+// serverDown: when a server last failed the quick probe here.
+var serverDown = map[string]time.Time{}
+
+// homeServer is the user's own server: CRC32 of the username over the
+// server names in order (the phones pick the same one).
+func homeServer(servers []json.RawMessage, user string) string {
+	var names []string
+	for _, sv := range servers {
+		names = append(names, serverName(sv))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return names[crc32.ChecksumIEEE([]byte(user))%uint32(len(names))]
+}
+
 // onlyKinds is the server entry with just the given protocols (nil: all).
 func onlyKinds(sv json.RawMessage, kinds map[string]bool) json.RawMessage {
 	if kinds == nil {
@@ -173,10 +191,24 @@ func probeOne(sv json.RawMessage, user, pass string) []choice {
 // that worked last first), stopping at the first server where one works;
 // only when none does, every protocol of every server together.
 func probeAll(servers []json.RawMessage, user, pass string, full bool) []choice {
+	// each user has a server of their own (by a hash of the username, the
+	// same as on the phones), so users spread over the servers; one that just
+	// failed here waits a while behind the others
+	home := homeServer(servers, user)
+	rank := func(sv json.RawMessage) int {
+		n := serverName(sv)
+		switch {
+		case time.Since(serverDown[n]) < 30*time.Minute:
+			return 3
+		case n == home:
+			return 0
+		case n == lastGood:
+			return 1
+		}
+		return 2
+	}
 	ordered := append([]json.RawMessage(nil), servers...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return serverName(ordered[i]) == lastGood && serverName(ordered[j]) != lastGood
-	})
+	sort.SliceStable(ordered, func(i, j int) bool { return rank(ordered[i]) < rank(ordered[j]) })
 	for _, sv := range ordered {
 		if full {
 			break
@@ -186,6 +218,7 @@ func probeAll(servers []json.RawMessage, user, pass string, full bool) []choice 
 				sort.Slice(res, func(i, j int) bool { return res[i].ms < res[j].ms })
 				return res
 			}
+			serverDown[serverName(sv)] = time.Now()
 		}
 	}
 	var mu sync.Mutex
