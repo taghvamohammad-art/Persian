@@ -1207,6 +1207,13 @@ def router_rest_port(r, log):
     return port, fp
 
 
+def agent_user(name):
+    """The router account a Linux server reads users with: one per server.
+    (A single shared "pvagent" got each server's own password in turn, so only
+    the server registered last could read users; the others kept a stale list.)"""
+    return "pvagent-%s" % re.sub(r"[^A-Za-z0-9_-]", "-", name)
+
+
 def register_on_router(r, linux_ip, name, p, log):
     """Let the Linux server read users over REST and send RADIUS to User Manager."""
     tag = "pv-linux-%s" % re.sub(r"[^A-Za-z0-9_-]", "-", name)
@@ -1217,14 +1224,15 @@ def register_on_router(r, linux_ip, name, p, log):
         r.run("/ip service set www-ssl address=%s" % ",".join(addrs + [mine]))
     if sv.count(r, "/user group", "name=pvagent") == 0:
         r.run("/user group add name=pvagent policy=read,api,rest-api,web,sensitive")
-    if sv.count(r, "/user", "name=pvagent"):
-        addrs = sv.addr_list(sv.get(r, "/user", "name=pvagent", "address"))
-        if sv.with_prefix(linux_ip) not in addrs:
-            addrs.append(sv.with_prefix(linux_ip))
-        r.run("/user set [find where name=pvagent] group=pvagent password=%s address=%s"
-              % (q(p["agent_password"]), ",".join(addrs)))
+    user = agent_user(name)
+    if sv.count(r, "/user", "name=%s" % q(user)):
+        r.run("/user set [find where name=%s] group=pvagent password=%s address=%s/32"
+              % (q(user), q(p["agent_password"]), linux_ip))
     else:
-        r.run("/user add name=pvagent group=pvagent password=%s address=%s/32" % (q(p["agent_password"]), linux_ip))
+        r.run("/user add name=%s group=pvagent password=%s address=%s/32"
+              % (q(user), q(p["agent_password"]), linux_ip))
+    # the old shared "pvagent" is left as it is: a server not yet moved to its
+    # own account keeps reading with it
     if sv.count(r, "/user-manager router", "address=%s" % linux_ip):
         r.run("/user-manager router remove [find where address=%s]" % linux_ip)
     r.run("/user-manager router add name=%s address=%s shared-secret=%s" % (q(tag), linux_ip, q(p["radius_secret"])))
@@ -1276,11 +1284,42 @@ def register_um(um_routers, name, seen, p, log=print, router_addresses=None, wha
         reach = (router_addresses or {}).get(host, {"host": public})
         routers_cfg.append({"name": "um%d" % (i + 1), "url": "https://%s:%d" % (reach.get("host", host),
                                                                                 reach.get("rest_port", port)),
-                            "user": "pvagent", "password": p["agent_password"], "pin": fp})
+                            "user": agent_user(name), "password": p["agent_password"], "pin": fp})
         radius_servers.append({"host": reach.get("host", host), "secret": p["radius_secret"],
                                "auth_port": reach.get("auth_port", 1812), "acct_port": reach.get("acct_port", 1813)})
 
     return routers_cfg, radius_servers, allow
+
+
+def fix_agent_access(h, um_routers, name, seen, p, log=print):
+    """Moves a server installed before agent_user to its own router account:
+    the account on each User Manager router, then the same name and password
+    in pv-agent's settings (addresses and pins stay). Nothing when already
+    moved. Returns True when it changed something."""
+    try:
+        cfg = json.loads(h.run("cat /etc/pv-agent/config.json"))
+    except (LinuxError, ValueError):
+        return False
+    routers = cfg.get("routers") or []
+    if not routers or all(x.get("user") == agent_user(name) and x.get("password") == p.get("agent_password")
+                          for x in routers):
+        return False
+    if not p.get("agent_password"):
+        p["agent_password"] = routers[0].get("password") or secrets.token_urlsafe(18)
+    log("دسترسی جداگانه‌ی این سرور به یوزر منیجر (%s)…" % agent_user(name))
+    register_um(um_routers, name, seen, p, log)
+    for x in routers:
+        x["user"], x["password"] = agent_user(name), p["agent_password"]
+    h.write("/etc/pv-agent/config.json", json.dumps(cfg, indent=1), "600")
+    h.run("systemctl restart pv-agent")
+    time.sleep(8)
+    tail = h.run("journalctl -u pv-agent -n 30 --no-pager 2>/dev/null | grep -E 'users allowed|unavailable' "
+                 "| tail -n 1 || true", check=False).strip()
+    if "unavailable" in tail:
+        log("⚠ pv-agent هنوز کاربرها را نمی‌گیرد:\n%s" % tail[-300:])
+    else:
+        log("✓ pv-agent با حساب خودش کاربرها را می‌گیرد%s" % (" (%s)" % tail.split("]: ")[-1] if tail else ""))
+    return True
 
 
 def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=print,

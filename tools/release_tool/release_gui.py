@@ -1666,6 +1666,9 @@ class ServicesPage(RouterPage):
             if self.settings.public_repo:
                 public = pb.GitHubClient(self.settings.token, self.settings.public_repo)
 
+        ums = [u for u in self.settings.routers if u.get("role") in UM_ROLES]
+        ums.sort(key=lambda u: u.get("role") != "main")
+
         def job(log, progress):
             import json
             import shutil
@@ -1676,6 +1679,12 @@ class ServicesPage(RouterPage):
                 log("— %s" % r["host"])
                 p = st.decrypt_blob(r.get("params")) or {}
                 with linux_connector(r)() as h:
+                    try:
+                        name = re.sub(r"[^A-Za-z0-9_-]", "-", r.get("name") or r["id"])
+                        linux.fix_agent_access(h, [(router_connector(u), u["host"]) for u in ums], name,
+                                               r["host"], p, log)
+                    except Exception as e:   # noqa: BLE001 - the rest of the refresh still runs
+                        log("⚠ دسترسی جداگانه به یوزر منیجر ثبت نشد: %s" % str(e)[-300:])
                     p = linux.refresh_xray_config(h, p, log)
                 done[r["id"]] = p
                 if r["host"] in entries:
