@@ -174,22 +174,37 @@ def hy2_mask(p):
     return {"finalmask": {"udp": [{"type": "salamander", "settings": {"password": p["hy2_obfs"]}}]}}
 
 
+# Reality with the server's own subdomain (a real certificate for a name that
+# resolves to this server) ties every server to one domain: when the domain
+# was filtered, Reality on all servers went down with it. Off: Reality shows
+# the borrowed site again. The own names and certificates stay on the servers
+# (still accepted), so turning this back on needs only «تنظیمات تازه‌ی Xray».
+USE_OWN_SNI = False
+
+
+def own_sni(p):
+    return p.get("own_sni") if USE_OWN_SNI else None
+
+
 def reality_sni(p):
-    """The name Reality shows: the server's own subdomain when it has one
-    (it resolves to this server and has a real certificate), else the
-    borrowed big site."""
-    return p.get("own_sni") or p["sni"]
+    """The name Reality shows: the server's own subdomain when it has one and
+    it is in use (USE_OWN_SNI), else the borrowed big site."""
+    return own_sni(p) or p["sni"]
 
 
 def reality_target(p):
-    return "127.0.0.1:%d" % OWN_SITE_PORT if p.get("own_sni") else "%s:443" % p["sni"]
+    return "127.0.0.1:%d" % OWN_SITE_PORT if own_sni(p) else "%s:443" % p["sni"]
 
 
 def xray_template(p):
     """Full Xray config with empty user lists (pv-agent fills them)."""
     # the borrowed name too, for apps that have not fetched the new settings yet
-    names = [reality_sni(p)] + [n for n in (p.get("own_names") or {}).values() if n != p.get("own_sni")] \
-        + ([p["sni"]] if p.get("own_sni") else [])
+    names = []
+    # the name shown first, then the server's own names and the borrowed one:
+    # apps holding either settings keep connecting
+    for n in [reality_sni(p), p.get("own_sni")] + list((p.get("own_names") or {}).values()) + [p["sni"]]:
+        if n and n not in names:
+            names.append(n)
     reality = {"show": False, "target": reality_target(p), "serverNames": names,
                "privateKey": p["reality_private"], "shortIds": [p["short_id"]]}
     return {
@@ -885,7 +900,7 @@ def refresh_xray_config(h, p, log=print):
     p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
     fix_own_site_port(h)
     h.run("nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true", check=False)
-    if own_names_missing(p):
+    if USE_OWN_SNI and own_names_missing(p):
         try:
             ensure_own_reality(h, p, log)
         except Exception as e:   # noqa: BLE001 - the borrowed name stays
@@ -921,7 +936,7 @@ def extra_entries(name, p, awg=True):
     out = []
     for i, ip in enumerate(p.get("extra_ips_live") or [], 2):
         e = server_entry("%s-%d" % (name, i), ip, p, awg)
-        own = (p.get("own_names") or {}).get(ip)
+        own = (p.get("own_names") or {}).get(ip) if USE_OWN_SNI else None
         e["protocols"] = [dict(x, **({"sni": own} if own and "sni" in x else {})) for x in e["protocols"]
                           if x["type"] not in ("vless-xhttp-cdn", "vless-dns")]
         e["extra_of"] = name
@@ -1404,7 +1419,7 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
         if p.get("domain"):
             cloudflare_setup(h, p, public_ip, log)
         p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
-        if own_names_missing(p):
+        if USE_OWN_SNI and own_names_missing(p):
             try:
                 ensure_own_reality(h, p, log)
             except Exception as e:   # noqa: BLE001 - the borrowed name stays
