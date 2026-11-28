@@ -186,14 +186,41 @@ def own_sni(p):
     return p.get("own_sni") if USE_OWN_SNI else None
 
 
+def neighbor(p):
+    """A real site next to the server (same /24) that Reality shows: its name
+    and its address agree, and it hangs on no domain of ours."""
+    n = p.get("neighbor") or {}
+    return n if n.get("ip") and n.get("name") else None
+
+
 def reality_sni(p):
-    """The name Reality shows: the server's own subdomain when it has one and
-    it is in use (USE_OWN_SNI), else the borrowed big site."""
-    return own_sni(p) or p["sni"]
+    """The name Reality shows: the server's own subdomain when it is in use
+    (USE_OWN_SNI), else a neighbor site, else the borrowed big site."""
+    return own_sni(p) or (neighbor(p) or {}).get("name") or p["sni"]
 
 
 def reality_target(p):
-    return "127.0.0.1:%d" % OWN_SITE_PORT if own_sni(p) else "%s:443" % p["sni"]
+    if own_sni(p):
+        return "127.0.0.1:%d" % OWN_SITE_PORT
+    if neighbor(p):
+        # its address itself: the name may resolve elsewhere from the server
+        return "%s:443" % neighbor(p)["ip"]
+    return "%s:443" % p["sni"]
+
+
+# XHTTP behind the Reality of port 443 (Xray hands what is not Vision on to
+# it): one TLS port like any web server, instead of Reality on a second port
+# (Xray itself warns that a non-443 Reality port draws attention).
+XHTTP_SOCKET = "@pv-xhttp"
+XHTTP_ON_443 = True   # for Linux servers set up or refreshed from now on
+
+
+def xhttp_shared(p):
+    return bool(p.get("xhttp_shared")) and p.get("vision_port") == 443
+
+
+def xhttp_public_port(p):
+    return p["vision_port"] if xhttp_shared(p) else p["xhttp_port"]
 
 
 def xray_template(p):
@@ -202,11 +229,26 @@ def xray_template(p):
     names = []
     # the name shown first, then the server's own names and the borrowed one:
     # apps holding either settings keep connecting
-    for n in [reality_sni(p), p.get("own_sni")] + list((p.get("own_names") or {}).values()) + [p["sni"]]:
+    for n in [reality_sni(p), p.get("own_sni")] + list((p.get("own_names") or {}).values()) \
+            + list(p.get("old_names") or []) + [p["sni"]]:
         if n and n not in names:
             names.append(n)
     reality = {"show": False, "target": reality_target(p), "serverNames": names,
                "privateKey": p["reality_private"], "shortIds": [p["short_id"]]}
+    shared = xhttp_shared(p)
+    vision_settings = {"clients": [], "decryption": "none"}
+    if shared:
+        vision_settings["fallbacks"] = [{"dest": XHTTP_SOCKET}]
+    xhttp_in = ({"tag": "vless-xhttp", "listen": XHTTP_SOCKET, "protocol": "vless",
+                 "settings": {"clients": [], "decryption": "none"},
+                 "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": p["xhttp_path"], "mode": "auto"}},
+                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}}
+                if shared else
+                {"tag": "vless-xhttp", "port": p["xhttp_port"], "protocol": "vless",
+                 "settings": {"clients": [], "decryption": "none"},
+                 "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": p["xhttp_path"], "mode": "auto"},
+                                    "security": "reality", "realitySettings": reality},
+                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}})
     return {
         "log": {"loglevel": "warning", "access": "/var/log/xray/access.log"},
         "api": {"tag": "api", "listen": "127.0.0.1:10085",
@@ -215,14 +257,10 @@ def xray_template(p):
         "policy": {"levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}}},
         "inbounds": [
             {"tag": "vless-vision", "port": p["vision_port"], "protocol": "vless",
-             "settings": {"clients": [], "decryption": "none"},
+             "settings": vision_settings,
              "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": reality},
              "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}},
-            {"tag": "vless-xhttp", "port": p["xhttp_port"], "protocol": "vless",
-             "settings": {"clients": [], "decryption": "none"},
-             "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": p["xhttp_path"], "mode": "auto"},
-                                "security": "reality", "realitySettings": reality},
-             "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}},
+            xhttp_in,
             {"tag": "hy2", "port": p["hy2_port"], "protocol": "hysteria",
              "settings": {"version": 2, "users": []},
              "streamSettings": dict({"network": "hysteria", "hysteriaSettings": {"version": 2},
@@ -475,6 +513,116 @@ def fix_own_site_port(h):
     h.run("f=/etc/nginx/sites-available/pv-reality; [ -f $f ] && "
           "sed -i -E 's/listen 127\\.0\\.0\\.1:[0-9]+/listen 127.0.0.1:%d/' $f; true" % OWN_SITE_PORT,
           check=False)
+
+
+NEIGHBOR_PY = r"""
+import concurrent.futures as cf, ipaddress, json, os, socket, ssl, sys, tempfile, time
+
+def names_of(ip):
+    # the names on the certificate it gives without a name asked (no SNI)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    try:
+        with socket.create_connection((ip, 443), timeout=2) as s, ctx.wrap_socket(s) as t:
+            der = t.getpeercert(binary_form=True)
+        fd, path = tempfile.mkstemp()
+        with os.fdopen(fd, "w") as f:
+            f.write(ssl.DER_cert_to_PEM_cert(der))
+        try:
+            d = ssl._ssl._test_decode_cert(path)
+        finally:
+            os.unlink(path)
+    except Exception:
+        return []
+    out = [v for k, v in d.get("subjectAltName", ()) if k == "DNS"]
+    return [n for n in out if "*" not in n and "." in n and len(n) < 64]
+
+BAD = ("cloudflare", "akamai", "fastly", "cdn", "google", "amazon", "microsoft", "apple",
+       "localhost", "local", "invalid", "example", "plesk", "cpanel", "vesta", "hestia", "ispmanager")
+
+def fit(ip, name):
+    # a full Reality target: TLS 1.3, HTTP/2, a valid certificate for the name
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.set_alpn_protocols(["h2", "http/1.1"])
+    try:
+        t0 = time.time()
+        with socket.create_connection((ip, 443), timeout=3) as s, \
+                ctx.wrap_socket(s, server_hostname=name) as t:
+            if t.selected_alpn_protocol() != "h2" or t.version() != "TLSv1.3":
+                return None
+        return int((time.time() - t0) * 1000)
+    except Exception:
+        return None
+
+def main():
+    me = sys.argv[1]
+    if len(sys.argv) > 3:   # check one: ip name
+        print(json.dumps({"ok": fit(sys.argv[2], sys.argv[3]) is not None}))
+        return
+    addr = ipaddress.ip_address(me)
+    if addr.is_private:
+        print(json.dumps({"found": None, "why": "private address"}))
+        return
+    net = ipaddress.ip_network(me + "/24", strict=False)
+    ips = [str(x) for x in net.hosts() if str(x) != me]
+    with cf.ThreadPoolExecutor(64) as ex:
+        found = dict(zip(ips, ex.map(names_of, ips)))
+    cand = []
+    for ip, names in found.items():
+        for n in sorted(names, key=len)[:3]:
+            if not any(b in n.lower() for b in BAD):
+                cand.append((ip, n))
+    with cf.ThreadPoolExecutor(32) as ex:
+        ms = list(ex.map(lambda c: fit(*c), cand))
+    ok = sorted((m, ip, n) for (ip, n), m in zip(cand, ms) if m is not None)
+    print(json.dumps({"found": {"ip": ok[0][1], "name": ok[0][2], "ms": ok[0][0]} if ok else None,
+                      "certs": sum(1 for v in found.values() if v), "fit": len(ok)}))
+
+main()
+"""
+
+
+def ensure_neighbor(h, p, log=print):
+    """Keeps p["neighbor"] a working site next to the server (see neighbor):
+    the stored one checked, a new search when it no longer fits."""
+    ip = h.run("ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i==\"src\") print $(i+1)}'",
+               check=False).strip()
+    if not re.fullmatch(r"[\d.]+", ip or ""):
+        return
+    h.write("/tmp/pv-neighbor.py", NEIGHBOR_PY)
+    try:
+        n = neighbor(p)
+        if n:
+            out = h.run("python3 /tmp/pv-neighbor.py %s %s %s" % (ip, shell_quote(n["ip"]), shell_quote(n["name"])),
+                        check=False, timeout=30)
+            if '"ok": true' in out:
+                log("  Reality: سایت همسایه %s (%s) ✓" % (n["name"], n["ip"]))
+                return
+            log("  ⚠ سایت همسایه‌ی قبلی (%s) دیگر مناسب نیست؛ جستجوی دوباره…" % n["name"])
+        else:
+            log("  جستجوی سایت همسایه برای Reality (حدود ۱۵ ثانیه)…")
+        out = h.run("python3 /tmp/pv-neighbor.py %s" % ip, check=False, timeout=180)
+        try:
+            r = json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            log("  ⚠ جستجوی همسایه نتیجه نداد:\n%s" % out[-300:])
+            return
+        f = r.get("found")
+        if f:
+            if n and n.get("name") != f["name"]:
+                p["old_names"] = sorted(set(p.get("old_names") or []) | {n["name"]})[-6:]
+            p["neighbor"] = {"ip": f["ip"], "name": f["name"]}
+            log("  ✓ Reality: سایت همسایه %s (%s، %dms) — از %s گواهی، %s مناسب"
+                % (f["name"], f["ip"], f["ms"], r.get("certs"), r.get("fit")))
+        else:
+            if n:
+                p["old_names"] = sorted(set(p.get("old_names") or []) | {n["name"]})[-6:]
+                p.pop("neighbor", None)
+            log("  ℹ سایت همسایه‌ی مناسبی پیدا نشد (%s)؛ Reality با %s می‌ماند."
+                % (r.get("why") or "%s گواهی، هیچ‌کدام TLS 1.3 + HTTP/2 معتبر" % r.get("certs"), p["sni"]))
+    finally:
+        h.run("rm -f /tmp/pv-neighbor.py", check=False)
 
 
 def own_names_missing(p):
@@ -898,6 +1046,11 @@ def refresh_xray_config(h, p, log=print):
         log("⚠ پورت‌های جایگزین AmneziaWG اضافه نشد: %s" % str(e)[-300:])
         p["awg"].pop("hop", None)
     p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
+    p.setdefault("xhttp_shared", XHTTP_ON_443)
+    try:
+        ensure_neighbor(h, p, log)
+    except Exception as e:   # noqa: BLE001 - Reality keeps the name it had
+        log("  ⚠ جستجوی سایت همسایه انجام نشد: %s" % str(e)[-200:])
     fix_own_site_port(h)
     h.run("nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true", check=False)
     if USE_OWN_SNI and own_names_missing(p):
@@ -1419,6 +1572,11 @@ def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=pri
         if p.get("domain"):
             cloudflare_setup(h, p, public_ip, log)
         p["extra_ips_live"] = check_extra_ips(h, p, log) if p.get("extra_ips") else []
+        p.setdefault("xhttp_shared", XHTTP_ON_443)
+        try:
+            ensure_neighbor(h, p, log)
+        except Exception as e:   # noqa: BLE001 - Reality keeps the borrowed name
+            log("  ⚠ جستجوی سایت همسایه انجام نشد: %s" % str(e)[-200:])
         if USE_OWN_SNI and own_names_missing(p):
             try:
                 ensure_own_reality(h, p, log)
@@ -1505,7 +1663,7 @@ def _server_entry(name, host, p, awg=True):
     entry = {"name": name, "host": host, "type": "linux", "protocols": [
         {"type": "vless-reality-vision", "port": p["vision_port"], "sni": reality_sni(p),
          "public_key": p["reality_public"], "short_id": p["short_id"]},
-        {"type": "vless-xhttp-reality", "port": p["xhttp_port"], "sni": reality_sni(p), "path": p["xhttp_path"],
+        {"type": "vless-xhttp-reality", "port": xhttp_public_port(p), "sni": reality_sni(p), "path": p["xhttp_path"],
          "public_key": p["reality_public"], "short_id": p["short_id"]},
         dict({"type": "hysteria2", "port": p["hy2_port"], "pin_sha256": p["hy2_pin"]},
              **({"obfs": p["hy2_obfs"]} if p.get("hy2_obfs") else {})),
