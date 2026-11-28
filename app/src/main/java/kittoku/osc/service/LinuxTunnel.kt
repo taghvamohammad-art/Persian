@@ -26,6 +26,7 @@ import org.json.JSONObject
 private const val TAG = "LinuxTunnel"
 private const val PROBE_TIMEOUT_MS = 7_000L
 private const val CHECK_EVERY_MS = 25_000L
+private const val AWG_RECHECK_MS = 5_000L     // AmneziaWG: the check after a failed one
 private const val CHECK_TIMEOUT_MS = 10_000L
 private const val CHECK_FAILURES = 2          // in a row before switching
 private const val FAILURE_WINDOW_MS = 60 * 60_000L  // breakdowns older than this are forgotten
@@ -418,7 +419,9 @@ internal class LinuxTunnel(
             var lastDown = SessionTraffic.downloaded.get()
             var slowOnce = false
             while (isActive && !closed) {
-                delay(CHECK_EVERY_MS)
+                // AmneziaWG after a failed check: checked again soon, since a stuck
+                // session is rebuilt in a second or two (see failover)
+                delay(if (failures > 0 && currentChoice?.kind == "amneziawg") AWG_RECHECK_MS else CHECK_EVERY_MS)
                 // a hotspot turned on (or off) after connecting
                 if (BrandSession.shareEnabled(prefs)) BrandSession.updateShareNets(service)
                 val ms = withContext(Dispatchers.IO) { Pvcore.check(CHECK_TIMEOUT_MS) }
