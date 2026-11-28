@@ -472,6 +472,22 @@ internal class LinuxTunnel(
             try {
                 service.logWriter?.report("linux tunnel: $reason, switching")
                 val previous = current
+                val was = currentChoice
+                if (reason == "check failed" && was != null && was.kind == "amneziawg") {
+                    // AmneziaWG: a probe always makes a fresh session, so it says
+                    // nothing about this one; the session itself is built again
+                    // at once (a second or two), as a reconnect by hand does
+                    service.logWriter?.report("linux tunnel: rebuilding $previous")
+                    stopEngine()
+                    setStringPrefValue("", OscPrefKey.HOME_STATUS, prefs)
+                    if (closed) return@launch
+                    if (connect(was)) return@launch
+                    if (closed) return@launch
+                    if (!start(exclude = previous) && !start()) {
+                        if (!closed) service.onLinuxTunnelLost()
+                    }
+                    return@launch
+                }
                 if (reason == "check failed" || reason == "slow") {
                     // Probe first while the tunnel keeps carrying traffic: a short
                     // hiccup on a lossy network used to tear the tunnel down and
