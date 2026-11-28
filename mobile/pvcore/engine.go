@@ -78,6 +78,9 @@ func stopLocked() {
 		awgDev.Close()
 		awgDev = nil
 		awgLive = nil
+		awgRoamMu.Lock()
+		awgRoaming = nil
+		awgRoamMu.Unlock()
 	}
 	if extraStop != nil { // system routes of the Windows AmneziaWG tunnel
 		extraStop()
@@ -212,7 +215,11 @@ func awgOnLocked(tdev tun.Device, uapi string, ports []int, user string) error {
 	awgDev = dev
 	awgLive = live
 	running = "amneziawg"
-	if r := newAwgRoam(uapi, ports); r != nil {
+	r := newAwgRoam(uapi, ports)
+	awgRoamMu.Lock()
+	awgRoaming = r
+	awgRoamMu.Unlock()
+	if r != nil {
 		go r.run(dev)
 	}
 	return nil
@@ -240,6 +247,16 @@ func Check(timeoutMs int) int {
 		}
 		// the counters cannot tell a throttled or filtered tunnel from a quiet
 		// one: a ping through it, alongside the apps' own traffic
+		if live.ping(4*time.Second) != pingLost {
+			return ms
+		}
+		// a network that cut this flow: the same session on another pair of
+		// ports, checked again (no reconnect when that brings it back)
+		r := currentRoam()
+		if r == nil {
+			return -1
+		}
+		r.cutNow(dev)
 		if live.ping(4*time.Second) == pingLost {
 			return -1
 		}

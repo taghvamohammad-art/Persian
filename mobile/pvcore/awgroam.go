@@ -97,6 +97,62 @@ type awgRoam struct {
 	host  string
 	ports []int // the main port first
 	cur   int   // index into ports
+
+	mu        sync.Mutex
+	flowStart time.Time     // when the current pair of ports was taken
+	life      time.Duration // how long a flow lived on this network before it was cut (0: unknown)
+	learnedAt time.Time
+}
+
+// the running tunnel's roaming (nil when the server has no hop ports)
+var (
+	awgRoamMu  sync.Mutex
+	awgRoaming *awgRoam
+)
+
+func currentRoam() *awgRoam {
+	awgRoamMu.Lock()
+	defer awgRoamMu.Unlock()
+	return awgRoaming
+}
+
+// A network that cuts each UDP flow after some tens of seconds: when the
+// live check finds the tunnel dead, the flow is moved to another pair of
+// ports at once (same session, no reconnect), and the flow's lifetime is
+// remembered; after that every flow is moved on before it reaches that age.
+const (
+	awgMinLife    = 12 * time.Second // shorter "lifetimes" are not taken as the network's
+	awgLifeShare  = 0.7              // a flow is moved on at this share of the learned lifetime
+	awgLifeForget = 30 * time.Minute // relearned after this (the network may have changed)
+)
+
+// cutNow: the flow is dead now; another pair of ports, and its lifetime learned.
+func (r *awgRoam) cutNow(dev *device.Device) {
+	r.mu.Lock()
+	lived := time.Since(r.flowStart)
+	if lived >= awgMinLife && (r.life == 0 || lived < r.life || time.Since(r.learnedAt) > awgLifeForget) {
+		r.life, r.learnedAt = lived, time.Now()
+	}
+	r.mu.Unlock()
+	i := r.next(0)
+	if err := r.set(dev, i); err == nil {
+		roamNote(r.ports[i], fmt.Sprintf("flow cut after %ds: port %d", int(lived.Seconds()), r.ports[i]))
+	}
+}
+
+// dueToMove: a flow near the learned lifetime is moved on before the cut.
+func (r *awgRoam) dueToMove() (bool, time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.life == 0 {
+		return false, 0
+	}
+	if time.Since(r.learnedAt) > awgLifeForget {
+		r.life = 0
+		return false, 0
+	}
+	at := time.Duration(float64(r.life) * awgLifeShare)
+	return time.Since(r.flowStart) >= at, r.life
 }
 
 // awgPortsOf: the AmneziaWG main port and its hop ports of a server entry.
@@ -135,7 +191,7 @@ func newAwgRoam(uapi string, ports []int) *awgRoam {
 	if len(ports) < 2 {
 		return nil
 	}
-	r := &awgRoam{ports: ports}
+	r := &awgRoam{ports: ports, flowStart: time.Now()}
 	for _, line := range strings.Split(uapi, "\n") {
 		if v, ok := strings.CutPrefix(line, "public_key="); ok {
 			r.pub = v
@@ -173,7 +229,10 @@ func (r *awgRoam) next(tries int) int {
 }
 
 func (r *awgRoam) set(dev *device.Device, i int) error {
+	r.mu.Lock()
 	r.cur = i
+	r.flowStart = time.Now()
+	r.mu.Unlock()
 	ep := net.JoinHostPort(r.host, strconv.Itoa(r.ports[i]))
 	// a new local port too (listen_port=0 rebinds to a random one): a new
 	// flow from both ends, and no clash on the server with the conntrack
@@ -208,6 +267,13 @@ func (r *awgRoam) run(dev *device.Device) {
 		state, err := dev.IpcGet()
 		if err != nil {
 			return
+		}
+		if due, life := r.dueToMove(); due && len(r.ports) > 2 {
+			i := r.next(0)
+			if err := r.set(dev, i); err == nil {
+				roamNote(r.ports[i], fmt.Sprintf("before the cut (~%ds): port %d", int(life.Seconds()), r.ports[i]))
+			}
+			continue
 		}
 		age, ok := handshakeAge(state)
 		if !ok && time.Since(began) > awgFirstWait {
