@@ -540,8 +540,19 @@ def names_of(ip):
 BAD = ("cloudflare", "akamai", "fastly", "cdn", "google", "amazon", "microsoft", "apple",
        "localhost", "local", "invalid", "example", "plesk", "cpanel", "vesta", "hestia", "ispmanager")
 
+def resolves_to(name, ip):
+    # the name's own address: a real site answers there; another Reality
+    # server showing a borrowed big site (python.org on a small host) does not
+    try:
+        return ip in {a[4][0] for a in socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)}
+    except Exception:
+        return False
+
 def fit(ip, name):
-    # a full Reality target: TLS 1.3, HTTP/2, a valid certificate for the name
+    # a full Reality target: the name resolves here, TLS 1.3, HTTP/2, a
+    # valid certificate for the name
+    if not resolves_to(name, ip):
+        return None
     ctx = ssl.create_default_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.set_alpn_protocols(["h2", "http/1.1"])
@@ -613,14 +624,14 @@ def ensure_neighbor(h, p, log=print):
             if n and n.get("name") != f["name"]:
                 p["old_names"] = sorted(set(p.get("old_names") or []) | {n["name"]})[-6:]
             p["neighbor"] = {"ip": f["ip"], "name": f["name"]}
-            log("  ✓ Reality: سایت همسایه %s (%s، %dms) — از %s گواهی، %s مناسب"
+            log("  ✓ Reality: سایت همسایه %s (%s، %dms) — از %s گواهی، %s مناسب (نامش به همین IP می‌رسد)"
                 % (f["name"], f["ip"], f["ms"], r.get("certs"), r.get("fit")))
         else:
             if n:
                 p["old_names"] = sorted(set(p.get("old_names") or []) | {n["name"]})[-6:]
                 p.pop("neighbor", None)
             log("  ℹ سایت همسایه‌ی مناسبی پیدا نشد (%s)؛ Reality با %s می‌ماند."
-                % (r.get("why") or "%s گواهی، هیچ‌کدام TLS 1.3 + HTTP/2 معتبر" % r.get("certs"), p["sni"]))
+                % (r.get("why") or "%s گواهی، هیچ‌کدام با نامی که به همان IP برسد و TLS 1.3 + HTTP/2" % r.get("certs"), p["sni"]))
     finally:
         h.run("rm -f /tmp/pv-neighbor.py", check=False)
 
