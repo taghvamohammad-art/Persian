@@ -39,6 +39,7 @@ private const val SPEED_RECHECK_MS = 60_000L  // a slow result is confirmed once
 private const val CDN = "vless-xhttp-cdn"
 private const val LAST_GOOD_KEY = "pv_last_good_server"
 private const val DOWN_KEY = "pv_server_down_"
+private const val REBUILD_AFTER_KEPT_MS = 5 * 60 * 1000L   // a tunnel kept, then failing again within this, is rebuilt
 private const val DOWN_FOR_MS = 30 * 60 * 1000L
 private const val AWG_FAILS_BEFORE_XRAY = 3   // in the last hour, before Xray goes first
 /** Tried first: they look like ordinary HTTPS (Reality) or have their own disguise. */
@@ -461,6 +462,7 @@ internal class LinuxTunnel(
     }
 
     @Volatile private var switching = false
+    @Volatile private var keptAt = 0L
 
     /** The tunnel stopped working: next best protocol, or hand back to the service. */
     private fun failover(reason: String) {
@@ -480,8 +482,22 @@ internal class LinuxTunnel(
                     if (closed) return@launch
                     val now = currentChoice
                     if (best != null && now != null && sameChoice(best, now)) {
-                        service.logWriter?.report("linux tunnel: still the best ($previous), kept")
-                        startWatchdog()
+                        val t = System.currentTimeMillis()
+                        if (t - keptAt > REBUILD_AFTER_KEPT_MS) {
+                            keptAt = t
+                            service.logWriter?.report("linux tunnel: still the best ($previous), kept")
+                            startWatchdog()
+                            return@launch
+                        }
+                        // kept a moment ago and still not carrying traffic: the
+                        // tunnel itself is stuck (the probe's fresh session works),
+                        // so the same choice is built again, as a reconnect by hand does
+                        keptAt = 0L
+                        service.logWriter?.report("linux tunnel: kept a moment ago and still failing, rebuilding $previous")
+                        stopEngine()
+                        setStringPrefValue("", OscPrefKey.HOME_STATUS, prefs)
+                        if (closed) return@launch
+                        if (!connect(best) && !start() && !closed) service.onLinuxTunnelLost()
                         return@launch
                     }
                 }

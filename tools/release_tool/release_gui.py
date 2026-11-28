@@ -1686,6 +1686,12 @@ class ServicesPage(RouterPage):
                     except Exception as e:   # noqa: BLE001 - the rest of the refresh still runs
                         log("⚠ دسترسی جداگانه به یوزر منیجر ثبت نشد: %s" % str(e)[-300:])
                     p = linux.refresh_xray_config(h, p, log)
+                    time.sleep(5)   # pv-agent's first round after the restart
+                    try:
+                        log("گزارش سلامت %s:" % (r.get("name") or r["host"]))
+                        linux.server_health(h, log)
+                    except Exception as e:   # noqa: BLE001 - only a report
+                        log("⚠ گزارش سلامت گرفته نشد: %s" % str(e)[-200:])
                 done[r["id"]] = p
                 if r["host"] in entries:
                     main = linux.refreshed_entry(entries[r["host"]], p)

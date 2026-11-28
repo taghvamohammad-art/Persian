@@ -1298,12 +1298,17 @@ def fix_agent_access(h, um_routers, name, seen, p, log=print):
     moved. Returns True when it changed something."""
     try:
         cfg = json.loads(h.run("cat /etc/pv-agent/config.json"))
-    except (LinuxError, ValueError):
+    except (LinuxError, ValueError) as e:
+        log("⚠ تنظیمات pv-agent روی سرور خوانده نشد؛ دسترسی جداگانه ثبت نشد: %s" % str(e)[-200:])
         return False
     routers = cfg.get("routers") or []
-    if not routers or all(x.get("user") == agent_user(name) and x.get("password") == p.get("agent_password")
-                          for x in routers):
+    if not routers:
+        log("⚠ در تنظیمات pv-agent هیچ یوزر منیجری نیست؛ دسترسی جداگانه ثبت نشد.")
         return False
+    if all(x.get("user") == agent_user(name) and x.get("password") == p.get("agent_password") for x in routers):
+        log("  حساب یوزر منیجر: %s (جداگانه، از قبل)" % agent_user(name))
+        return False
+    log("  حساب فعلی pv-agent: %s" % "، ".join(sorted({str(x.get("user")) for x in routers})))
     if not p.get("agent_password"):
         p["agent_password"] = routers[0].get("password") or secrets.token_urlsafe(18)
     log("دسترسی جداگانه‌ی این سرور به یوزر منیجر (%s)…" % agent_user(name))
@@ -1320,6 +1325,54 @@ def fix_agent_access(h, um_routers, name, seen, p, log=print):
     else:
         log("✓ pv-agent با حساب خودش کاربرها را می‌گیرد%s" % (" (%s)" % tail.split("]: ")[-1] if tail else ""))
     return True
+
+
+HEALTH_PY = r"""
+import json, subprocess
+def sh(c):
+    return subprocess.run(c, shell=True, capture_output=True, text=True).stdout
+out = {}
+try:
+    cfg = json.load(open("/usr/local/etc/xray/config.json"))
+    n = {}
+    for ib in cfg.get("inbounds", []):
+        cl = (ib.get("settings") or {}).get("clients") or []
+        if cl:
+            n[ib.get("tag") or ib.get("protocol")] = len(cl)
+    out["xray"] = n
+except Exception as e:
+    out["xray"] = "?" + str(e)[:80]
+out["awg"] = len(sh("awg show awg0 peers 2>/dev/null").split())
+j = sh("journalctl -u pv-agent -n 400 --no-pager 2>/dev/null").splitlines()
+out["agent"] = [l.split(": ", 1)[-1][:220] for l in j if any(k in l for k in
+                ("users allowed", "unavailable", "rejected", "401", "Traceback", "Error"))][-3:]
+x = sh("journalctl -u xray -n 400 --no-pager 2>/dev/null; tail -n 400 /var/log/xray/access.log 2>/dev/null")
+out["xray_err"] = [l[-220:] for l in x.splitlines() if any(k in l.lower() for k in
+                   ("reality", "invalid", "rejected", "failed", "not found"))][-4:]
+print(json.dumps(out))
+"""
+
+
+def server_health(h, log=print):
+    """A short report after a refresh: how many users pv-agent got and Xray
+    and AmneziaWG have, and the last reasons for refused connections."""
+    h.write("/tmp/pv-health.py", HEALTH_PY)
+    raw = h.run("python3 /tmp/pv-health.py; rm -f /tmp/pv-health.py", check=False).strip()
+    try:
+        r = json.loads(raw.splitlines()[-1])
+    except (ValueError, IndexError):
+        log("⚠ گزارش سلامت سرور گرفته نشد:\n%s" % raw[-300:])
+        return None
+    x = r.get("xray")
+    log("  کاربران Xray: %s · AmneziaWG: %s peer" % (
+        "، ".join("%s=%s" % kv for kv in x.items()) if isinstance(x, dict) and x else (x or "هیچ"), r.get("awg")))
+    for l in r.get("agent") or []:
+        log("  pv-agent: %s" % l)
+    if not r.get("agent"):
+        log("  pv-agent: (خبری از گرفتن کاربرها در لاگ نیست)")
+    for l in r.get("xray_err") or []:
+        log("  Xray: %s" % l)
+    return r
 
 
 def setup_linux(connect_linux, um_routers, name, public_ip, params=None, log=print,
